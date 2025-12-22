@@ -1,3 +1,5 @@
+/public
+
 # OS/editor
 .DS_Store
 Thumbs.db
@@ -20,3 +22,20 @@ server/public/user_settings/
 # If you later add node tooling
 node_modules/
 dist/
+
+# Server-local config (contains secrets/paths)
+server/public/config.php
+
+# Server symlink created on the server only
+public
+
+# Runtime state (server)
+server/public/tokens/
+server/public/sessions/
+server/public/daily_stats/
+server/public/user_settings/
+server/public/metrics/*.log
+
+# Server-only logs outside webroot
+var/
+
