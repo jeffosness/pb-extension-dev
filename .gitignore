@@ -1,0 +1,22 @@
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Archives / junk
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# Logs & runtime state (server)
+server/public/metrics/*.log
+server/public/tokens/
+server/public/sessions/
+server/public/daily_stats/
+server/public/user_settings/
+
+# If you later add node tooling
+node_modules/
+dist/

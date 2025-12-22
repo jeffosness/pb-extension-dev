@@ -1,0 +1,166 @@
+<!-- popup.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>PhoneBurner Companion</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      min-width: 260px;
+      padding: 8px;
+    }
+    .row { margin-bottom: 8px; }
+    label { display: block; font-size: 12px; margin-bottom: 2px; }
+    input[type="text"],
+    input[type="password"] {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 4px;
+      width: 100%;
+    }
+    .status {
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      margin: 8px 0;
+      border-bottom: 1px solid #ccc;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 4px 0;
+      font-size: 12px;
+      text-align: center;
+      border: none;
+      background: #f5f5f5;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: #ffffff;
+      border-bottom: 2px solid #0070d2;
+      font-weight: bold;
+    }
+    .panel {
+      display: none;
+    }
+    .panel.active {
+      display: block;
+    }
+
+    .help-text {
+      font-size: 11px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+
+<div id="crm-header" style="margin-bottom: 8px; font-size: 12px; color: #444;">
+  Detected CRM:
+  <span id="crm-name" style="font-weight: 600;">Loading…</span>
+  <span id="crm-level" style="font-style: italic; margin-left: 4px;"></span>
+</div>
+
+<hr />
+
+
+
+  <div class="row">
+    <strong>PhoneBurner Connection</strong>
+    <div id="pb-status" class="status">Checking...</div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button id="tab-dial" class="tab-btn active">Dial</button>
+    <button id="tab-settings" class="tab-btn">Settings</button>
+  </div>
+
+  <!-- Dial tab -->
+  <div id="panel-dial" class="panel active">
+    <div class="row">
+      <label for="pat">PhoneBurner Access Token</label>
+      <input type="password" id="pat" placeholder="Paste PAT here" />
+      <button id="save-pat">Save PAT</button>
+      <div class="help-text">
+        Paste your Personal Access Token to connect, or click Disconnect to remove it.
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="row">
+      <strong>Current Page</strong>
+      <div class="status">
+        Scan this page for contacts and launch a dial session.
+      </div>
+      <button id="scan-launch">Scan &amp; Launch Dial Session</button>
+    </div>
+  </div>
+
+
+<div
+  id="hubspot-panel"
+  style="display: none; margin-top: 10px; padding-top: 8px; border-top: 1px solid #ddd;"
+>
+  <div style="font-weight: 600; margin-bottom: 4px;">
+    HubSpot advanced mode (Level 3)
+  </div>
+
+  <div id="hs-status" class="status" style="margin-bottom: 4px;"></div>
+
+  <p style="font-size: 12px; margin: 4px 0 8px;">
+    We detected HubSpot. This panel uses the full HubSpot integration
+    (API-based lists &amp; call logging).
+  </p>
+
+  <!-- New: launch via HubSpot API, using whatever is selected -->
+  <button id="btn-hs-launch" style="width: 100%; margin-bottom: 6px;">
+    Launch HubSpot Dial Session
+  </button>
+
+  <button id="btn-hs-connect" style="width: 100%;">
+    Reconnect HubSpot
+  </button>
+</div>
+
+
+
+
+  <!-- Settings tab -->
+  <div id="panel-settings" class="panel">
+    <div class="row">
+      <strong>Goal Dispositions</strong>
+      <div class="help-text">
+        Set which PhoneBurner dispositions count as your primary and secondary "wins"
+        (e.g. Set Appointment, Follow Up, Sold).
+      </div>
+    </div>
+
+    <div class="row">
+      <label for="goal-primary">Primary Goal</label>
+      <input type="text" id="goal-primary" placeholder="Set Appointment" />
+    </div>
+
+    <div class="row">
+      <label for="goal-secondary">Secondary Goal</label>
+      <input type="text" id="goal-secondary" placeholder="Follow Up" />
+    </div>
+
+    <button id="save-goals">Save Goals</button>
+    <div id="goals-status" class="status"></div>
+
+    <hr>
+
+    
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

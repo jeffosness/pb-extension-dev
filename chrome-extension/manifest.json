@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "PhoneBurner Unified CRM Dial Companion",
+  "version": "0.2.0",
+  "description": "Create PhoneBurner dial sessions from any CRM list and follow who is being called in real time.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*",
+    "https://webhooktest.phoneburner.biz/*",
+    "https://extension-dev.phoneburner.biz/*",
+    "https://extension.phoneburner.biz/*",
+    "http://extension-dev.phoneburner.biz/*",
+    "http://extension.phoneburner.biz/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PhoneBurner CRM Companion"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://*/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
