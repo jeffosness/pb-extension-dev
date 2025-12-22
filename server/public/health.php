@@ -66,7 +66,7 @@ foreach ($requiredDirs as $label => $dir) {
 }
 
 // Log file check
-$logFile = $cfg['LOG_FILE'] ?? ($baseDir . '/metrics/app.log');
+$logFile = $cfg['LOG_FILE'] ?? ('/opt/pb-extension-dev/var/log/app.log');
 $logDir = dirname($logFile);
 if (!is_dir($logDir)) {
   @mkdir($logDir, 0775, true);
