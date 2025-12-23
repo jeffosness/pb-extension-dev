@@ -1,41 +1,52 @@
-/public
-
-# OS/editor
+############################################
+# OS / editor
+############################################
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
+############################################
 # Archives / junk
+############################################
 *.zip
 *.7z
 *.tar
 *.tar.gz
 
-# Logs & runtime state (server)
-server/public/metrics/*.log
-server/public/tokens/
-server/public/sessions/
-server/public/daily_stats/
-server/public/user_settings/
-
-# If you later add node tooling
+############################################
+# Node / build output (if used later)
+############################################
 node_modules/
 dist/
 
-# Server-local config (contains secrets/paths)
+############################################
+# Server: keep secrets and runtime OUT of git
+############################################
+
+# Server-local config (contains secrets/paths) - NEVER COMMIT
 server/public/config.php
 
-# Server symlink created on the server only
-public
-
-# Runtime state (server)
+# Runtime state (Apache writes here) - NEVER COMMIT
 server/public/tokens/
 server/public/sessions/
 server/public/daily_stats/
 server/public/user_settings/
+server/public/metrics/
 server/public/metrics/*.log
 
 # Server-only logs outside webroot
-var/
+var/log/
+*.log
 
+############################################
+# Server-only symlink on the VPS
+############################################
+# On the server you create: /opt/pb-extension-dev/public -> /opt/pb-extension-dev/server/public
+# That symlink is server-only; do not track a top-level "public" folder in git.
+/public/
+
+############################################
+# IMPORTANT: Do NOT ignore server/public in general
+# We WANT server/public/api/** tracked.
+############################################
