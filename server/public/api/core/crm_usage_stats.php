@@ -1,37 +1,37 @@
 <?php
-// unified_crm/api/core/crm_usage_stats.php
+// server/public/api/core/crm_usage_stats.php
 //
-// Read the CRM usage log written by track_crm_usage.php and return
-// aggregated stats as JSON:
+// Reads metrics/crm_usage.log written by track_crm_usage.php and returns aggregated stats.
 //
-// {
-//   "ok": true,
-//   "total_events": 1234,
-//   "by_crm_id": { "hubspot": 100, "pipedrive": 30, ... },
-//   "by_host": { "app.hubspot.com": 80, "phoneburner.pipedrive.com": 20, ... },
-//   "by_level": { "1": 500, "2": 300, "3": 434 }
-// }
+// Response data includes:
+// - total_events
+// - by_crm_id
+// - by_host
+// - by_level
+//
+// NOTE: This endpoint does not expose client_id values.
 
-require_once __DIR__ . '/../../utils.php';  // <-- go up two levels, same as other core scripts
-
-header('Content-Type: application/json; charset=utf-8');
+require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../../utils.php';
 
 $cfg = cfg();
 
-// IMPORTANT: this MUST match track_crm_usage.php.
+// IMPORTANT: must match track_crm_usage.php.
 $metricsDir = $cfg['METRICS_DIR'] ?? (__DIR__ . '/../../metrics');
-$logFile    = $metricsDir . '/crm_usage.log';
+$logFile    = rtrim($metricsDir, '/\\') . '/crm_usage.log';
 
 if (!file_exists($logFile)) {
-    echo json_encode([
-        'ok'           => true,
+    api_log('crm_usage_stats.no_log', [
+        'log_exists' => false,
+    ]);
+
+    api_ok([
         'total_events' => 0,
-        'by_crm_id'    => new stdClass(),
-        'by_host'      => new stdClass(),
-        'by_level'     => new stdClass(),
+        'by_crm_id'    => (object)[],
+        'by_host'      => (object)[],
+        'by_level'     => (object)[],
         'note'         => 'No crm_usage.log file yet',
     ]);
-    exit;
 }
 
 $byCrm   = [];
@@ -39,14 +39,12 @@ $byHost  = [];
 $byLevel = [];
 $total   = 0;
 
-// Open and stream through the log – each line is a JSON entry
 $fh = fopen($logFile, 'r');
 if ($fh === false) {
-    echo json_encode([
-        'ok'    => false,
-        'error' => 'Could not open crm_usage log file',
+    api_log('crm_usage_stats.error.open_failed', [
+        'log_exists' => true,
     ]);
-    exit;
+    api_error('Could not open crm_usage log file', 'server_error', 500);
 }
 
 while (($line = fgets($fh)) !== false) {
@@ -62,19 +60,18 @@ while (($line = fgets($fh)) !== false) {
     $host  = $entry['host']   ?? 'unknown';
     $level = (string)($entry['level'] ?? 'unknown');
 
-    if (!isset($byCrm[$crm]))       $byCrm[$crm]       = 0;
-    if (!isset($byHost[$host]))     $byHost[$host]     = 0;
-    if (!isset($byLevel[$level]))   $byLevel[$level]   = 0;
-
-    $byCrm[$crm]++;
-    $byHost[$host]++;
-    $byLevel[$level]++;
+    $byCrm[$crm]     = ($byCrm[$crm]     ?? 0) + 1;
+    $byHost[$host]   = ($byHost[$host]   ?? 0) + 1;
+    $byLevel[$level] = ($byLevel[$level] ?? 0) + 1;
 }
 
 fclose($fh);
 
-echo json_encode([
-    'ok'           => true,
+api_log('crm_usage_stats.ok', [
+    'total_events' => $total,
+]);
+
+api_ok([
     'total_events' => $total,
     'by_crm_id'    => $byCrm,
     'by_host'      => $byHost,
