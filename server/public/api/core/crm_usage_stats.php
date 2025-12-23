@@ -7,8 +7,8 @@
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../utils.php';
 
-// Correct metrics dir: server/public/metrics
-$publicDir  = dirname(__DIR__, 3); // core -> api -> public
+// ✅ Correct metrics dir: server/public/metrics
+$publicDir  = dirname(__DIR__, 2); // core -> api -> public
 $metricsDir = $publicDir . '/metrics';
 $logFile    = $metricsDir . '/crm_usage.log';
 
