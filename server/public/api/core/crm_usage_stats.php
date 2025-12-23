@@ -1,28 +1,20 @@
 <?php
 // server/public/api/core/crm_usage_stats.php
 //
-// Reads metrics/crm_usage.log written by track_crm_usage.php and returns aggregated stats.
-//
-// Response data includes:
-// - total_events
-// - by_crm_id
-// - by_host
-// - by_level
-//
-// NOTE: This endpoint does not expose client_id values.
+// Reads server/public/metrics/crm_usage.log written by track_crm_usage.php
+// and returns aggregated counts (wrapped via api_ok()).
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../utils.php';
 
-$cfg = cfg();
-
-// IMPORTANT: must match track_crm_usage.php.
-$metricsDir = $cfg['METRICS_DIR'] ?? (__DIR__ . '/../../metrics');
-$logFile    = rtrim($metricsDir, '/\\') . '/crm_usage.log';
+// Correct metrics dir: server/public/metrics
+$publicDir  = dirname(__DIR__, 3); // core -> api -> public
+$metricsDir = $publicDir . '/metrics';
+$logFile    = $metricsDir . '/crm_usage.log';
 
 if (!file_exists($logFile)) {
     api_log('crm_usage_stats.no_log', [
-        'log_exists' => false,
+        'log_file' => $logFile,
     ]);
 
     api_ok([
@@ -42,7 +34,7 @@ $total   = 0;
 $fh = fopen($logFile, 'r');
 if ($fh === false) {
     api_log('crm_usage_stats.error.open_failed', [
-        'log_exists' => true,
+        'log_file' => $logFile,
     ]);
     api_error('Could not open crm_usage log file', 'server_error', 500);
 }

@@ -154,17 +154,21 @@ document.addEventListener("DOMContentLoaded", () => {
     contentEl.style.display = "none";
   }
 
-  fetch(endpoint)
+  // Cache-bust so you always see fresh stats during dev
+  fetch(endpoint + "?t=" + Date.now())
     .then((resp) => {
-      if (!resp.ok) {
-        throw new Error("HTTP " + resp.status);
-      }
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
       return resp.json();
     })
-    .then((data) => {
-      console.log("crm_usage_stats:", data);
+    .then((resp) => {
+      console.log("crm_usage_stats raw:", resp);
 
-      if (!data || !data.ok) {
+      // Support BOTH formats:
+      // - New bootstrap format: { ok:true, data:{...} }
+      // - Legacy format: { ok:true, total_events:... }
+      const data = resp && resp.data ? resp.data : resp;
+
+      if (!resp || !resp.ok || !data) {
         showError("API returned error or malformed response.");
         return;
       }
@@ -177,37 +181,33 @@ document.addEventListener("DOMContentLoaded", () => {
       msgEl.innerHTML = "";
       contentEl.style.display = "block";
 
-      // Summary
       summaryEl.textContent =
         "Total events logged: " + data.total_events +
         " · Distinct CRMs: " + Object.keys(data.by_crm_id || {}).length +
         " · Distinct hosts: " + Object.keys(data.by_host || {}).length;
 
-      // Helper to fill a table from an object map
-      function fillTable(tableId, obj, keyLabel) {
+      function fillTable(tableId, obj) {
         const tbody = document.querySelector("#" + tableId + " tbody");
         tbody.innerHTML = "";
-
         if (!obj) return;
 
-        const rows = Object.entries(obj)
-          .sort((a, b) => b[1] - a[1]); // sort descending by count
-
-        rows.forEach(([key, count]) => {
-          const tr = document.createElement("tr");
-          const tdKey = document.createElement("td");
-          const tdCount = document.createElement("td");
-          tdKey.textContent = key;
-          tdCount.textContent = count;
-          tr.appendChild(tdKey);
-          tr.appendChild(tdCount);
-          tbody.appendChild(tr);
-        });
+        Object.entries(obj)
+          .sort((a, b) => b[1] - a[1])
+          .forEach(([key, count]) => {
+            const tr = document.createElement("tr");
+            const tdKey = document.createElement("td");
+            const tdCount = document.createElement("td");
+            tdKey.textContent = key;
+            tdCount.textContent = count;
+            tr.appendChild(tdKey);
+            tr.appendChild(tdCount);
+            tbody.appendChild(tr);
+          });
       }
 
-      fillTable("by-crm-table", data.by_crm_id, "CRM");
-      fillTable("by-host-table", data.by_host, "Host");
-      fillTable("by-level-table", data.by_level, "Level");
+      fillTable("by-crm-table", data.by_crm_id);
+      fillTable("by-host-table", data.by_host);
+      fillTable("by-level-table", data.by_level);
     })
     .catch((err) => {
       console.error("Error loading crm_usage_stats:", err);
