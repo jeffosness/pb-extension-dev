@@ -3,13 +3,6 @@
 //
 // Receives lightweight usage pings from the extension and appends a JSON line
 // to server/public/metrics/crm_usage.log for reporting in crm_usage_stats.php.
-//
-// Expected input (JSON):
-// - client_id (required)
-// - crm_id (optional)
-// - host (optional)
-// - path (optional)
-// - level (optional)
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../utils.php';
@@ -24,9 +17,9 @@ $level = isset($data['level'])  ? (int)$data['level']     : 0;
 
 $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
 
-// Correct metrics dir: server/public/metrics
-$publicDir   = dirname(__DIR__, 3); // core -> api -> public
-$metricsDir  = $publicDir . '/metrics';
+// ✅ Correct metrics dir: server/public/metrics
+$publicDir  = dirname(__DIR__, 2); // core -> api -> public
+$metricsDir = $publicDir . '/metrics';
 ensure_dir($metricsDir);
 
 $logFile = $metricsDir . '/crm_usage.log';
