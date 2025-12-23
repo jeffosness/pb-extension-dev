@@ -33,6 +33,21 @@ function api_ok(array $data = [], int $status = 200): void {
   exit;
 }
 
+function api_ok_flat(array $data = [], int $status = 200): void {
+  global $REQUEST_ID, $START_TS;
+  http_response_code($status);
+
+  // Merge payload keys at the top-level (legacy/extension-friendly)
+  echo json_encode(array_merge([
+    'ok' => true,
+    'request_id' => $REQUEST_ID,
+    'duration_ms' => (int) round((microtime(true) - $START_TS) * 1000),
+  ], $data), JSON_UNESCAPED_SLASHES);
+
+  exit;
+}
+
+
 function api_error(string $message, string $code = 'error', int $status = 400, array $extra = []): void {
   global $REQUEST_ID, $START_TS;
   http_response_code($status);

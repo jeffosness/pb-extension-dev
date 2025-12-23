@@ -222,10 +222,11 @@ api_log('dialsession_from_scan.ok', [
     'pb_ms'          => $pb_ms,
 ]);
 
-api_ok([
-    'session_token'   => $session_token,
-    'dialsession_url' => $launch_url,
-    'contacts_sent'   => count($pbContacts),
-    'skipped'         => $skipped,
-    'pb_ms'           => $pb_ms,
+api_ok_flat([
+  'session_token'   => $session_token,
+  'dialsession_url' => $launch_url,
+  'contacts_sent'   => count($pbContacts),
+  'skipped'         => $skipped,
+  'pb_ms'           => $pb_ms,
 ]);
+
