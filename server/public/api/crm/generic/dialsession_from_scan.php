@@ -1,62 +1,70 @@
 <?php
-// generic_crm/api/pb_dialsession.php
+// server/public/api/crm/generic/dialsession_from_scan.php
+//
+// Creates a PhoneBurner dial session from contacts scraped by the extension (Level 1/2 generic).
+// - Reads JSON from the extension: { client_id, contacts[], context{} }
+// - Loads the saved PhoneBurner PAT for that client_id
+// - Normalizes contacts into PB's expected format
+// - Creates /dialsession with callbacks that include session_token
+// - Persists session state for SSE/webhooks
+//
+// Response shape is standardized via api_ok/api_error from bootstrap.php.
+// This endpoint intentionally avoids logging PII (names/phones/emails).
+
+require_once __DIR__ . '/../../core/bootstrap.php';
 require_once __DIR__ . '/../../../utils.php';
 
-// Simple flag so we can turn SF logging on/off in one place
-const PB_UNIFIED_DEBUG_SF = true;
-
-// 1) Get JSON input from extension and resolve client_id
+// -------------------------
+// Input + auth
+// -------------------------
 $data      = json_input();
 $client_id = get_client_id_or_fail($data);
 
-// 2) Get the PhoneBurner PAT for this client
 $pat = load_pb_token($client_id);
 if (!$pat) {
-    json_response([
-        'ok'    => false,
-        'error' => 'No PhoneBurner PAT saved for this client_id'
-    ], 401);
+    api_log('dialsession_from_scan.reject.no_pat', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    ]);
+    api_error('No PhoneBurner PAT saved for this client_id', 'unauthorized', 401);
 }
 
-// 3) Extract contacts + context
 $contactsIn = $data['contacts'] ?? [];
 $context    = $data['context']  ?? [];
 
-// Normalize crm_name once and keep it lowercase for consistency
-$crmNameRaw = $context['crm_name'] ?? 'generic-crm';
-$crmName    = strtolower($crmNameRaw);
-
-// 🔍 SF DEBUG: helper flag
-$isSalesforce = ($crmName === 'salesforce' || $crmName === 'salesforce.com');
-
-// 🔍 SF DEBUG: log raw inbound data from extension
-if (PB_UNIFIED_DEBUG_SF && $isSalesforce) {
-    log_msg('SF-UNIFIED: raw contactsIn from extension: ' . json_encode($contactsIn));
-    log_msg('SF-UNIFIED: raw context from extension: ' . json_encode($context));
-}
-
 if (!is_array($contactsIn) || empty($contactsIn)) {
-    json_response([
-        'ok'    => false,
-        'error' => 'No contacts provided'
-    ], 400);
+    api_log('dialsession_from_scan.reject.no_contacts', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    ]);
+    api_error('No contacts provided', 'bad_request', 400);
 }
 
-// 4) Create a session_token that will be shared with webhooks & SSE
+// Normalize crm_name once and keep it lowercase for consistency
+$crmNameRaw = $context['crm_name'] ?? 'generic';
+$crmName    = strtolower((string)$crmNameRaw);
+
+// -------------------------
+// Build session token
+// -------------------------
 $session_token = bin2hex(random_bytes(16));
 
-$pbContacts = [];
-$skipped    = 0;
-
-// 5) Normalize the generic contact fields from the content script
+$pbContacts   = [];
 $contacts_map = [];
+$skipped      = 0;
 
+// -------------------------
+// Normalize contacts
+// -------------------------
 foreach ($contactsIn as $idx => $c) {
+    if (!is_array($c)) {
+        $skipped++;
+        continue;
+    }
+
     $name  = trim((string)($c['name'] ?? ''));
     $first = trim((string)($c['first_name'] ?? ''));
     $last  = trim((string)($c['last_name']  ?? ''));
 
-    if (!$first && !$last && $name) {
+    if ($first === '' && $last === '' && $name !== '') {
         $parts = preg_split('/\s+/', $name);
         $first = $parts[0] ?? '';
         $last  = isset($parts[1]) ? implode(' ', array_slice($parts, 1)) : '';
@@ -70,11 +78,11 @@ foreach ($contactsIn as $idx => $c) {
         continue;
     }
 
-    // This is the key that will come back in contact_displayed.external_id
+    // External ID returned later in contact_displayed.external_id
     $externalId =
-        $c['crm_identifier'] ??           // preferred (e.g. bntouch/pipedrive ID)
-        $c['external_id']    ??           // if content.js provided it explicitly
-        ($crmName ?: 'generic') . '-' . $idx; // fallback
+        ($c['crm_identifier'] ?? null) ? (string)$c['crm_identifier'] :
+        (($c['external_id'] ?? null)   ? (string)$c['external_id']    :
+        ($crmName . '-' . $idx));
 
     $pbContacts[] = [
         'first_name'  => $first,
@@ -85,11 +93,12 @@ foreach ($contactsIn as $idx => $c) {
         'external_crm_data' => [
             [
                 'crm_id'   => $externalId,
-                'crm_name' => $crmName, // always lowercase
+                'crm_name' => $crmName,
             ],
         ],
     ];
 
+    // Saved for follow-me/SSE/webhooks (internal state only)
     $contacts_map[$externalId] = [
         'name'           => $name ?: trim("$first $last"),
         'first_name'     => $first,
@@ -104,24 +113,24 @@ foreach ($contactsIn as $idx => $c) {
     ];
 }
 
-// 🔍 SF DEBUG: log normalized contacts before sending to PhoneBurner
-if (PB_UNIFIED_DEBUG_SF && $isSalesforce) {
-    log_msg('SF-UNIFIED: normalized pbContacts (about to send to PB): ' . json_encode($pbContacts));
-    log_msg('SF-UNIFIED: contacts_map used for session state: ' . json_encode($contacts_map));
-}
-
-log_msg('pb_dialsession contacts_map: ' . json_encode($contacts_map));
-
 if (empty($pbContacts)) {
-    json_response([
-        'ok'    => false,
-        'error' => 'No dialable contacts (no phone or email).',
-        'debug' => ['skipped_no_phone_or_email' => $skipped]
-    ], 400);
+    api_log('dialsession_from_scan.reject.no_dialable', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+        'skipped'        => $skipped,
+    ]);
+    api_error('No dialable contacts (no phone or email).', 'bad_request', 400, [
+        'skipped_no_phone_or_email' => $skipped,
+    ]);
 }
 
-// 6) Build webhook callback URLs
-$base = rtrim(cfg()['BASE_URL'], '/');
+// -------------------------
+// Build PB dialsession payload
+// -------------------------
+$base = rtrim(cfg()['BASE_URL'] ?? '', '/');
+if ($base === '') {
+    api_log('dialsession_from_scan.error.missing_base_url');
+    api_error('Server misconfigured: BASE_URL missing', 'server_error', 500);
+}
 
 $callbacks = [
     [
@@ -134,66 +143,61 @@ $callbacks = [
     ],
 ];
 
-// 7) Prepare the dialsession payload – mirrors your HubSpot logic, just with generic metadata
 $payload = [
-    'name'        => 'Generic CRM List – ' . gmdate('c'),
-    'contacts'    => $pbContacts,
-    'preset_id'   => null,
-
-    // SESSION-LEVEL custom_data – same shape across all CRMs
+    'name'      => 'CRM List – ' . gmdate('c'),
+    'contacts'  => $pbContacts,
+    'preset_id' => null,
     'custom_data' => [
         'client_id' => $client_id,
-        'source'    => $context['source'] ?? 'generic-crm-extension',
+        'source'    => $context['source'] ?? 'crm-extension',
         'crm_name'  => $crmName,
     ],
-
-    'callbacks'   => $callbacks,
-    'webhook_meta'=> [
+    'callbacks'    => $callbacks,
+    'webhook_meta' => [
         'session_token' => $session_token,
         'client_id'     => $client_id,
         'crm_name'      => $crmName,
     ],
 ];
 
-// 🔍 SF DEBUG: log the payload we are POSTing to /dialsession
-if (PB_UNIFIED_DEBUG_SF && $isSalesforce) {
-    log_msg('SF-UNIFIED: final dialsession payload to PB: ' . json_encode($payload));
-}
-
-// 8) Call PhoneBurner – same endpoint as your HubSpot version, but using pb_api_call()
+// -------------------------
+// Call PhoneBurner (timed)
+// -------------------------
+$t0 = microtime(true);
 list($info, $resp) = pb_api_call($pat, 'POST', '/dialsession', $payload);
-
-// Log for debugging
-log_msg('generic_crm pb_dialsession response: ' . json_encode([
-    'http' => $info,
-    'resp' => $resp
-]));
+$pb_ms = (int) round((microtime(true) - $t0) * 1000);
 
 $httpCode = (int)($info['http_code'] ?? 0);
-
-if ($httpCode >= 400 || !$resp) {
-    json_response([
-        'ok'     => false,
-        'error'  => 'PhoneBurner API error: ' . json_encode($resp),
+if ($httpCode >= 400 || !is_array($resp)) {
+    api_log('dialsession_from_scan.error.pb_api', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+        'crm_name'       => $crmName,
+        'pb_ms'          => $pb_ms,
+        'status'         => $httpCode,
+    ]);
+    api_error('PhoneBurner API error', 'pb_api_error', $httpCode ?: 500, [
         'status' => $httpCode,
-        'details'=> $resp,
-    ], $httpCode ?: 500);
+    ]);
 }
 
-// 9) Extract the launch URL the same way your working HubSpot code does
 $launch_url = $resp['dialsessions']['redirect_url'] ?? null;
+$dial_id    = $resp['dialsessions']['id'] ?? null;
+
 if (!$launch_url) {
-    json_response([
-        'ok'    => false,
-        'error' => 'No launch URL in PhoneBurner response',
-        'body'  => $resp
-    ], 502);
+    api_log('dialsession_from_scan.error.no_launch_url', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+        'crm_name'       => $crmName,
+        'pb_ms'          => $pb_ms,
+    ]);
+    api_error('No launch URL in PhoneBurner response', 'pb_bad_response', 502);
 }
 
-// 10) Save initial session state so SSE/webhooks have somewhere to write
+// -------------------------
+// Save initial session state
+// -------------------------
 $state = [
     'session_token'   => $session_token,
-    'dialsession_id'  => $resp['dialsessions']['id'] ?? null,
+    'dialsession_id'  => $dial_id,
     'dialsession_url' => $launch_url,
     'client_id'       => $client_id,
     'created_at'      => date('c'),
@@ -204,16 +208,24 @@ $state = [
         'connected'    => 0,
         'appointments' => 0,
     ],
-    'contacts_map'    => $contacts_map, 
-    'crm_name'        => $crmName,  
+    'contacts_map'    => $contacts_map,
+    'crm_name'        => $crmName,
 ];
+
 save_session_state($session_token, $state);
 
-// 11) Respond in the shape that background.js expects
-json_response([
-    'ok'             => true,
-    'session_token'  => $session_token,
-    'dialsession_url'=> $launch_url,
+api_log('dialsession_from_scan.ok', [
+    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    'crm_name'       => $crmName,
     'contacts_sent'  => count($pbContacts),
     'skipped'        => $skipped,
+    'pb_ms'          => $pb_ms,
+]);
+
+api_ok([
+    'session_token'   => $session_token,
+    'dialsession_url' => $launch_url,
+    'contacts_sent'   => count($pbContacts),
+    'skipped'         => $skipped,
+    'pb_ms'           => $pb_ms,
 ]);
