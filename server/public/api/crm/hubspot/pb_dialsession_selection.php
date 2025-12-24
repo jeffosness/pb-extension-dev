@@ -1,414 +1,456 @@
 <?php
-// server/public/api/crm/hubspot/pb_dialsession_selection.php
+// HubSpot/api/pb_dialsession_selection.php
 //
-// Build a PhoneBurner dial session from a HubSpot selection.
-// Extension-facing endpoint => MUST return FLAT keys (use api_ok_flat()).
-// Avoid logging PII/tokens; log only hashes + counts + timings.
+// Build a PhoneBurner dial session from a HubSpot selection sent by the extension.
+//
+// Expected JSON body:
+// {
+//   "mode": "contacts" | "deals" | "companies",
+//   "records": [ { "id": "123" }, { "id": "456" } ] OR [ "123","456" ],
+//   "context": { "portalId": "...", "url": "...", "title": "...", "selectedCount": 10 }
+// }
 
-require_once __DIR__ . '/../../core/bootstrap.php';
-require_once __DIR__ . '/../../../utils.php';
+require __DIR__ . '/../utils.php';
 
-$cfg       = cfg();
-$data      = json_input();
-$client_id = get_client_id_or_fail($data);
-
-$mode    = isset($data['mode']) ? (string)$data['mode'] : 'contacts';
-$records = $data['records'] ?? [];
-$context = $data['context'] ?? [];
-
-// Canonical lowercase CRM name for HubSpot
-$crmName = 'hubspot';
-
-if (!is_array($records) || empty($records)) {
-    api_log('hubspot_selection.reject.no_records', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'mode'           => $mode,
-    ]);
-    api_error('No HubSpot records supplied', 'bad_request', 400);
+// -----------------------------------------------------------------------------
+// Debug log (NO PII/tokens recommended; keep minimal)
+// -----------------------------------------------------------------------------
+function hs_dial_debug($row) {
+  $dir = __DIR__ . '/../data';
+  if (!is_dir($dir)) @mkdir($dir, 0775, true);
+  $row['ts'] = date('c');
+  @file_put_contents($dir . '/hs_dial_debug.log',
+    json_encode($row, JSON_UNESCAPED_SLASHES) . "\n",
+    FILE_APPEND
+  );
 }
 
-$hsTokens = load_hs_tokens($client_id);
-if (!$hsTokens || empty($hsTokens['access_token'])) {
-    api_log('hubspot_selection.reject.no_hs_tokens', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    ]);
-    api_error('HubSpot is not connected for this client_id', 'unauthorized', 401);
+/**
+ * Load the PhoneBurner PAT from the generic tokens dir for the given user.
+ * Supports:
+ *   /generic_crm/tokens/<user>.json
+ *   /generic_cm/tokens/<user>.json
+ * And token structures:
+ *   { "pat": "..." }
+ *   { "access_token": "..." }
+ *   { "pb": { "access_token": "..." } }
+ */
+function hs_load_pb_access_token_for_user($userId) {
+  $safeUser = preg_replace('/[^a-zA-Z0-9_-]/', '_', (string)$userId);
+
+  // This file lives in /HubSpot/api
+  // Two levels up: project root
+  $rootDir  = dirname(__DIR__, 2);
+
+  $candidateDirs = [
+    $rootDir . '/generic_crm/tokens',
+    $rootDir . '/generic_cm/tokens',
+  ];
+
+  foreach ($candidateDirs as $dir) {
+    $path = $dir . '/' . $safeUser . '.json';
+    if (!is_file($path)) continue;
+
+    $raw = file_get_contents($path);
+    if ($raw === false || $raw === '') continue;
+
+    $j = json_decode($raw, true);
+    if (!is_array($j)) continue;
+
+    if (!empty($j['pat'])) return $j['pat'];
+    if (!empty($j['access_token'])) return $j['access_token'];
+    if (!empty($j['pb']['access_token'])) return $j['pb']['access_token'];
+  }
+
+  return null;
 }
 
-$pat = load_pb_token($client_id);
-if (!$pat) {
-    api_log('hubspot_selection.reject.no_pb_pat', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    ]);
-    api_error('No PhoneBurner PAT saved for this client_id', 'unauthorized', 401);
-}
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+function extract_ids_from_records($records) {
+  $idSet = [];
+  if (!is_array($records)) return [];
 
-$accessToken = (string)$hsTokens['access_token'];
-$portalId    = isset($context['portalId']) ? (string)$context['portalId'] : null;
+  foreach ($records as $r) {
+    $id = null;
+    if (is_array($r)) $id = $r['id'] ?? null;
+    elseif (is_scalar($r)) $id = $r;
 
-// ---------------------------------------------------------------------
-// Helper: Normalize "records" array into a flat list of string IDs.
-// ---------------------------------------------------------------------
-function extract_ids_from_records($records): array
-{
-    $ids = [];
-    foreach ($records as $r) {
-        if (is_array($r) && isset($r['id'])) {
-            $ids[] = (string)$r['id'];
-        } elseif (is_scalar($r)) {
-            $ids[] = (string)$r;
-        }
+    $id = trim((string)$id);
+    if ($id !== '') {
+      // IMPORTANT: do NOT filter by length; HubSpot IDs can be short (e.g. 2801)
+      $idSet[$id] = true;
     }
-    $ids = array_values(array_unique($ids));
-    return $ids;
+  }
+  return array_keys($idSet);
 }
 
-// ---------------------------------------------------------------------
-// Helper: minimal HubSpot GET wrapper (timed)
-// ---------------------------------------------------------------------
-function hs_api_get_timed(string $accessToken, string $path, array $params = []): array
-{
-    $url = 'https://api.hubapi.com' . $path;
-    if (!empty($params)) {
-        $url .= '?' . http_build_query($params);
-    }
-
-    $t0 = microtime(true);
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . $accessToken,
-        'Content-Type: application/json',
-        'Accept: application/json',
-    ]);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-
-    $resp = curl_exec($ch);
-    $err  = curl_error($ch);
-    $info = curl_getinfo($ch);
-    curl_close($ch);
-
-    $ms = (int) round((microtime(true) - $t0) * 1000);
-
-    if ($err) {
-        return [0, null, $ms];
-    }
-
-    $status = isset($info['http_code']) ? (int)$info['http_code'] : 0;
-    $data   = json_decode($resp, true);
-
-    return [$status, is_array($data) ? $data : null, $ms];
+function hs_api_get_v3($userId, $url) {
+  // utils.php provides hs_get_json($userId, $url) in your existing codebase
+  return hs_get_json($userId, $url);
 }
 
-// ---------------------------------------------------------------------
-// 1) Work out which CONTACT IDs we need to call
-// ---------------------------------------------------------------------
-$contactIds = [];
-$debugInfo  = [];
+/**
+ * Resolve selected IDs into HubSpot CONTACT IDs:
+ * - mode=contacts: ids already are contact IDs
+ * - mode=deals/companies: fetch object and pull associations.contacts.results[].id
+ */
+function hs_resolve_contact_ids_from_selection($userId, $mode, $ids) {
+  $contactIdSet = [];
 
-if ($mode === 'contacts') {
-    $contactIds = extract_ids_from_records($records);
-    $debugInfo['source'] = 'contacts';
+  if ($mode === 'contacts') {
+    foreach ($ids as $id) $contactIdSet[(string)$id] = true;
+    return array_keys($contactIdSet);
+  }
 
-} elseif ($mode === 'deals' || $mode === 'companies') {
-    $objType    = ($mode === 'deals') ? 'deals' : 'companies';
-    $primaryIds = extract_ids_from_records($records);
+  $objType = null;
+  if ($mode === 'deals') $objType = 'deals';
+  if ($mode === 'companies') $objType = 'companies';
 
-    $debugInfo['source']      = $objType;
-    $debugInfo['primary_cnt'] = count($primaryIds);
+  if (!$objType) return [];
 
-    $seenContactIds = [];
+  foreach ($ids as $pid) {
+    $url = 'https://api.hubapi.com/crm/v3/objects/' .
+           rawurlencode($objType) . '/' . rawurlencode($pid) .
+           '?associations=contacts&archived=false';
 
-    foreach ($primaryIds as $pid) {
-        // GET /crm/v3/objects/{deals|companies}/{id}?associations=contacts
-        list($status, $body, $ms) = hs_api_get_timed(
-            $accessToken,
-            '/crm/v3/objects/' . $objType . '/' . rawurlencode($pid),
-            ['associations' => 'contacts']
-        );
+    list($status, $res) = hs_api_get_v3($userId, $url);
+    if ($status !== 200 || !is_array($res)) continue;
 
-        if ($status < 200 || $status >= 300 || !is_array($body)) {
-            $debugInfo['assoc_errors'][] = [
-                'status' => $status,
-            ];
-            continue;
-        }
+    $assoc = $res['associations']['contacts']['results'] ?? [];
+    if (!is_array($assoc)) continue;
 
-        $assocContacts = $body['associations']['contacts']['results'] ?? [];
-        foreach ($assocContacts as $row) {
-            if (!is_array($row) || empty($row['id'])) continue;
-            $cid = (string)$row['id'];
-            $seenContactIds[$cid] = true;
-        }
+    foreach ($assoc as $row) {
+      if (!is_array($row) || empty($row['id'])) continue;
+      $cid = trim((string)$row['id']);
+      if ($cid !== '') $contactIdSet[$cid] = true;
     }
+  }
 
-    $contactIds = array_keys($seenContactIds);
-    $debugInfo['contact_cnt_from_assoc'] = count($contactIds);
-
-} else {
-    api_log('hubspot_selection.reject.unsupported_mode', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'mode'           => $mode,
-    ]);
-    api_error('Unsupported selection mode', 'bad_request', 400, [
-        'debug' => ['mode' => $mode],
-    ]);
+  return array_keys($contactIdSet);
 }
+
+// -----------------------------------------------------------------------------
+// 1) Auth checks: PB token + HS token
+// -----------------------------------------------------------------------------
+$userId = current_user_id();
+
+$pb = hs_load_pb_access_token_for_user($userId);
+if (!$pb) {
+  hs_dial_debug(['step' => 'no_pb', 'user' => $userId]);
+  json_out(['error' => 'PB not connected'], 401);
+}
+
+// HS tokens: try both dashed and no-dash (matches your standalone approach)
+$idsToTry = [];
+if ($userId) {
+  $idsToTry[] = $userId;
+  $noDash = str_replace('-', '', $userId);
+  if ($noDash !== $userId) $idsToTry[] = $noDash;
+}
+
+$hsTokens = null;
+$hsUserId = null;
+foreach ($idsToTry as $cand) {
+  $t = hs_get_tokens($cand);
+  if ($t && !empty($t['access_token'])) {
+    $hsTokens = $t;
+    $hsUserId = $cand;
+    break;
+  }
+}
+
+if (!$hsTokens) {
+  hs_dial_debug(['step' => 'no_hs', 'user_init' => $userId, 'tried_ids' => $idsToTry]);
+  json_out(['error' => 'HubSpot not connected'], 401);
+}
+
+// Normalize to the ID that actually has HS tokens
+$userId = $hsUserId;
+
+// -----------------------------------------------------------------------------
+// 2) Read request payload
+// -----------------------------------------------------------------------------
+$body    = read_json();
+$mode    = isset($body['mode']) ? (string)$body['mode'] : 'contacts';
+$records = $body['records'] ?? [];
+$context = $body['context'] ?? [];
+
+$ids = extract_ids_from_records($records);
+
+hs_dial_debug([
+  'step' => 'payload',
+  'mode' => $mode,
+  'records_count' => is_array($records) ? count($records) : 0,
+  'ids_count' => count($ids),
+]);
+
+if (empty($ids)) {
+  json_out(['error' => 'No valid HubSpot IDs in selection'], 400);
+}
+
+if (!in_array($mode, ['contacts','deals','companies'], true)) {
+  json_out(['error' => 'Unsupported mode', 'mode' => $mode], 400);
+}
+
+$portalId    = $context['portalId'] ?? null;
+$sourceLabel = $context['title']   ?? 'HubSpot selection';
+$sourceUrl   = $context['url']     ?? null;
+
+// -----------------------------------------------------------------------------
+// 3) Resolve to CONTACT IDs (for deals/companies, use associations)
+// -----------------------------------------------------------------------------
+$contactIds = hs_resolve_contact_ids_from_selection($userId, $mode, $ids);
+
+hs_dial_debug([
+  'step' => 'resolved_contact_ids',
+  'mode' => $mode,
+  'contact_ids_count' => count($contactIds),
+]);
 
 if (empty($contactIds)) {
-    api_log('hubspot_selection.reject.no_contacts', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'mode'           => $mode,
-    ]);
-    api_error('No associated HubSpot contacts found to dial.', 'bad_request', 400, [
-        'debug' => $debugInfo,
-    ]);
+  json_out([
+    'error' => 'No associated HubSpot contacts found to dial.',
+    'debug' => [
+      'mode' => $mode,
+      'ids_received' => $ids,
+    ]
+  ], 400);
 }
 
-// ---------------------------------------------------------------------
-// 2) Resolve HubSpot contact details for those IDs
-// ---------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// 4) Fetch HubSpot contact details for each contact ID
+// -----------------------------------------------------------------------------
 $contacts = [];
-$skipped  = 0;
+foreach ($contactIds as $cid) {
+  $url = 'https://api.hubapi.com/crm/v3/objects/contacts/' .
+         rawurlencode($cid) .
+         '?properties=firstname,lastname,phone,mobilephone,email&archived=false';
 
-$hsCalls = 0;
-$hsMsSum = 0;
+  list($status, $res) = hs_api_get_v3($userId, $url);
+  if ($status !== 200 || !is_array($res)) continue;
 
-foreach ($contactIds as $id) {
-    $hsCalls++;
-    list($status, $body, $ms) = hs_api_get_timed(
-        $accessToken,
-        '/crm/v3/objects/contacts/' . rawurlencode($id),
-        ['properties' => 'firstname,lastname,phone,mobilephone,email']
-    );
-    $hsMsSum += $ms;
+  $props = $res['properties'] ?? [];
 
-    if ($status < 200 || $status >= 300 || !is_array($body)) {
-        $skipped++;
-        continue;
-    }
+  $first = trim((string)($props['firstname']   ?? ''));
+  $last  = trim((string)($props['lastname']    ?? ''));
+  $phone = trim((string)($props['phone']       ?? ''));
+  $mobi  = trim((string)($props['mobilephone'] ?? ''));
+  $email = trim((string)($props['email']       ?? ''));
 
-    $props = $body['properties'] ?? [];
+  if ($phone === '' && $mobi !== '') $phone = $mobi;
 
-    $first = trim((string)($props['firstname']   ?? ''));
-    $last  = trim((string)($props['lastname']    ?? ''));
-    $phone = trim((string)($props['phone']       ?? ''));
-    $mobi  = trim((string)($props['mobilephone'] ?? ''));
-    $email = trim((string)($props['email']       ?? ''));
+  // Match standalone behavior: require a phone number to dial
+  if ($phone === '') continue;
 
-    if ($phone === '' && $mobi === '' && $email === '') {
-        $skipped++;
-        continue;
-    }
+  $recordUrl = null;
+  if ($portalId) {
+    $recordUrl = "https://app.hubspot.com/contacts/{$portalId}/record/0-1/{$cid}";
+  }
 
-    if ($phone === '' && $mobi !== '') {
-        $phone = $mobi;
-    }
-
-    $name = trim($first . ' ' . $last);
-    if ($name === '') {
-        $name = $email ?: $phone ?: ('Contact #' . $id);
-    }
-
-    $recordUrl = null;
-    if ($portalId) {
-        $recordUrl = 'https://app.hubspot.com/contacts/'
-            . rawurlencode($portalId)
-            . '/record/0-1/'
-            . rawurlencode($id);
-    }
-
-    $contacts[] = [
-        'hs_id'      => $id,
-        'first_name' => $first,
-        'last_name'  => $last,
-        'name'       => $name,
-        'phone'      => $phone,
-        'email'      => $email,
-        'record_url' => $recordUrl,
-    ];
+  $contacts[] = [
+    'hubspot_id' => (string)$cid,
+    'first'      => $first,
+    'last'       => $last,
+    'phone'      => $phone,
+    'email'      => $email,
+    'record_url' => $recordUrl,
+  ];
 }
 
 if (empty($contacts)) {
-    api_log('hubspot_selection.reject.no_dialable_contacts', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'mode'           => $mode,
-        'skipped'        => $skipped,
-        'hs_calls'       => $hsCalls,
-        'hs_ms_sum'      => $hsMsSum,
-    ]);
-    api_error('No dialable HubSpot contacts (no phone or email).', 'bad_request', 400, [
-        'debug' => [
-            'skipped_contacts' => $skipped,
-            'inner_source'     => $debugInfo,
-        ],
-    ]);
+  json_out([
+    'error' => 'No dialable HubSpot contacts (no phone or fetch failed)',
+    'debug' => [
+      'mode' => $mode,
+      'contact_ids_count' => count($contactIds),
+      'selectedCount' => $context['selectedCount'] ?? null,
+    ]
+  ], 400);
 }
 
-// ---------------------------------------------------------------------
-// 3) Build PhoneBurner contacts + session state
-// ---------------------------------------------------------------------
-$session_token = bin2hex(random_bytes(16));
+// -----------------------------------------------------------------------------
+// 5) Build PhoneBurner dialsession payload (standalone style)
+// -----------------------------------------------------------------------------
+$session_token = random_token(18);
 
 $pbContacts   = [];
+$skipped      = 0;
 $contacts_map = [];
 
-$sourceUrl   = $context['url']   ?? null;
-$sourceLabel = $context['title'] ?? null;
-
 foreach ($contacts as $c) {
-    $extId = 'hs-contact:' . $c['hs_id'];
+  $hsId  = trim((string)($c['hubspot_id'] ?? ''));
+  $first = trim((string)($c['first'] ?? ''));
+  $last  = trim((string)($c['last']  ?? ''));
+  $phone = trim((string)($c['phone'] ?? ''));
+  $email = trim((string)($c['email'] ?? ''));
 
-    // Keep existing field names as-is to avoid breaking PB expectations.
-    // (If PB requires first_name/last_name only, we can adjust later, but this preserves current behavior.)
-    $pbContacts[] = [
-        'firstname'       => $c['first_name'],
-        'lastname'        => $c['last_name'],
-        'phone'           => $c['phone'],
-        'email'           => $c['email'],
-        'external_id'     => $extId,
-        'external_source' => 'hubspot',
-        'external_crm_data' => [
-            [
-                'crm_id'   => $extId,
-                'crm_name' => 'hubspot',
-            ],
-        ],
-    ];
+  if ($phone === '') { $skipped++; continue; }
 
-    $contacts_map[$extId] = [
-        'name'           => $c['name'],
-        'first_name'     => $c['first_name'],
-        'last_name'      => $c['last_name'],
-        'phone'          => $c['phone'],
-        'email'          => $c['email'],
-        'source_url'     => $sourceUrl,
-        'source_label'   => $sourceLabel,
-        'crm_name'       => $crmName,
-        'crm_identifier' => $extId,
-        'record_url'     => $c['record_url'],
-    ];
+  $pbContacts[] = [
+    'first_name'        => $first,
+    'last_name'         => $last,
+    'phone'             => $phone,
+    'email'             => $email,
+    'external_crm_data' => [
+      [
+        'crm_id'   => $hsId,
+        'crm_name' => 'hubspot',
+      ],
+    ],
+  ];
+
+  $name = trim($first . ' ' . $last);
+  if ($name === '' && $email !== '') $name = $email;
+  if ($name === '' && $phone !== '') $name = $phone;
+
+  $contacts_map[$hsId] = [
+    'name'           => $name,
+    'first_name'     => $first,
+    'last_name'      => $last,
+    'phone'          => $phone,
+    'email'          => $email,
+    'crm_name'       => 'hubspot',
+    'crm_identifier' => $hsId,
+    'record_url'     => $c['record_url'] ?? null,
+    'source_label'   => $sourceLabel,
+    'source_url'     => $sourceUrl,
+  ];
 }
 
-// ---------------------------------------------------------------------
-// 4) Call PhoneBurner to create the dial session
-// ---------------------------------------------------------------------
-$base = rtrim($cfg['BASE_URL'] ?? '', '/');
-if ($base === '') {
-    api_log('hubspot_selection.error.missing_base_url');
-    api_error('Server misconfigured: BASE_URL missing', 'server_error', 500);
+if (empty($pbContacts)) {
+  json_out([
+    'error' => 'No dialable contacts after filtering (no phone)',
+    'debug' => ['skipped_no_phone' => $skipped]
+  ], 400);
 }
 
+// Callbacks (include BOTH so follow-me + call-done stats work)
+$base = rtrim(cfg()['BASE_URL'] ?? '', '/');
 $callbacks = [
-    [
-        'callback_type' => 'api_contact_displayed',
-        'callback'      => $base . '/webhooks/contact_displayed.php?s=' . urlencode($session_token),
-    ],
-    [
-        'callback_type' => 'api_calldone',
-        'callback'      => $base . '/webhooks/call_done.php?s=' . urlencode($session_token),
-    ],
+  [
+    'callback_type' => 'api_contact_displayed',
+    'callback'      => $base . '/webhooks/contact_displayed.php?s=' . urlencode($session_token) . '&src=' . urlencode('hubspot-selection'),
+  ],
+  [
+    'callback_type' => 'api_calldone',
+    'callback'      => $base . '/webhooks/call_done.php?s=' . urlencode($session_token) . '&src=' . urlencode('hubspot-selection'),
+  ],
 ];
 
 $payload = [
-    'name'        => 'HubSpot selection (' . $mode . ')',
-    'description' => 'Created from HubSpot ' . $mode . ' selection via unified extension',
-    'contacts'    => $pbContacts,
-    'preset_id'   => null,
-    'custom_data' => [
-        'client_id' => $client_id,
-        'source'    => 'hubspot-extension',
-        'crm_name'  => $crmName,
-        'mode'      => $mode,
-    ],
-    'callbacks'   => $callbacks,
-    'webhook_meta'=> [
-        'session_token' => $session_token,
-        'client_id'     => $client_id,
-        'crm_name'      => $crmName,
-        'mode'          => $mode,
-    ],
+  'name'        => 'HubSpot Selection – ' . gmdate('c'),
+  'contacts'    => $pbContacts,
+  'preset_id'   => null,
+  'custom_data' => [
+    'userId' => $userId,
+    'source' => 'hubspot-selection',
+    'mode'   => $mode,
+  ],
+  'callbacks'   => $callbacks,
+  'webhook_meta'=> [
+    'session_token' => $session_token,
+    'mode'          => $mode,
+  ],
 ];
 
-$t0 = microtime(true);
-list($info, $resp) = pb_api_call($pat, 'POST', '/dialsession', $payload);
-$pb_ms = (int) round((microtime(true) - $t0) * 1000);
+// -----------------------------------------------------------------------------
+// 6) Create PB dialsession
+// -----------------------------------------------------------------------------
+try {
+  $resp   = pb_post_json('https://www.phoneburner.com/rest/1/dialsession', $payload, $pb);
+  $status = $resp['status'];
+  $body   = $resp['body'];
+  $j      = json_decode($body, true);
 
-$httpCode = (int)($info['http_code'] ?? 0);
+  hs_dial_debug(['step' => 'pb_response', 'status' => $status, 'ok' => ($status > 0 && $status < 400)]);
 
-if ($httpCode >= 400 || !is_array($resp)) {
-    api_log('hubspot_selection.error.pb_api', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'mode'           => $mode,
-        'status'         => $httpCode,
-        'pb_ms'          => $pb_ms,
-    ]);
-    api_error('PhoneBurner API error', 'pb_api_error', $httpCode ?: 500, [
-        'status' => $httpCode,
-    ]);
-}
+  if ($status >= 400 || $status === 0) {
+    json_out([
+      'error'  => 'PhoneBurner API error',
+      'status' => $status,
+      'body'   => $j ?: $body,
+    ], $status ?: 502);
+  }
 
-$launch_url     = $resp['dialsessions']['redirect_url'] ?? null;
-$dialsession_id = $resp['dialsessions']['id'] ?? null;
+  $launch_url = $j['dialsessions']['redirect_url'] ?? null;
+  if (!$launch_url) {
+    json_out([
+      'error' => 'No launch URL in PhoneBurner response',
+      'body'  => $j,
+    ], 502);
+  }
 
-if (!$launch_url) {
-    api_log('hubspot_selection.error.no_launch_url', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'mode'           => $mode,
-        'pb_ms'          => $pb_ms,
-    ]);
-    api_error('No launch URL in PhoneBurner response', 'pb_bad_response', 502);
-}
-
-// ---------------------------------------------------------------------
-// 5) Initialize and persist session state for SSE + webhooks
-// ---------------------------------------------------------------------
-$state = [
+  // Save initial session state so follow-me & stats work
+  $state = [
     'session_token'   => $session_token,
-    'created_at'      => date('c'),
-    'crm'             => $crmName,
-    'client_id'       => $client_id,
-    'dialsession_id'  => $dialsession_id,
+    'dialsession_id'  => $j['dialsessions']['id'] ?? null,
     'dialsession_url' => $launch_url,
+    'client_id'       => $userId,
+    'created_at'      => date('c'),
+    'crm'             => 'hubspot',
     'context'         => [
-        'source'    => 'hubspot-extension',
-        'url'       => $sourceUrl,
-        'title'     => $sourceLabel,
-        'portal_id' => $portalId,
-        'mode'      => $mode,
+      'mode'      => $mode,
+      'portalId'  => $portalId,
+      'sourceUrl' => $sourceUrl,
+      'title'     => $sourceLabel,
     ],
     'current'         => null,
     'last_call'       => null,
+    'last_event_type' => null,
     'stats'           => [
-        'total_calls'  => 0,
-        'connected'    => 0,
-        'appointments' => 0,
-        'by_status'    => [],
+      'total_calls'  => 0,
+      'connected'    => 0,
+      'appointments' => 0,
+      'by_status'    => [],
     ],
     'contacts_map'    => $contacts_map,
-];
+  ];
 
-save_session_state($session_token, $state);
+  save_session_state($session_token, $state);
 
-api_log('hubspot_selection.ok', [
-    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    'mode'           => $mode,
-    'contacts_sent'  => count($pbContacts),
-    'skipped'        => $skipped,
-    'hs_calls'       => $hsCalls,
-    'hs_ms_sum'      => $hsMsSum,
-    'pb_ms'          => $pb_ms,
-]);
+  json_out([
+    'launch_url'    => $launch_url,
+    'session_token' => $session_token,
+    'contacts_sent' => count($pbContacts),
+    'skipped'       => $skipped,
+    'mode'          => $mode,
+  ]);
 
-// IMPORTANT: keep FLAT keys for extension compatibility.
-// Provide BOTH launch_url and dialsession_url to be safe.
-api_ok_flat([
-    'session_token'   => $session_token,
-    'launch_url'      => $launch_url,
-    'dialsession_url' => $launch_url,
-    'contacts_sent'   => count($pbContacts),
-    'skipped'         => $skipped,
-    'mode'            => $mode,
-    'hs_ms'           => $hsMsSum,
-    'pb_ms'           => $pb_ms,
-]);
+} catch (Exception $e) {
+  hs_dial_debug(['step' => 'exception', 'error' => $e->getMessage()]);
+  json_out(['error' => $e->getMessage()], 500);
+}
+
+// -----------------------------------------------------------------------------
+// Helper – POST JSON to PB
+// -----------------------------------------------------------------------------
+function pb_post_json($url, $payload, $bearer) {
+  $headers = [
+    'Content-Type: application/json',
+    'Authorization: Bearer ' . $bearer,
+  ];
+  $opts = [
+    'http' => [
+      'method'        => 'POST',
+      'header'        => implode("\r\n", $headers) . "\r\n",
+      'content'       => json_encode($payload),
+      'timeout'       => 60,
+      'ignore_errors' => true,
+    ],
+  ];
+  $ctx  = stream_context_create($opts);
+  $body = file_get_contents($url, false, $ctx);
+
+  $status = 0;
+  if (isset($http_response_header)) {
+    foreach ($http_response_header as $h) {
+      if (preg_match('#HTTP/\S+\s(\d{3})#', $h, $m)) {
+        $status = (int)$m[1];
+        break;
+      }
+    }
+  }
+  return ['status' => $status, 'body' => $body];
+}

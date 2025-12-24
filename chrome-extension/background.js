@@ -1,8 +1,9 @@
-// background.js
+// background.js — Unified extension service worker
+// Fixes HubSpot selection flow + preserves Level 1/2 scan flow
 
 const BASE_URL = "https://extension-dev.phoneburner.biz";
 
-// Default icon set (you can customize per CRM later if you like)
+// Default icon set
 const DEFAULT_ICON_PATH = {
   16: "icons/icon-16.png",
   32: "icons/icon-32.png",
@@ -13,35 +14,33 @@ const DEFAULT_ICON_PATH = {
 // Track CRM context per tab
 const tabContexts = {}; // { [tabId]: { crmId, crmName, level, host, path } }
 
-// Track which tab "owns" the current session
+// Track which tab "owns" the current follow-me session
 let currentSession = {
   token: null,
   tabId: null,
-  backendBase: null, // where the SSE endpoint lives
+  backendBase: null,
 };
 
-// --- Persist currentSession so it survives service worker restarts ---
+// -------------------------
+// Persist currentSession
+// -------------------------
 
 function saveCurrentSessionToStorage() {
   return new Promise((resolve) => {
-    chrome.storage.local.set({ pb_current_session: currentSession }, () => {
-      resolve();
-    });
+    chrome.storage.local.set({ pb_current_session: currentSession }, () => resolve());
   });
 }
 
 function loadCurrentSessionFromStorage() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["pb_current_session"], (res) => {
-      if (res && res.pb_current_session) {
-        currentSession = res.pb_current_session;
-      }
+      if (res && res.pb_current_session) currentSession = res.pb_current_session;
       resolve(currentSession);
     });
   });
 }
 
-// Helper: currently active tab id (used for HubSpot Level 3)
+// Helper: current active tab id
 function getActiveTabId() {
   return new Promise((resolve) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -50,25 +49,31 @@ function getActiveTabId() {
   });
 }
 
-// Re-use this for both unified and HubSpot sessions
+// Register session + tell content script to follow
 async function registerSessionForTab(tabId, sessionToken, backendBase) {
   if (!tabId || !sessionToken) return;
 
   currentSession = {
     token: sessionToken,
-    tabId: tabId,
+    tabId,
     backendBase: backendBase || BASE_URL,
   };
   await saveCurrentSessionToStorage();
 
-  chrome.tabs.sendMessage(tabId, {
-    type: "START_FOLLOW_SESSION",
-    sessionToken,
-    backendBase: currentSession.backendBase,
-  });
+  try {
+    chrome.tabs.sendMessage(tabId, {
+      type: "START_FOLLOW_SESSION",
+      sessionToken,
+      backendBase: currentSession.backendBase,
+    });
+  } catch (e) {
+    // ignore if tab isn't ready
+  }
 }
 
-// --- client_id management (unified) ---
+// -------------------------
+// client_id management
+// -------------------------
 
 async function getClientId() {
   return new Promise((resolve) => {
@@ -80,54 +85,60 @@ async function getClientId() {
           typeof crypto !== "undefined" && crypto.randomUUID
             ? crypto.randomUUID()
             : String(Date.now());
-        chrome.storage.local.set({ pb_unified_client_id: id }, () =>
-          resolve(id)
-        );
+        chrome.storage.local.set({ pb_unified_client_id: id }, () => resolve(id));
       }
     });
   });
 }
 
-// --- API helper ---
+// -------------------------
+// API helper (unified)
+// -------------------------
 
 async function api(path, body = {}) {
   const client_id = await getClientId();
-
-  const payload = {
-    client_id,
-    ...body,
-  };
+  const payload = { client_id, ...(body || {}) };
 
   const res = await fetch(`${BASE_URL}/api/${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Client-Id": client_id },
     body: JSON.stringify(payload),
+    credentials: "include",
   });
 
   const json = await res.json().catch(() => ({}));
   return json;
 }
 
+// -------------------------
+// Utility: safe tab URL info
+// -------------------------
 
-// --- Message handlers from popup & content scripts ---
+function deriveHostPathFromTabUrl(tabUrl) {
+  try {
+    const u = new URL(tabUrl);
+    return { host: u.hostname, path: u.pathname + u.search };
+  } catch (e) {
+    return { host: "", path: "" };
+  }
+}
+
+// -------------------------
+// Message handler
+// -------------------------
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // --- Content script tells us its CRM context for this tab ---
+  // Content script reports CRM context for the tab
   if (msg.type === "CRM_CONTEXT" && sender.tab && sender.tab.id != null) {
     const tabId = sender.tab.id;
     tabContexts[tabId] = msg.context || null;
 
-    chrome.action.setIcon({
-      tabId,
-      path: DEFAULT_ICON_PATH,
-    });
-
+    chrome.action.setIcon({ tabId, path: DEFAULT_ICON_PATH });
     sendResponse && sendResponse({ ok: true });
     return;
   }
 
-
-  // --- Popup asks for context for a given tab ---
+  // Popup asks for context
   if (msg.type === "GET_CONTEXT") {
     const tabId = msg.tabId ?? (sender.tab && sender.tab.id);
     const context =
@@ -138,80 +149,161 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  // --- Everything else uses async flow ---
+  // Everything else async
   (async () => {
     try {
+      // -------------------------
+      // Core state / PAT
+      // -------------------------
       if (msg.type === "GET_STATE") {
         const state = await api("core/state.php");
-        sendResponse(state);
+        return sendResponse(state);
+      }
 
-      } else if (msg.type === "GET_CLIENT_ID") {
+      if (msg.type === "GET_CLIENT_ID") {
         const client_id = await getClientId();
-        sendResponse({ ok: true, client_id });
+        return sendResponse({ ok: true, client_id });
+      }
 
-      } else if (msg.type === "SAVE_PAT") {
+      if (msg.type === "SAVE_PAT") {
         const { pat } = msg;
         const resp = await api("core/oauth_pb_save.php", { pat });
-        sendResponse(resp);
+        return sendResponse(resp);
+      }
 
-      } else if (msg.type === "CLEAR_PAT") {
+      if (msg.type === "CLEAR_PAT") {
         const resp = await api("core/oauth_pb_clear.php");
         currentSession = { token: null, tabId: null, backendBase: null };
         await saveCurrentSessionToStorage();
-        sendResponse(resp);
+        return sendResponse(resp);
+      }
 
-      } else if (msg.type === "SCANNED_CONTACTS") {
-        // Unified Level 1/2 flow
+      // -------------------------
+      // HubSpot Level 3: launch from selected
+      // IMPORTANT: this should NOT scrape phone/email from DOM.
+      // It only collects IDs; server resolves details via HubSpot API.
+      // -------------------------
+      if (msg.type === "HS_LAUNCH_FROM_SELECTED") {
+        // Find active HubSpot tab (don’t over-restrict URL; HubSpot changes routes a lot)
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const hubTab = (tabs || []).find((t) => (t.url || "").includes("app.hubspot.com"));
+        if (!hubTab || !hubTab.id) {
+          return sendResponse({
+            ok: false,
+            error: "Open a HubSpot contacts/companies/deals page with selected records.",
+          });
+        }
+
+        // Ask content script for selection (IDs + context)
+        const selected = await new Promise((resolve) => {
+          try {
+            chrome.tabs.sendMessage(hubTab.id, { type: "HS_GET_SELECTED_IDS" }, (res) => {
+              if (chrome.runtime.lastError) {
+                return resolve({ error: chrome.runtime.lastError.message });
+              }
+              resolve(res);
+            });
+          } catch (e) {
+            resolve({ error: String(e) });
+          }
+        });
+
+        if (!selected || selected.error) {
+          return sendResponse({
+            ok: false,
+            error: selected?.error || "Could not read HubSpot selection.",
+          });
+        }
+
+        const ids = Array.isArray(selected.ids) ? selected.ids : [];
+        const objectType = selected.objectType || "contact";
+        const portalId = selected.portalId || null;
+        const pageUrl = selected.url || hubTab.url || null;
+        const pageTitle = selected.title || null;
+
+        if (!ids.length) {
+          return sendResponse({ ok: false, error: "No records selected in this view." });
+        }
+
+        // Translate objectType -> server mode
+        // server expects: "contacts" | "deals" | "companies"
+        let mode = "contacts";
+        if (objectType === "deal") mode = "deals";
+        if (objectType === "company") mode = "companies";
+
+        const resp = await api("crm/hubspot/pb_dialsession_selection.php", {
+          mode,
+          records: ids.map((id) => ({ id: String(id) })),
+          context: {
+            objectType,
+            portalId,
+            url: pageUrl,
+            title: pageTitle,
+            selectedCount: ids.length,
+          },
+        });
+
+        const sessionToken = resp.session_token || resp.data?.session_token || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session (missing token or URL).",
+            details: resp,
+          });
+        }
+
+        // Register follow-me for the HubSpot tab
+        await registerSessionForTab(hubTab.id, sessionToken, BASE_URL);
+
+        // Open PB dialer window
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
+      // Unified Level 1/2: scan -> server -> dialsession
+      // -------------------------
+      if (msg.type === "SCANNED_CONTACTS") {
         const { contacts, context } = msg || {};
         const ctx = context || {};
 
-        // --- 1) Determine CRM context for logging ---
         const senderTabId = sender.tab && sender.tab.id != null ? sender.tab.id : null;
         const tabCtx = senderTabId != null ? tabContexts[senderTabId] || null : null;
 
-        // crmId: prefer what the content script detected, fall back to "generic"
-        const crmId =
-          (tabCtx && tabCtx.crmId) ||
-          (ctx && ctx.crm_id) ||
-          "generic";
+        const crmId = (tabCtx && tabCtx.crmId) || (ctx && ctx.crm_id) || "generic";
 
-            // 🔍 SF DEBUG: log what background actually sees before doing anything else
-  if (crmId === "salesforce") {
-    console.log("[PB-UNIFIED][BG] SF contacts received from content:", contacts.length, contacts);
-    console.log("[PB-UNIFIED][BG] SF context:", ctx, "tabCtx:", tabCtx);
-  }
-
-        // host/path: prefer stored tab context, otherwise derive from sender.tab.url
+        // host/path (prefer tabCtx, else parse sender.tab.url)
         let host = (tabCtx && tabCtx.host) || "";
         let path = (tabCtx && tabCtx.path) || "";
-
         if ((!host || !path) && sender.tab && sender.tab.url) {
-          try {
-            const u = new URL(sender.tab.url);
-            if (!host) host = u.hostname;
-            if (!path) path = u.pathname + u.search;
-          } catch (e) {
-            // ignore URL parse errors; host/path will just be empty
-          }
+          const hp = deriveHostPathFromTabUrl(sender.tab.url);
+          if (!host) host = hp.host;
+          if (!path) path = hp.path;
         }
 
-        // level: 1/2/3 – default to 1 if not known
         const level = (tabCtx && tabCtx.level) || 1;
 
-        // --- 2) Log CRM usage for this Scan & Launch attempt ---
-        // We want this to happen even if the dial session fails.
+        // Track CRM usage (best-effort)
         try {
-          await api("core/track_crm_usage.php", {
-            crm_id: crmId,
-            host,
-            path,
-            level,
-          });
+          await api("core/track_crm_usage.php", { crm_id: crmId, host, path, level });
         } catch (e) {
-          console.warn("track_crm_usage failed:", e);
+          // ignore
         }
 
-        // --- 3) Create the PhoneBurner dial session as before ---
         const resp = await api("crm/generic/dialsession_from_scan.php", {
           contacts,
           context: ctx,
@@ -221,10 +313,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const dialUrl = resp.launch_url || resp.dialsession_url || null;
 
         if (sessionToken && dialUrl) {
-          const tabId =
-            sender.tab && sender.tab.id != null ? sender.tab.id : null;
+          const tabId = sender.tab && sender.tab.id != null ? sender.tab.id : null;
 
-          // Register session with backend
           await registerSessionForTab(tabId, sessionToken, BASE_URL);
 
           chrome.windows.create({
@@ -235,27 +325,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             height: 900,
           });
 
-          sendResponse({
-            ok: true,
-            sessionToken,
-            dialUrl,
-          });
-        } else {
-          const errorMsg =
-            resp.error ||
-            "Failed to create PhoneBurner dial session (missing launch URL or session token)";
-          console.error("SCANNED_CONTACTS error:", resp);
-
-          sendResponse({
-            ok: false,
-            error: errorMsg,
-            details: resp,
-          });
+          return sendResponse({ ok: true, sessionToken, dialUrl });
         }
 
+        const errorMsg =
+          resp.error ||
+          "Failed to create PhoneBurner dial session (missing launch URL or session token)";
 
-      } else if (msg.type === "GET_ACTIVE_SESSION_FOR_TAB") {
-        // Content script asks whether THIS tab should auto-follow
+        return sendResponse({ ok: false, error: errorMsg, details: resp });
+      }
+
+      // -------------------------
+      // Follow session restore/stop
+      // -------------------------
+      if (msg.type === "GET_ACTIVE_SESSION_FOR_TAB") {
         await loadCurrentSessionFromStorage();
 
         const senderTabId = sender.tab && sender.tab.id;
@@ -264,88 +347,82 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           currentSession.tabId != null &&
           senderTabId === currentSession.tabId
         ) {
-          sendResponse({
+          return sendResponse({
             ok: true,
             sessionToken: currentSession.token,
             backendBase: currentSession.backendBase || BASE_URL,
           });
-        } else {
-          sendResponse({ ok: true, sessionToken: null });
         }
+        return sendResponse({ ok: true, sessionToken: null });
+      }
 
-      } else if (msg.type === "STOP_FOLLOW_SESSION") {
+      if (msg.type === "STOP_FOLLOW_SESSION") {
         currentSession = { token: null, tabId: null, backendBase: null };
         await saveCurrentSessionToStorage();
-        sendResponse({ ok: true });
+        return sendResponse({ ok: true });
+      }
 
-      } else if (msg.type === "GET_USER_SETTINGS") {
-        // Generic “get everything” – still here for any settings UI
+      // -------------------------
+      // Server goals/settings
+      // -------------------------
+      if (msg.type === "GET_USER_SETTINGS") {
         const resp = await api("core/user_settings_get.php");
-        sendResponse(resp);
+        return sendResponse(resp);
+      }
 
-      } else if (msg.type === "LOAD_SERVER_GOALS") {
-        // Lightweight endpoint used by content.js to sync goalConfig
+      if (msg.type === "LOAD_SERVER_GOALS") {
         const resp = await api("core/user_settings_get.php");
-
         if (!resp || !resp.ok) {
-          sendResponse({
+          return sendResponse({
             ok: false,
             error: (resp && resp.error) || "Unable to load goals from server",
           });
-        } else {
-          const goals = resp.goals || {};
-          sendResponse({
-            ok: true,
-            primary: goals.primary || null,
-            secondary: goals.secondary || null,
-          });
         }
-
-      } else if (msg.type === "SAVE_GOALS") {
-        // Save goals on the server so they follow the user between browsers
-        const { goals } = msg;
-        const resp = await api("core/user_settings_save.php", {
-          goals: goals || {},
+        const goals = resp.goals || {};
+        return sendResponse({
+          ok: true,
+          primary: goals.primary || null,
+          secondary: goals.secondary || null,
         });
-        sendResponse(resp);
+      }
 
-      } else if (msg.type === "HS_SESSION_STARTED") {
-        // HubSpot Level 3 flow – called from popup.js
+      if (msg.type === "SAVE_GOALS") {
+        const { goals } = msg;
+        const resp = await api("core/user_settings_save.php", { goals: goals || {} });
+        return sendResponse(resp);
+      }
+
+      // Back-compat (if anything still sends HS_SESSION_STARTED)
+      if (msg.type === "HS_SESSION_STARTED") {
         const sessionToken = msg.session_token;
         const backendBase = msg.backend_base || BASE_URL;
 
         if (!sessionToken) {
-          sendResponse({
-            ok: false,
-            error: "Missing session_token for HS_SESSION_STARTED",
-          });
-          return;
+          return sendResponse({ ok: false, error: "Missing session_token for HS_SESSION_STARTED" });
         }
 
         const tabId = await getActiveTabId();
         if (tabId) {
           await registerSessionForTab(tabId, sessionToken, backendBase);
-          sendResponse({ ok: true });
-        } else {
-          sendResponse({
-            ok: false,
-            error: "No active tab found for HS_SESSION_STARTED",
-          });
+          return sendResponse({ ok: true });
         }
-
-      } else {
-        sendResponse({ ok: false, error: "Unknown message type" });
+        return sendResponse({ ok: false, error: "No active tab found for HS_SESSION_STARTED" });
       }
 
+      // -------------------------
+      // Unknown
+      // -------------------------
+      return sendResponse({ ok: false, error: "Unknown message type" });
     } catch (err) {
       console.error("background error", err);
-      sendResponse({ ok: false, error: String(err) });
+      return sendResponse({ ok: false, error: String(err) });
     }
   })();
 
-  return true;
+  return true; // keep port open for async sendResponse
 });
 
+// Clean up contexts when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (Object.prototype.hasOwnProperty.call(tabContexts, tabId)) {
     delete tabContexts[tabId];

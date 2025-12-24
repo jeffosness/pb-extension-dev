@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PhoneBurner Unified CRM Dial Companion",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Create PhoneBurner dial sessions from any CRM list and follow who is being called in real time.",
   "permissions": [
     "storage",
