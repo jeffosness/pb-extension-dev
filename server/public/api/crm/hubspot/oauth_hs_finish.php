@@ -4,8 +4,8 @@
 // HubSpot OAuth callback page.
 // HubSpot redirects the user here with ?code=...&state=...
 // - state is the extension client_id (set in oauth_hs_start.php)
-// - we exchange code -> tokens via HubSpot token endpoint
-// - we save tokens under TOKENS_DIR/hubspot/<client_id>.json
+// - exchange code -> tokens via HubSpot token endpoint
+// - save tokens under TOKENS_DIR/hubspot/<client_id>.json
 //
 // IMPORTANT:
 // - This is an HTML page (not a JSON endpoint).
@@ -20,13 +20,18 @@ $cfg = cfg();
 $code  = $_GET['code']  ?? '';
 $state = $_GET['state'] ?? '';
 
+// Security / caching headers for an OAuth callback page
 header('Content-Type: text/html; charset=utf-8');
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('X-Frame-Options: DENY');
+header('Referrer-Policy: no-referrer');
 
 function hs_error_page(string $title, string $message, int $status = 400): void {
     http_response_code($status);
     echo '<!doctype html><html><head><meta charset="utf-8"><title>'
         . htmlspecialchars($title, ENT_QUOTES, 'UTF-8')
-        . '</title></head><body>'
+        . '</title></head><body style="font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;">'
         . '<h3>' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</h3>'
         . '<p>' . htmlspecialchars($message, ENT_QUOTES, 'UTF-8') . '</p>'
         . '<p><a href="javascript:window.close()">Close this tab</a></p>'
@@ -44,8 +49,12 @@ if (!$code || !$state) {
 
 // state is the extension client_id we set in oauth_hs_start.php
 $client_id = preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$state);
-if ($client_id === '') {
-    api_log('hubspot_oauth_finish.reject.bad_state');
+
+// sanity check length (UUID is ~36 chars; allow some room but block nonsense)
+if ($client_id === '' || strlen($client_id) > 128) {
+    api_log('hubspot_oauth_finish.reject.bad_state', [
+        'state_len' => is_string($state) ? strlen($state) : null,
+    ]);
     hs_error_page('HubSpot OAuth error', 'Invalid state parameter.', 400);
 }
 
@@ -63,6 +72,7 @@ if (!$hsClientId || !$hsClientSecret || !$baseUrl) {
     hs_error_page('HubSpot OAuth error', 'Server is missing HubSpot OAuth configuration.', 500);
 }
 
+// Must match oauth_hs_start.php redirect_uri exactly
 $redirect = rtrim($baseUrl, '/') . '/api/crm/hubspot/oauth_hs_finish.php';
 
 // Exchange code → tokens (timed)
@@ -93,18 +103,21 @@ if ($status < 200 || $status >= 300 || !is_array($resp)) {
     );
 }
 
-// Normalise token shape & store with a soft expiry
+// Normalize token shape & store with soft expiry
 $now        = time();
 $expires_in = isset($resp['expires_in']) ? (int)$resp['expires_in'] : 1800;
 
-$resp['created_at'] = $now;
-$resp['expires_at'] = $now + max(0, $expires_in - 60); // refresh slightly early
+// Ensure we preserve common fields but don't assume they exist
+$tokenPayload = $resp;
+$tokenPayload['created_at'] = $now;
+$tokenPayload['expires_at'] = $now + max(0, $expires_in - 60); // refresh slightly early
 
-save_hs_tokens($client_id, $resp);
+// Save under TOKENS_DIR/hubspot/<client_id>.json
+save_hs_tokens($client_id, $tokenPayload);
 
 api_log('hubspot_oauth_finish.ok', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    'hub_id'         => $resp['hub_id'] ?? null,
+    'hub_id'         => $tokenPayload['hub_id'] ?? null,
     'hs_ms'          => $hs_ms,
 ]);
 
@@ -115,7 +128,7 @@ echo '<!doctype html>
     <meta charset="utf-8">
     <title>HubSpot connected</title>
   </head>
-  <body>
+  <body style="font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;">
     <h3>HubSpot is connected.</h3>
     <p>You can close this tab and return to the extension popup.</p>
     <p><a href="javascript:window.close()">Close this tab</a></p>
