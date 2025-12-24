@@ -10,7 +10,8 @@
 //   "context": { "portalId": "...", "url": "...", "title": "...", "selectedCount": 10 }
 // }
 
-require __DIR__ . '/../utils.php';
+require_once __DIR__ . '/../../core/bootstrap.php';
+require_once __DIR__ . '/../../../utils.php';
 
 // -----------------------------------------------------------------------------
 // Debug log (NO PII/tokens recommended; keep minimal)
