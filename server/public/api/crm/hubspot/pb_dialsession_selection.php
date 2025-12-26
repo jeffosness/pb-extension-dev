@@ -382,29 +382,71 @@ if ($httpCode >= 400 || !is_array($resp)) {
   ]);
 }
 
-// Launch URL
-$launch_url = $resp['launch_url'] ?? $resp['dialsession_url'] ?? null;
+// -------------------------
+// Extract launch URL (match dialsession_from_scan.php)
+// -------------------------
+$launch_url = $resp['dialsessions']['redirect_url'] ?? null;
+$dial_id    = $resp['dialsessions']['id'] ?? null;
+
+// Fallbacks (in case PB returns a slightly different shape)
 if (!$launch_url) {
+  $launch_url =
+    $resp['dialsession']['redirect_url'] ??
+    $resp['dialsession']['launch_url'] ??
+    $resp['redirect_url'] ??
+    $resp['launch_url'] ??
+    $resp['dialsession_url'] ??
+    null;
+
+  $dial_id =
+    $dial_id ??
+    ($resp['dialsession']['id'] ?? null);
+}
+
+if (!$launch_url) {
+  // Log keys only (no payload / no PII)
+  api_log('hubspot_selection.error.no_launch_url', [
+    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    'pb_ms'          => $pb_ms,
+    'pb_http'        => $httpCode,
+    'resp_keys'      => is_array($resp) ? array_slice(array_keys($resp), 0, 30) : null,
+    'has_dialsessions' => isset($resp['dialsessions']),
+  ]);
+
   api_error('PhoneBurner response missing launch URL', 'pb_error', 502, [
     'pb_ms' => $pb_ms,
   ]);
 }
 
-// Save session state for SSE/follow-me
-save_session_state($session_token, [
-  'client_id'     => $client_id,
-  'crm_name'      => 'hubspot',
-  'created_at'    => date('c'),
-  'contacts_map'  => $contacts_map,
-]);
+// -------------------------
+// Save initial session state (match dialsession_from_scan.php shape)
+// -------------------------
+$state = [
+  'session_token'   => $session_token,
+  'dialsession_id'  => $dial_id,
+  'dialsession_url' => $launch_url,
+  'client_id'       => $client_id,
+  'created_at'      => date('c'),
+  'current'         => null,
+  'last_call'       => null,
+  'stats'           => [
+    'total_calls'  => 0,
+    'connected'    => 0,
+    'appointments' => 0,
+  ],
+  'contacts_map'    => $contacts_map,
+  'crm_name'        => 'hubspot',
+];
 
-// Unified-style response
+save_session_state($session_token, $state);
+
+// Unified-style response (flat keys)
 api_ok_flat([
   'session_token'   => $session_token,
   'dialsession_url' => $launch_url,
-  // Optional backward compatibility:
-  'launch_url'      => $launch_url,
+  'launch_url'      => $launch_url, // optional backward compat
   'contacts_sent'   => count($pbContacts),
   'skipped'         => $skipped,
   'pb_ms'           => $pb_ms,
 ]);
+
