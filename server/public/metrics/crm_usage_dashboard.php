@@ -1,8 +1,22 @@
 <?php
-// unified_crm/metrics/crm_usage_dashboard.php
+// server/public/metrics/crm_usage_dashboard.php
 //
 // Simple dashboard that visualizes data from
 // ../api/core/crm_usage_stats.php
+//
+// Uses core/bootstrap.php for shared hardening/CORS/OPTIONS behavior.
+// IMPORTANT: This page is HTML, not JSON, so we opt out of JSON headers.
+
+define('PB_BOOTSTRAP_NO_JSON', true);
+require_once __DIR__ . '/../api/core/bootstrap.php';
+
+// This page is HTML (bootstrap opt-out means it won't set JSON content-type)
+header('Content-Type: text/html; charset=utf-8');
+
+// Optional: log dashboard view (no PII)
+api_log('crm_usage_dashboard.view', [
+  'ua' => isset($_SERVER['HTTP_USER_AGENT']) ? substr((string)$_SERVER['HTTP_USER_AGENT'], 0, 120) : null,
+]);
 
 ?>
 <!doctype html>
