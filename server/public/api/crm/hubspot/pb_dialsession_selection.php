@@ -15,6 +15,80 @@ require_once __DIR__ . '/../../../utils.php';
 // -----------------------------------------------------------------------------
 // HubSpot API helper (v3)
 // -----------------------------------------------------------------------------
+function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): array {
+  $cfg = cfg();
+  $hsClientId     = $cfg['HS_CLIENT_ID'] ?? null;
+  $hsClientSecret = $cfg['HS_CLIENT_SECRET'] ?? null;
+
+  if (!$hsClientId || !$hsClientSecret) {
+    api_error('Server missing HS_CLIENT_ID/HS_CLIENT_SECRET for token refresh', 'server_error', 500);
+  }
+
+  $refresh = $hsTokens['refresh_token'] ?? '';
+  if (!$refresh) {
+    api_error('HubSpot token expired and no refresh_token is available. Please reconnect HubSpot.', 'unauthorized', 401);
+  }
+
+  $t0 = microtime(true);
+  list($status, $resp) = http_post_form(
+    'https://api.hubapi.com/oauth/v1/token',
+    [
+      'grant_type'    => 'refresh_token',
+      'client_id'     => $hsClientId,
+      'client_secret' => $hsClientSecret,
+      'refresh_token' => $refresh,
+    ]
+  );
+  $hs_ms = (int) round((microtime(true) - $t0) * 1000);
+
+  if ($status < 200 || $status >= 300 || !is_array($resp)) {
+    api_log('hubspot_refresh.error', [
+      'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+      'status' => (int)$status,
+      'hs_ms' => $hs_ms,
+    ]);
+    api_error('HubSpot token refresh failed. Please reconnect HubSpot.', 'unauthorized', 401);
+  }
+
+  // Keep refresh_token if HubSpot doesn’t return a new one
+  if (empty($resp['refresh_token'])) {
+    $resp['refresh_token'] = $refresh;
+  }
+
+  $now        = time();
+  $expires_in = isset($resp['expires_in']) ? (int)$resp['expires_in'] : 1800;
+  $resp['created_at'] = $now;
+  $resp['expires_at'] = $now + max(0, $expires_in - 60);
+
+  save_hs_tokens($client_id, $resp);
+
+  api_log('hubspot_refresh.ok', [
+    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    'hub_id' => $resp['hub_id'] ?? null,
+    'hs_ms' => $hs_ms,
+  ]);
+
+  return $resp;
+}
+function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array &$diag) {
+  $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $diag);
+
+  $lastHttp = $diag['contacts_fetch']['last_http'] ?? null;
+  if (empty($contacts) && $lastHttp === 401) {
+    // refresh + retry once
+    $hs = hs_refresh_access_token_or_fail($client_id, $hs);
+    $hsAccess = (string)($hs['access_token'] ?? '');
+    $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $diag);
+  }
+
+  return $contacts;
+}
+
+function hs_token_is_expired(array $hsTokens): bool {
+  $exp = isset($hsTokens['expires_at']) ? (int)$hsTokens['expires_at'] : 0;
+  return $exp > 0 && time() >= $exp;
+}
+
 function hs_api_get_json($accessToken, $url) {
   $ch = curl_init($url);
   curl_setopt_array($ch, [
@@ -145,8 +219,17 @@ if (!$pat) {
 }
 
 $hs = load_hs_tokens($client_id);
-$hsAccess = is_array($hs) ? ($hs['access_token'] ?? '') : '';
-if (!$hsAccess) {
+if (!is_array($hs)) {
+  api_error('No HubSpot tokens saved for this client_id', 'unauthorized', 401);
+}
+
+// refresh if expired
+if (hs_token_is_expired($hs)) {
+  $hs = hs_refresh_access_token_or_fail($client_id, $hs);
+}
+
+$hsAccess = (string)($hs['access_token'] ?? '');
+if ($hsAccess === '') {
   api_error('No HubSpot access token saved for this client_id', 'unauthorized', 401);
 }
 
@@ -168,19 +251,27 @@ $diag = [
 ];
 
 $hsContacts = [];
+
 if ($mode === 'contacts') {
-  $hsContacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $diag);
+  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $diag);
+
 } elseif ($mode === 'deals') {
   $contactIds = hs_resolve_contact_ids_from_objects($hsAccess, 'deals', $ids, $diag);
   $diag['resolved_contact_ids'] = count($contactIds);
-  $hsContacts = hs_fetch_contacts_by_ids($hsAccess, $contactIds, $diag);
+
+  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
+
 } elseif ($mode === 'companies') {
   $contactIds = hs_resolve_contact_ids_from_objects($hsAccess, 'companies', $ids, $diag);
   $diag['resolved_contact_ids'] = count($contactIds);
-  $hsContacts = hs_fetch_contacts_by_ids($hsAccess, $contactIds, $diag);
+
+  // IMPORTANT: fetch the resolved contact IDs (not $ids)
+  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
+
 } else {
   api_error('Invalid mode', 'bad_request', 400);
 }
+
 
 if (empty($hsContacts)) {
   // Important: return diagnostic HTTP codes for quick troubleshooting (no secrets)
