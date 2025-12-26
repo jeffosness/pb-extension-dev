@@ -322,11 +322,23 @@ foreach ($hsContacts as $c) {
     ],
   ];
 
-  $contacts_map[$externalId] = [
-    'record_url'   => $recordUrl,
-    'source_url'   => $sourceUrl,
-    'source_label' => $sourceLabel,
-  ];
+  $displayName = trim(($first !== '' || $last !== '') ? ($first . ' ' . $last) : '');
+
+$contacts_map[$externalId] = [
+  'name'           => $displayName,
+  'first_name'     => $first,
+  'last_name'      => $last,
+  'phone'          => $phone,
+  'email'          => $email,
+
+  'source_url'     => $sourceUrl ?: null,
+  'source_label'   => $sourceLabel ?: null,
+
+  'crm_name'       => 'hubspot',
+  'crm_identifier' => $externalId,
+
+  'record_url'     => $recordUrl ?: null,
+];
 }
 
 if (empty($pbContacts)) {
@@ -423,10 +435,12 @@ if (!$launch_url) {
 // -------------------------
 $state = [
   'session_token'   => $session_token,
-  'dialsession_id'  => $dial_id,
+  'dialsession_id'  => $resp['dialsessions']['id'] ?? ($resp['dialsession_id'] ?? null),
   'dialsession_url' => $launch_url,
+
   'client_id'       => $client_id,
   'created_at'      => date('c'),
+
   'current'         => null,
   'last_call'       => null,
   'stats'           => [
@@ -434,6 +448,7 @@ $state = [
     'connected'    => 0,
     'appointments' => 0,
   ],
+
   'contacts_map'    => $contacts_map,
   'crm_name'        => 'hubspot',
 ];
