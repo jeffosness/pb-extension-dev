@@ -2,25 +2,61 @@
 // server/public/api/core/bootstrap.php
 declare(strict_types=1);
 
-// Always return JSON for API endpoints that include this file
-header('Content-Type: application/json; charset=utf-8');
+// -----------------------------------------------------------------------------
+// Request correlation + timing
+// -----------------------------------------------------------------------------
+$REQUEST_ID = bin2hex(random_bytes(8));
+$START_TS   = microtime(true);
 
+// -----------------------------------------------------------------------------
+// Basic hardening headers
+// -----------------------------------------------------------------------------
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('Referrer-Policy: no-referrer');
+
+// -----------------------------------------------------------------------------
+// CORS (reflect Origin so credentials work)
+// - This is intentionally permissive for dev/unified extension usage.
+// - If you later want to lock it down, restrict allowed origins via config.
+// -----------------------------------------------------------------------------
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+if ($origin !== '') {
+  header('Access-Control-Allow-Origin: ' . $origin);
+  header('Vary: Origin');
+  header('Access-Control-Allow-Credentials: true');
+  header('Access-Control-Allow-Headers: Content-Type, X-Client-Id');
+  header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+}
+
+// Handle OPTIONS preflight quickly
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
+  http_response_code(204);
+  exit;
+}
+
+// -----------------------------------------------------------------------------
+// Default to JSON for API endpoints that include this file,
+// but allow opt-out (e.g., HTML OAuth finish pages, SSE endpoints).
+// Usage in an endpoint BEFORE requiring bootstrap.php:
+//   define('PB_BOOTSTRAP_NO_JSON', true);
+// -----------------------------------------------------------------------------
+if (!defined('PB_BOOTSTRAP_NO_JSON') || PB_BOOTSTRAP_NO_JSON !== true) {
+  header('Content-Type: application/json; charset=utf-8');
+}
+
+// -----------------------------------------------------------------------------
 // Load server-only config (ignored by git)
+// NOTE: confirmed on your server this resolves to server/public/config.php
+// -----------------------------------------------------------------------------
 $configPath = __DIR__ . '/../../config.php'; // core -> api -> public
 if (file_exists($configPath)) {
   require_once $configPath;
 }
 
-// Request correlation
-$REQUEST_ID = bin2hex(random_bytes(8));
-$START_TS = microtime(true);
-
-// Basic hardening
-header('X-Content-Type-Options: nosniff');
-header('X-Frame-Options: DENY');
-header('Referrer-Policy: no-referrer');
-
-// Simple JSON responder (standard shape)
+// -----------------------------------------------------------------------------
+// Simple JSON responders (standard shape)
+// -----------------------------------------------------------------------------
 function api_ok(array $data = [], int $status = 200): void {
   global $REQUEST_ID, $START_TS;
   http_response_code($status);
@@ -47,7 +83,6 @@ function api_ok_flat(array $data = [], int $status = 200): void {
   exit;
 }
 
-
 function api_error(string $message, string $code = 'error', int $status = 400, array $extra = []): void {
   global $REQUEST_ID, $START_TS;
   http_response_code($status);
@@ -63,7 +98,9 @@ function api_error(string $message, string $code = 'error', int $status = 400, a
   exit;
 }
 
+// -----------------------------------------------------------------------------
 // Safe logger: logs metadata, never raw tokens/PII by default
+// -----------------------------------------------------------------------------
 function api_log(string $event, array $fields = []): void {
   global $REQUEST_ID, $START_TS;
 
