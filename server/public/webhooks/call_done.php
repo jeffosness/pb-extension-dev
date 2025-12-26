@@ -1,5 +1,9 @@
 <?php
-// generic_crm/webhooks/call_done.php
+// server/public/webhooks/call_done.php
+//
+// PhoneBurner webhook: api_calldone
+// Updates session state + per-day per-agent stats so SSE + overlay can show progress.
+
 require_once __DIR__ . '/../utils.php';
 
 $session_token = $_GET['s'] ?? null;
@@ -10,7 +14,7 @@ if (!$session_token) {
 }
 
 $raw = file_get_contents('php://input');
-log_msg('generic_crm call_done: ' . $raw);
+log_msg('call_done: ' . $raw);
 
 $payload = json_decode($raw, true);
 if (!is_array($payload)) {
@@ -60,8 +64,8 @@ if (!isset($state['stats']) || !is_array($state['stats'])) {
     }
 }
 
-$stats    = $state['stats'];
-$status   = $lastCall['status'] ?? '';
+$stats        = $state['stats'];
+$status       = $lastCall['status'] ?? '';
 $connectedVal = $lastCall['connected'] ?? null;
 
 // 1) Total calls
@@ -89,23 +93,17 @@ if ($status !== '') {
 $state['stats'] = $stats;
 
 // --- Daily per-agent stats ---
-// We persist a per-day, per-agent stats file in ../daily_stats so that
-// the overlay can show "today" stats across multiple dial sessions.
 if (isset($payload['agent']) && isset($payload['agent']['user_id'])) {
     $agentId = (string)$payload['agent']['user_id'];
 
     // Use the call's own timestamps rather than the server clock.
-    // Prefer end_time (when the call actually completed / was dispo'd),
-    // then fall back to start_time, then finally to "today" as a last resort.
     $dateKey = null;
 
     if (!empty($payload['end_time'])) {
-        // 'YYYY-MM-DD HH:MM:SS'  ->  'YYYY-MM-DD'
         $dateKey = substr($payload['end_time'], 0, 10);
     } elseif (!empty($payload['start_time'])) {
         $dateKey = substr($payload['start_time'], 0, 10);
     } else {
-        // Safety net if PB ever sends no timestamps
         $dateKey = gmdate('Y-m-d');
     }
 
@@ -116,7 +114,6 @@ if (isset($payload['agent']) && isset($payload['agent']['user_id'])) {
 
     $dailyFile = $dailyDir . '/' . $dateKey . '_' . $agentId . '.json';
 
-    // Default structure for this agent+day
     $dailyData = [
         'agent_id' => $agentId,
         'date'     => $dateKey,
@@ -128,7 +125,6 @@ if (isset($payload['agent']) && isset($payload['agent']['user_id'])) {
         ],
     ];
 
-    // Load any existing file for this agent+day
     if (file_exists($dailyFile)) {
         $decoded = json_decode(file_get_contents($dailyFile), true);
         if (is_array($decoded) && isset($decoded['stats']) && is_array($decoded['stats'])) {
@@ -139,10 +135,9 @@ if (isset($payload['agent']) && isset($payload['agent']['user_id'])) {
         }
     }
 
-    // Apply the same increments used for the in-session stats
     $dailyData['stats']['total_calls']++;
 
-    if (strtolower($lastCall['connected'] ?? '') === '1' || $lastCall['connected'] === 1) {
+    if (strtolower((string)($lastCall['connected'] ?? '')) === '1' || ($lastCall['connected'] ?? null) === 1) {
         $dailyData['stats']['connected']++;
     }
 
@@ -160,14 +155,11 @@ if (isset($payload['agent']) && isset($payload['agent']['user_id'])) {
         $dailyData['stats']['by_status'][$statusLabel]++;
     }
 
-    // Persist back to disk
     file_put_contents($dailyFile, json_encode($dailyData));
 
-    // Also mirror daily stats into the in-memory $state so SSE can broadcast it
+    // Mirror daily stats into SSE session state
     $state['daily_stats'] = $dailyData['stats'];
 }
-
-
 
 save_session_state($session_token, $state);
 
