@@ -1,5 +1,9 @@
 <?php
-// generic_crm/webhooks/contact_displayed.php
+// server/public/webhooks/contact_displayed.php
+//
+// PhoneBurner webhook: api_contact_displayed
+// Updates the session state file so SSE + overlay can show the “current contact”.
+
 require_once __DIR__ . '/../utils.php';
 
 $session_token = $_GET['s'] ?? null;
@@ -10,7 +14,7 @@ if (!$session_token) {
 }
 
 $raw = file_get_contents('php://input');
-log_msg('generic_crm contact_displayed: ' . $raw);
+log_msg('contact_displayed: ' . $raw);
 
 $payload = json_decode($raw, true);
 if (!is_array($payload)) {
@@ -33,7 +37,6 @@ $current = [
     'external_id'     => $externalId,
     'contact_user_id' => $payload['contact_user_id'] ?? null,
     'custom_data'     => $payload['custom_data'] ?? [],
-    // explicit webhook type so client knows what this was
     'webhook_type'    => 'contact_displayed',
 ];
 
@@ -47,8 +50,8 @@ if ($fromMap) {
     $current['record_url']   = $fromMap['record_url']   ?? null;
 }
 
-$state['current']          = $current;
-$state['last_event_type']  = 'contact_displayed';
+$state['current']         = $current;
+$state['last_event_type'] = 'contact_displayed';
 
 // Keep stats/last_call if they already exist
 if (!isset($state['last_call'])) {
