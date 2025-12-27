@@ -1,31 +1,47 @@
 {
   "manifest_version": 3,
-  "name": "PhoneBurner Unified CRM Dial Companion",
+  "name": "PhoneBurner Dial Session Companion",
   "version": "0.3.0",
-  "description": "Create PhoneBurner dial sessions from any CRM list and follow who is being called in real time.",
+  "description": "Launch PhoneBurner dial sessions directly from CRM lists and automatically follow calls in real time. Supports multiple CRMs with advanced Level 3 HubSpot integration and optimized Level 2 support for Pipedrive.",
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+
+  "action": {
+    "default_title": "PhoneBurner Dial Session Companion",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+
   "permissions": [
     "storage",
     "activeTab",
     "scripting",
     "tabs"
   ],
+
   "host_permissions": [
     "https://*/*",
     "http://*/*",
     "https://webhooktest.phoneburner.biz/*",
     "https://extension-dev.phoneburner.biz/*",
-    "https://extension.phoneburner.biz/*",
-    "http://extension-dev.phoneburner.biz/*",
-    "http://extension.phoneburner.biz/*"
+    "https://extension.phoneburner.biz/*"
   ],
+
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "PhoneBurner CRM Companion"
-  },
+
   "content_scripts": [
     {
       "matches": [
