@@ -155,9 +155,14 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = []) 
   return $contacts;
 }
 
-// If selection is deals/companies, resolve associated contacts then fetch contacts.
-function hs_resolve_contact_ids_from_objects($accessToken, $objectType, array $objectIds, &$diag = []) {
+
+
+// NEW: Resolve associated contact IDs AND return a map of contactId => [sourceObjectIds...]
+// Used so external_crm_data can include deal/company IDs alongside the contact ID.
+function hs_resolve_contact_ids_map_from_objects($accessToken, $objectType, array $objectIds, &$diag = []) {
   $contactIds = [];
+  $contactToSourceIds = []; // [contactId => [sourceId => true]]
+
   $diag['assoc_resolve'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
   foreach ($objectIds as $oid) {
@@ -180,13 +185,28 @@ function hs_resolve_contact_ids_from_objects($accessToken, $objectType, array $o
 
     foreach ($assoc as $row) {
       $cid = (string)($row['id'] ?? '');
-      if ($cid !== '') $contactIds[$cid] = true;
+      if ($cid === '') continue;
+
+      $contactIds[$cid] = true;
+
+      if (!isset($contactToSourceIds[$cid])) $contactToSourceIds[$cid] = [];
+      $contactToSourceIds[$cid][(string)$oid] = true;
     }
+
     $diag['assoc_resolve']['ok']++;
   }
 
-  return array_keys($contactIds);
+  // Convert to arrays
+  $contactIdsList = array_keys($contactIds);
+
+  $map = [];
+  foreach ($contactToSourceIds as $cid => $srcSet) {
+    $map[$cid] = array_keys($srcSet);
+  }
+
+  return [$contactIdsList, $map];
 }
+
 
 // -----------------------------------------------------------------------------
 // PhoneBurner API compatibility wrapper (unified projects vary)
@@ -251,26 +271,34 @@ $diag = [
 ];
 
 $hsContacts = [];
+$sourceObjectIdsByContact = []; // NEW: [contactId => [dealIds...] or [companyIds...]]
+$sourceObjectType = null;       // NEW: 'deals' | 'companies' | null
 
 if ($mode === 'contacts') {
   $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $diag);
 
 } elseif ($mode === 'deals') {
-  $contactIds = hs_resolve_contact_ids_from_objects($hsAccess, 'deals', $ids, $diag);
+  $sourceObjectType = 'deals';
+  list($contactIds, $map) = hs_resolve_contact_ids_map_from_objects($hsAccess, 'deals', $ids, $diag);
   $diag['resolved_contact_ids'] = count($contactIds);
+
+  $sourceObjectIdsByContact = is_array($map) ? $map : [];
 
   $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
 
 } elseif ($mode === 'companies') {
-  $contactIds = hs_resolve_contact_ids_from_objects($hsAccess, 'companies', $ids, $diag);
+  $sourceObjectType = 'companies';
+  list($contactIds, $map) = hs_resolve_contact_ids_map_from_objects($hsAccess, 'companies', $ids, $diag);
   $diag['resolved_contact_ids'] = count($contactIds);
 
-  // IMPORTANT: fetch the resolved contact IDs (not $ids)
+  $sourceObjectIdsByContact = is_array($map) ? $map : [];
+
   $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
 
 } else {
   api_error('Invalid mode', 'bad_request', 400);
 }
+
 
 
 if (empty($hsContacts)) {
@@ -306,21 +334,47 @@ foreach ($hsContacts as $c) {
     ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-1/' . rawurlencode($hsId))
     : null;
 
+  // We will use this as our internal key (NOT sent to PB as external_id)
   $externalId = $hsId;
 
-  $pbContacts[] = [
-    'first_name'  => $first,
-    'last_name'   => $last,
-    'phone'       => $phone,
-    'email'       => $email,
-    'external_id' => $externalId,
-    'external_crm_data' => [
-      'external_id'   => $hsId,
-      'external_type' => 'hubspot_contact',
-      'external_url'  => $recordUrl,
-      'crm'           => 'hubspot',
-    ],
+  // REQUIRED: external_crm_data must be an ARRAY of objects with crm_id + crm_name
+  $externalCrmData = [];
+
+  // Always include the HubSpot contact identity
+  $externalCrmData[] = [
+    'crm_id'   => $hsId,
+    'crm_name' => 'hubspot',
   ];
+
+  // OPTIONAL: include originating deal/company IDs as additional external_crm_data entries
+  // - deals => crm_name = hubspotdeal, crm_id = dealId
+  // - companies => crm_name = hubspotcompany, crm_id = companyId
+  if (($mode === 'deals' || $mode === 'companies') && !empty($sourceObjectType)) {
+    $srcIds = $sourceObjectIdsByContact[$hsId] ?? [];
+    if (is_array($srcIds) && !empty($srcIds)) {
+      $crmName = ($sourceObjectType === 'deals') ? 'hubspotdeal' : 'hubspotcompany';
+
+      foreach ($srcIds as $srcId) {
+        $srcId = trim((string)$srcId);
+        if ($srcId === '') continue;
+
+        $externalCrmData[] = [
+          'crm_id'   => $srcId,
+          'crm_name' => $crmName,
+        ];
+      }
+    }
+  }
+
+  // Build PB contact WITHOUT external_id
+  $pbContacts[] = [
+    'first_name'        => $first,
+    'last_name'         => $last,
+    'phone'             => $phone ?: null,
+    'email'             => $email ?: null,
+    'external_crm_data' => $externalCrmData,
+  ];
+
 
   $displayName = trim(($first !== '' || $last !== '') ? ($first . ' ' . $last) : '');
 
