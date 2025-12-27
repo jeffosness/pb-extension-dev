@@ -214,100 +214,121 @@ if (msg.type === "CLEAR_PAT") {
 }
 
       // -------------------------
-      // HubSpot Level 3: launch from selected
-      // IMPORTANT: this should NOT scrape phone/email from DOM.
-      // It only collects IDs; server resolves details via HubSpot API.
-      // -------------------------
-      if (msg.type === "HS_LAUNCH_FROM_SELECTED") {
-        // Find active HubSpot tab (don’t over-restrict URL; HubSpot changes routes a lot)
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        const hubTab = (tabs || []).find((t) => (t.url || "").includes("app.hubspot.com"));
-        if (!hubTab || !hubTab.id) {
-          return sendResponse({
-            ok: false,
-            error: "Open a HubSpot contacts/companies/deals page with selected records.",
-          });
+// HubSpot Level 3: launch from selected
+// IMPORTANT: this should NOT scrape phone/email from DOM.
+// It only collects IDs; server resolves details via HubSpot API.
+// NOW includes dashboard tracking (track_crm_usage.php) like Level 1/2.
+// -------------------------
+if (msg.type === "HS_LAUNCH_FROM_SELECTED") {
+  // Find active HubSpot tab (don’t over-restrict URL; HubSpot changes routes a lot)
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const hubTab = (tabs || []).find((t) => (t.url || "").includes("app.hubspot.com"));
+  if (!hubTab || !hubTab.id) {
+    return sendResponse({
+      ok: false,
+      error: "Open a HubSpot contacts/companies/deals page with selected records.",
+    });
+  }
+
+  // Ask content script for selection (IDs + context)
+  const selected = await new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(hubTab.id, { type: "HS_GET_SELECTED_IDS" }, (res) => {
+        if (chrome.runtime.lastError) {
+          return resolve({ error: chrome.runtime.lastError.message });
         }
+        resolve(res);
+      });
+    } catch (e) {
+      resolve({ error: String(e) });
+    }
+  });
 
-        // Ask content script for selection (IDs + context)
-        const selected = await new Promise((resolve) => {
-          try {
-            chrome.tabs.sendMessage(hubTab.id, { type: "HS_GET_SELECTED_IDS" }, (res) => {
-              if (chrome.runtime.lastError) {
-                return resolve({ error: chrome.runtime.lastError.message });
-              }
-              resolve(res);
-            });
-          } catch (e) {
-            resolve({ error: String(e) });
-          }
-        });
+  if (!selected || selected.error) {
+    return sendResponse({
+      ok: false,
+      error: selected?.error || "Could not read HubSpot selection.",
+    });
+  }
 
-        if (!selected || selected.error) {
-          return sendResponse({
-            ok: false,
-            error: selected?.error || "Could not read HubSpot selection.",
-          });
-        }
+  const ids = Array.isArray(selected.ids) ? selected.ids : [];
+  const objectType = selected.objectType || "contact";
+  const portalId = selected.portalId || null;
+  const pageUrl = selected.url || hubTab.url || null;
+  const pageTitle = selected.title || null;
 
-        const ids = Array.isArray(selected.ids) ? selected.ids : [];
-        const objectType = selected.objectType || "contact";
-        const portalId = selected.portalId || null;
-        const pageUrl = selected.url || hubTab.url || null;
-        const pageTitle = selected.title || null;
+  if (!ids.length) {
+    return sendResponse({ ok: false, error: "No records selected in this view." });
+  }
 
-        if (!ids.length) {
-          return sendResponse({ ok: false, error: "No records selected in this view." });
-        }
+  // --- NEW: Track HubSpot usage (best-effort) so dashboard stats include Level 3 ---
+  try {
+    // host/path from the HubSpot tab (not sender tab)
+    const hp = deriveHostPathFromTabUrl(hubTab.url || "");
+    await api("core/track_crm_usage.php", {
+      crm_id: "hubspot",
+      host: hp.host || "app.hubspot.com",
+      path: hp.path || "",
+      level: 3,
 
-        // Translate objectType -> server mode
-        // server expects: "contacts" | "deals" | "companies"
-        let mode = "contacts";
-        if (objectType === "deal") mode = "deals";
-        if (objectType === "company") mode = "companies";
+      // Optional extra metadata (safe to ignore server-side if not used)
+      portal_id: portalId,
+      object_type: objectType,
+      selected_count: ids.length,
+    });
+  } catch (e) {
+    // ignore tracking failures (should not block dial session launch)
+  }
 
-        const resp = await api("crm/hubspot/pb_dialsession_selection.php", {
-          mode,
-          records: ids.map((id) => ({ id: String(id) })),
-          context: {
-            objectType,
-            portalId,
-            url: pageUrl,
-            title: pageTitle,
-            selectedCount: ids.length,
-          },
-        });
+  // Translate objectType -> server mode
+  // server expects: "contacts" | "deals" | "companies"
+  let mode = "contacts";
+  if (objectType === "deal") mode = "deals";
+  if (objectType === "company") mode = "companies";
 
-        const sessionToken = resp.session_token || resp.data?.session_token || null;
-        const dialUrl =
-          resp.launch_url ||
-          resp.dialsession_url ||
-          resp.data?.launch_url ||
-          resp.data?.dialsession_url ||
-          null;
+  const resp = await api("crm/hubspot/pb_dialsession_selection.php", {
+    mode,
+    records: ids.map((id) => ({ id: String(id) })),
+    context: {
+      objectType,
+      portalId,
+      url: pageUrl,
+      title: pageTitle,
+      selectedCount: ids.length,
+    },
+  });
 
-        if (!sessionToken || !dialUrl) {
-          return sendResponse({
-            ok: false,
-            error: resp?.error || "Failed to create dial session (missing token or URL).",
-            details: resp,
-          });
-        }
+  const sessionToken = resp.session_token || resp.data?.session_token || null;
+  const dialUrl =
+    resp.launch_url ||
+    resp.dialsession_url ||
+    resp.data?.launch_url ||
+    resp.data?.dialsession_url ||
+    null;
 
-        // Register follow-me for the HubSpot tab
-        await registerSessionForTab(hubTab.id, sessionToken, BASE_URL);
+  if (!sessionToken || !dialUrl) {
+    return sendResponse({
+      ok: false,
+      error: resp?.error || "Failed to create dial session (missing token or URL).",
+      details: resp,
+    });
+  }
 
-        // Open PB dialer window
-        chrome.windows.create({
-          url: dialUrl,
-          type: "popup",
-          focused: true,
-          width: 1200,
-          height: 900,
-        });
+  // Register follow-me for the HubSpot tab
+  await registerSessionForTab(hubTab.id, sessionToken, BASE_URL);
 
-        return sendResponse({ ok: true, sessionToken, dialUrl });
-      }
+  // Open PB dialer window
+  chrome.windows.create({
+    url: dialUrl,
+    type: "popup",
+    focused: true,
+    width: 1200,
+    height: 900,
+  });
+
+  return sendResponse({ ok: true, sessionToken, dialUrl });
+}
+
 
       // -------------------------
       // Unified Level 1/2: scan -> server -> dialsession
