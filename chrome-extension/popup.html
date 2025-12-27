@@ -1,164 +1,289 @@
-<!-- popup.html -->
+<!-- popup.html (DROP-IN REPLACEMENT) -->
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>PhoneBurner Companion</title>
   <style>
+    :root {
+      --bg: #0b1220;
+      --card: #121b2e;
+      --border: rgba(255,255,255,.10);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.70);
+      --muted2: rgba(255,255,255,.55);
+      --primary: #5b8cff;
+      --primary2: #3e6ff0;
+      --danger: #ff5b6e;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
     body {
-      font-family: sans-serif;
-      min-width: 260px;
-      padding: 8px;
+      width: 350px;
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
-    .row { margin-bottom: 8px; }
-    label { display: block; font-size: 12px; margin-bottom: 2px; }
-    input[type="text"],
-    input[type="password"] {
-      width: 100%;
-      box-sizing: border-box;
+    .hidden { display: none !important; }
+
+    .header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
     }
-    button {
-      margin-top: 4px;
-      width: 100%;
+    .title {
+      font-weight: 800;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
-    .status {
-      font-size: 12px;
-      margin-top: 4px;
+    .subtle { color: var(--muted2); font-size: 12px; }
+    .pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      white-space: nowrap;
     }
 
-    /* Tabs */
     .tabs {
       display: flex;
-      margin: 8px 0;
-      border-bottom: 1px solid #ccc;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
     }
     .tab-btn {
       flex: 1;
-      padding: 4px 0;
-      font-size: 12px;
-      text-align: center;
-      border: none;
-      background: #f5f5f5;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color: var(--muted);
       cursor: pointer;
+      font-weight: 700;
     }
     .tab-btn.active {
-      background: #ffffff;
-      border-bottom: 2px solid #0070d2;
-      font-weight: bold;
-    }
-    .panel {
-      display: none;
-    }
-    .panel.active {
-      display: block;
+      background: rgba(91,140,255,.18);
+      border-color: rgba(91,140,255,.55);
+      color: var(--text);
     }
 
-    .help-text {
-      font-size: 11px;
-      color: #555;
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .panel-wrap {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      box-shadow: 0 10px 22px rgba(0,0,0,.25);
+    }
+    .card-title {
+      font-weight: 900;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: normal;
+      word-break: break-word;
+    }
+    .help-text {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    label {
+      display: block;
+      margin: 10px 0 6px;
+      color: var(--muted2);
+      font-weight: 800;
+      font-size: 11px;
+      letter-spacing: .2px;
+      text-transform: uppercase;
+    }
+
+    input[type="text"],
+    input[type="password"] {
+      width: 100%;
+      padding: 9px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      outline: none;
+    }
+    input[type="text"]:focus,
+    input[type="password"]:focus {
+      border-color: rgba(91,140,255,.70);
+      box-shadow: 0 0 0 3px rgba(91,140,255,.18);
+    }
+
+    button {
+      width: 100%;
+      padding: 9px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      font-weight: 900;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    button.primary {
+      background: linear-gradient(180deg, var(--primary), var(--primary2));
+      border: 0;
+    }
+    button.danger {
+      background: rgba(255,91,110,.18);
+      border-color: rgba(255,91,110,.55);
+      color: #ffd7dc;
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
   </style>
 </head>
+
 <body>
+  <div class="header">
+    <div class="title">
+      <div>
+        Detected CRM:
+        <span id="crm-name" style="font-weight: 900;">Loading…</span>
+      </div>
+      <span id="crm-level" class="pill"></span>
+    </div>
 
-<div id="crm-header" style="margin-bottom: 8px; font-size: 12px; color: #444;">
-  Detected CRM:
-  <span id="crm-name" style="font-weight: 600;">Loading…</span>
-  <span id="crm-level" style="font-style: italic; margin-left: 4px;"></span>
-</div>
-
-<hr />
-
-
-
-  <div class="row">
-    <strong>PhoneBurner Connection</strong>
-    <div id="pb-status" class="status">Checking...</div>
+    <div class="subtle">
+      <strong>PhoneBurner:</strong> <span id="pb-status">Checking...</span>
+    </div>
   </div>
 
-  <!-- Tabs -->
   <div class="tabs">
     <button id="tab-dial" class="tab-btn active">Dial</button>
     <button id="tab-settings" class="tab-btn">Settings</button>
   </div>
 
-  <!-- Dial tab -->
+  <!-- Dial -->
   <div id="panel-dial" class="panel active">
-    <div class="row">
-      <label for="pat">PhoneBurner Access Token</label>
-      <input type="password" id="pat" placeholder="Paste PAT here" />
-      <button id="save-pat">Save PAT</button>
-      <div class="help-text">
-        Paste your Personal Access Token to connect, or click Disconnect to remove it.
+    <div class="panel-wrap">
+      <!-- PAT CONNECT (Dial only when NOT connected) -->
+      <div id="pat-card-dial" class="card">
+        <div class="card-title">PhoneBurner Access Token</div>
+        <input type="password" id="pat" placeholder="Paste PAT here" />
+        <button id="save-pat" class="primary">Save PAT</button>
+        <div class="help-text">
+          Paste your Personal Access Token to connect. Once connected, you can manage it in Settings.
+        </div>
       </div>
-    </div>
 
-    <hr>
-
-    <div class="row">
-      <strong>Current Page</strong>
-      <div class="status">
-        Scan this page for contacts and launch a dial session.
-      </div>
-      <button id="scan-launch">Scan &amp; Launch Dial Session</button>
-    </div>
+      <!-- Get PhoneBurner (shown only when NOT connected) -->
+<div id="get-pb-card" class="card hidden">
+  <div class="card-title">New to PhoneBurner?</div>
+  <div class="help-text">
+    This extension requires an active PhoneBurner account.
   </div>
-
-
-<div
-  id="hubspot-panel"
-  style="display: none; margin-top: 10px; padding-top: 8px; border-top: 1px solid #ddd;"
->
-  <div style="font-weight: 600; margin-bottom: 4px;">
-    HubSpot advanced mode (Level 3)
-  </div>
-
-  <div id="hs-status" class="status" style="margin-bottom: 4px;"></div>
-
-  <p style="font-size: 12px; margin: 4px 0 8px;">
-    We detected HubSpot. This panel uses the full HubSpot integration
-    (API-based lists &amp; call logging).
-  </p>
-
-  <!-- New: launch via HubSpot API, using whatever is selected -->
-  <button id="btn-hs-launch" style="width: 100%; margin-bottom: 6px;">
-    Launch HubSpot Dial Session
-  </button>
-
-  <button id="btn-hs-connect" style="width: 100%;">
-    Reconnect HubSpot
+  <button id="get-pb-btn" class="primary" style="margin-top:10px;">
+    Get PhoneBurner
   </button>
 </div>
 
 
+      <!-- Current Page (hidden on Level 3) -->
+      <div id="card-current-page" class="card">
+        <div class="card-title">Current Page</div>
+        <div class="help-text">Scan this page for contacts and launch a dial session.</div>
+        <button id="scan-launch" class="primary">Scan &amp; Launch Dial Session</button>
+      </div>
 
+      <!-- HubSpot Dial (Level 3 only) -->
+      <div id="hubspot-dial-card" class="card hidden">
+        <div class="card-title">
+          HubSpot advanced mode <span class="pill">Level 3</span>
+        </div>
 
-  <!-- Settings tab -->
-  <div id="panel-settings" class="panel">
-    <div class="row">
-      <strong>Goal Dispositions</strong>
-      <div class="help-text">
-        Set which PhoneBurner dispositions count as your primary and secondary "wins"
-        (e.g. Set Appointment, Follow Up, Sold).
+        <div id="hs-dial-status" class="status"></div>
+        <div id="hs-dial-help" class="help-text"></div>
+
+        <button id="hs-dial-action" class="primary">Loading…</button>
       </div>
     </div>
+  </div>
 
-    <div class="row">
-      <label for="goal-primary">Primary Goal</label>
-      <input type="text" id="goal-primary" placeholder="Set Appointment" />
+  <!-- Settings -->
+  <div id="panel-settings" class="panel">
+    <div class="panel-wrap">
+      <!-- PAT MANAGEMENT (Settings only when connected) -->
+      <div id="pat-card-settings" class="card hidden">
+        <div class="card-title">PhoneBurner Connection</div>
+        <div class="help-text">
+          You’re connected to PhoneBurner. Use Disconnect to remove your saved token from this browser.
+        </div>
+        <button id="disconnect-pat" class="danger">Disconnect</button>
+      </div>
+
+      <!-- HubSpot Settings (only when HubSpot is connected) -->
+      <div id="hubspot-settings-card" class="card hidden">
+        <div class="card-title">HubSpot Connection</div>
+        <div id="hs-settings-status" class="status"></div>
+        <div class="help-text">
+          Disconnecting removes the saved HubSpot authorization on the server for this browser session.
+        </div>
+        <button id="hs-disconnect" class="danger">Disconnect HubSpot</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Goal Dispositions</div>
+        <div class="help-text">
+          Set which PhoneBurner dispositions count as your primary and secondary "wins".
+        </div>
+
+        <label for="goal-primary">Primary Goal</label>
+        <input type="text" id="goal-primary" placeholder="Set Appointment" />
+
+        <label for="goal-secondary">Secondary Goal</label>
+        <input type="text" id="goal-secondary" placeholder="Follow Up" />
+
+        <button id="save-goals" class="primary">Save Goals</button>
+        <div id="goals-status" class="status"></div>
+      </div>
+      
+      <div class="card">
+  <div class="card-title">Follow Widget</div>
+  <div class="help-text" style="margin-top: 4px;">
+    Control how the on-screen “Follow” widget behaves after a dial session starts.
+  </div>
+
+  <label style="display:flex; align-items:center; gap:8px; margin-top:8px; font-size:12px; text-transform:none; letter-spacing:0;">
+    <input type="checkbox" id="follow-auto-collapse" />
+    Auto-collapse after session starts
+  </label>
+
+  <div class="help-text" style="margin-top: 6px;">
+    Default: On. The widget will briefly expand, then collapse to a small view.
+  </div>
+</div>
+
+
     </div>
-
-    <div class="row">
-      <label for="goal-secondary">Secondary Goal</label>
-      <input type="text" id="goal-secondary" placeholder="Follow Up" />
-    </div>
-
-    <button id="save-goals">Save Goals</button>
-    <div id="goals-status" class="status"></div>
-
-    <hr>
-
-    
   </div>
 
   <script src="popup.js"></script>

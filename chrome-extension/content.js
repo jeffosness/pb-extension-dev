@@ -757,6 +757,11 @@ function startFollowingSession(sessionToken) {
     sseReconnectTimer = null;
   }
 
+  // Draw attention on launch: expand briefly, then auto-collapse
+  overlayEnsure();
+  overlaySetMinimized(false, false);
+  overlayScheduleAutoCollapse("session_start");
+
   openSseConnection(sessionToken);
 }
 
@@ -821,10 +826,386 @@ function stopFollowingSession() {
 }
 
 // ============================================================================
-//  🧊 OVERLAY WIDGET + SESSION UPDATE HANDLING
+//  🧊 OVERLAY WIDGET + SESSION UPDATE HANDLING (Modern + Minimize + Auto-collapse)
 // ============================================================================
 
 let overlayEl = null;
+
+// Widget UI preferences
+const OVERLAY_STORAGE_KEYS = {
+  minimized: "pb_follow_widget_minimized",
+  autoCollapse: "pb_follow_widget_auto_collapse",
+};
+
+// Defaults
+let overlayPrefs = {
+  minimized: false,
+  autoCollapse: true,
+};
+
+// Internal overlay state
+let overlayLastInteractionTs = 0;
+let overlayAutoCollapseTimer = null;
+let overlayLastNowCallingKey = "";
+let overlayInitializedPrefs = false;
+
+function overlayNow() {
+  return Date.now();
+}
+
+function overlayTouchInteraction() {
+  overlayLastInteractionTs = overlayNow();
+}
+
+function overlayLoadPrefsOnce() {
+  if (overlayInitializedPrefs) return;
+  overlayInitializedPrefs = true;
+
+  try {
+    if (!chrome?.storage?.local) return;
+    chrome.storage.local.get([OVERLAY_STORAGE_KEYS.minimized, OVERLAY_STORAGE_KEYS.autoCollapse], (res) => {
+      if (!res || typeof res !== "object") return;
+
+      if (typeof res[OVERLAY_STORAGE_KEYS.minimized] === "boolean") {
+        overlayPrefs.minimized = res[OVERLAY_STORAGE_KEYS.minimized];
+      }
+      if (typeof res[OVERLAY_STORAGE_KEYS.autoCollapse] === "boolean") {
+        overlayPrefs.autoCollapse = res[OVERLAY_STORAGE_KEYS.autoCollapse];
+      }
+
+      // If overlay already exists, apply
+      if (overlayEl) overlayApplyMode();
+    });
+  } catch (e) {
+    // ignore
+  }
+}
+
+function overlaySavePref(key, value) {
+  try {
+    if (!chrome?.storage?.local) return;
+    chrome.storage.local.set({ [key]: value }, () => {});
+  } catch (e) {
+    // ignore
+  }
+}
+
+function overlayEnsure() {
+  overlayLoadPrefsOnce();
+
+  if (overlayEl) return overlayEl;
+
+  overlayEl = document.createElement("div");
+  overlayEl.id = "pb-follow-widget";
+  overlayEl.style.position = "fixed";
+  overlayEl.style.right = "10px";
+  overlayEl.style.bottom = "10px";
+  overlayEl.style.zIndex = "999999";
+  overlayEl.style.maxWidth = "280px";
+  overlayEl.style.fontFamily = "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+
+  overlayEl.innerHTML = `
+    <style>
+      #pb-follow-widget * { box-sizing: border-box; }
+
+      #pb-follow-shell {
+        width: 270px;
+        border-radius: 14px;
+        background: rgba(14, 20, 34, 0.94);
+        border: 1px solid rgba(255,255,255,0.10);
+        box-shadow: 0 14px 34px rgba(0,0,0,0.35);
+        overflow: hidden;
+        color: rgba(255,255,255,0.92);
+        backdrop-filter: blur(10px);
+      }
+
+      #pb-follow-shell.minimized {
+        width: 210px;
+      }
+
+      .pb-follow-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 10px;
+      }
+
+      .pb-follow-title {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .pb-follow-title strong {
+        font-size: 12px;
+        letter-spacing: 0.2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pb-follow-sub {
+        font-size: 11px;
+        color: rgba(255,255,255,0.65);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .pb-follow-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .pb-btn {
+        appearance: none;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.08);
+        color: rgba(255,255,255,0.92);
+        font-size: 11px;
+        padding: 6px 8px;
+        border-radius: 10px;
+        cursor: pointer;
+        line-height: 1;
+      }
+      .pb-btn:hover { background: rgba(255,255,255,0.12); }
+      .pb-btn:active { transform: translateY(1px); }
+
+      .pb-btn.primary {
+        background: rgba(93, 149, 255, 0.95);
+        border-color: rgba(93,149,255,0.60);
+        color: #0b1020;
+        font-weight: 700;
+      }
+      .pb-btn.primary:hover { background: rgba(93,149,255,1); }
+
+      .pb-divider {
+        height: 1px;
+        background: rgba(255,255,255,0.10);
+      }
+
+      .pb-follow-body {
+        padding: 10px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .pb-block {
+        padding: 10px;
+        border-radius: 12px;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.10);
+      }
+
+      .pb-block h4 {
+        margin: 0 0 6px 0;
+        font-size: 11px;
+        color: rgba(255,255,255,0.75);
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .pb-line {
+        font-size: 12px;
+        color: rgba(255,255,255,0.92);
+        margin: 2px 0;
+        word-break: break-word;
+      }
+      .pb-muted { color: rgba(255,255,255,0.65); }
+
+      .pb-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 12px;
+        margin: 3px 0;
+      }
+      .pb-row span:first-child { color: rgba(255,255,255,0.70); }
+
+      .pb-footer {
+        padding: 10px;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      /* Minimized bar */
+      .pb-mini {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px;
+      }
+      .pb-mini strong { font-size: 12px; }
+      .pb-mini-actions { display: flex; gap: 6px; }
+
+      /* Hide blocks in minimized mode */
+      #pb-follow-shell.minimized .pb-follow-body,
+      #pb-follow-shell.minimized .pb-footer {
+        display: none;
+      }
+
+      #pb-follow-shell:not(.minimized) .pb-mini {
+        display: none;
+      }
+    </style>
+
+    <div id="pb-follow-shell" class="minimized">
+      <div class="pb-follow-header" id="pb-follow-header">
+        <div class="pb-follow-title">
+          <strong id="pb-follow-h-title">PhoneBurner Follow</strong>
+          <div class="pb-follow-sub" id="pb-follow-h-sub">Waiting…</div>
+        </div>
+        <div class="pb-follow-actions">
+          <button class="pb-btn" id="pb-follow-toggle" title="Minimize / Expand">▾</button>
+          <button class="pb-btn" id="pb-follow-stop" title="Stop following">Stop</button>
+        </div>
+      </div>
+
+      <div class="pb-divider"></div>
+
+      <div class="pb-mini">
+        <div class="pb-mini-text">
+          <strong>Calls: <span id="pb-mini-total">0</span></strong>
+        </div>
+        <div class="pb-mini-actions">
+          <button class="pb-btn primary" id="pb-mini-expand">Expand</button>
+          <button class="pb-btn" id="pb-mini-stop">Stop</button>
+        </div>
+      </div>
+
+      <div class="pb-follow-body">
+        <div class="pb-block">
+          <h4>Now calling</h4>
+          <div class="pb-line" id="pb-now-name">(unknown)</div>
+          <div class="pb-line pb-muted" id="pb-now-phone"></div>
+          <div class="pb-line pb-muted" id="pb-now-email"></div>
+          <div style="margin-top:8px; display:flex; gap:8px;">
+            <button class="pb-btn primary" id="pb-open-crm" style="display:none;">Open in CRM</button>
+          </div>
+        </div>
+
+        <div class="pb-block">
+          <h4>Last call</h4>
+          <div class="pb-row"><span>Status</span><span id="pb-last-status">–</span></div>
+          <div class="pb-row"><span>Duration</span><span id="pb-last-duration">–</span></div>
+        </div>
+
+        <div class="pb-block">
+          <h4>Stats</h4>
+          <div class="pb-row"><span>Total</span><span id="pb-stat-total">0</span></div>
+          <div class="pb-row"><span>Connected</span><span id="pb-stat-connected">0</span></div>
+          <div class="pb-row"><span>Appointments</span><span id="pb-stat-appt">0</span></div>
+        </div>
+
+        <div class="pb-block">
+          <h4>Goals</h4>
+          <div class="pb-row"><span id="pb-goal-1-label">Primary</span><span id="pb-goal-1-val">0</span></div>
+          <div class="pb-row"><span id="pb-goal-2-label">Secondary</span><span id="pb-goal-2-val">0</span></div>
+        </div>
+      </div>
+
+      <div class="pb-footer">
+        <button class="pb-btn" id="pb-footer-stop">Stop following</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlayEl);
+
+  // wire events once
+  const shell = overlayEl.querySelector("#pb-follow-shell");
+  const header = overlayEl.querySelector("#pb-follow-header");
+  const toggleBtn = overlayEl.querySelector("#pb-follow-toggle");
+
+  const stopBtn = overlayEl.querySelector("#pb-follow-stop");
+  const miniStopBtn = overlayEl.querySelector("#pb-mini-stop");
+  const miniExpandBtn = overlayEl.querySelector("#pb-mini-expand");
+  const footerStopBtn = overlayEl.querySelector("#pb-footer-stop");
+
+  const stopAll = (e) => {
+    if (e && typeof e.preventDefault === "function") e.preventDefault();
+    overlayTouchInteraction();
+    stopFollowingSession();
+  };
+
+  const expand = () => {
+    overlayTouchInteraction();
+    overlaySetMinimized(false, true);
+  };
+  const minimize = () => {
+    overlayTouchInteraction();
+    overlaySetMinimized(true, true);
+  };
+  const toggle = () => {
+    overlayTouchInteraction();
+    overlaySetMinimized(!overlayPrefs.minimized, true);
+  };
+
+  if (toggleBtn) toggleBtn.addEventListener("click", toggle);
+  if (stopBtn) stopBtn.addEventListener("click", stopAll);
+  if (miniStopBtn) miniStopBtn.addEventListener("click", stopAll);
+  if (footerStopBtn) footerStopBtn.addEventListener("click", stopAll);
+
+  if (miniExpandBtn) miniExpandBtn.addEventListener("click", expand);
+
+  // Touch interaction on any click inside widget (prevents auto-collapse fighting user)
+  if (header) header.addEventListener("mousedown", overlayTouchInteraction);
+  overlayEl.addEventListener("mousedown", overlayTouchInteraction, true);
+
+  // Apply initial mode from prefs
+  overlayApplyMode();
+
+  return overlayEl;
+
+}
+
+function overlayApplyMode() {
+  if (!overlayEl) return;
+  const shell = overlayEl.querySelector("#pb-follow-shell");
+  const toggleBtn = overlayEl.querySelector("#pb-follow-toggle");
+  if (!shell) return;
+  if (overlayPrefs.minimized) shell.classList.add("minimized");
+  else shell.classList.remove("minimized");
+  if (toggleBtn) toggleBtn.textContent = overlayPrefs.minimized ? "▸" : "▾";
+}
+
+function overlaySetMinimized(minimized, persist = true) {
+  overlayPrefs.minimized = !!minimized;
+  overlayApplyMode();
+  if (persist) overlaySavePref(OVERLAY_STORAGE_KEYS.minimized, overlayPrefs.minimized);
+}
+
+function overlayClearAutoCollapseTimer() {
+  if (overlayAutoCollapseTimer) {
+    clearTimeout(overlayAutoCollapseTimer);
+    overlayAutoCollapseTimer = null;
+  }
+}
+
+function overlayScheduleAutoCollapse(reason = "update") {
+  overlayLoadPrefsOnce();
+  overlayClearAutoCollapseTimer();
+
+  if (!overlayPrefs.autoCollapse) return;
+
+  // If user explicitly expanded, don't collapse immediately on next render
+  // Give them time to read.
+  const collapseAfterMs = 6000; // feels “animated” but not annoying
+  const minIdleMs = 1500; // if user just interacted, don't auto-collapse
+
+  overlayAutoCollapseTimer = setTimeout(() => {
+    overlayAutoCollapseTimer = null;
+    const idle = overlayNow() - overlayLastInteractionTs;
+    if (idle < minIdleMs) return;
+
+    // Only collapse if currently expanded
+    if (!overlayPrefs.minimized) {
+      overlaySetMinimized(true, true);
+    }
+  }, collapseAfterMs);
+}
 
 function handleSessionUpdate(state) {
   const current = state.current || {};
@@ -849,6 +1230,15 @@ function handleSessionUpdate(state) {
 
   const primaryCount = byStatus[goalConfig.primary] || 0;
   const secondaryCount = byStatus[goalConfig.secondary] || 0;
+
+  // If "now calling" changes, expand briefly to draw attention, then auto-collapse
+  const nowKey = [name, phone, email, recordUrl || ""].join("|").toLowerCase();
+  if (nowKey && nowKey !== overlayLastNowCallingKey) {
+    overlayLastNowCallingKey = nowKey;
+    overlayEnsure();
+    overlaySetMinimized(false, false);
+    overlayScheduleAutoCollapse("now_calling_changed");
+  }
 
   renderOverlay({
     name,
@@ -884,72 +1274,74 @@ function renderOverlay({
   secondaryCount,
   goalConfig,
 }) {
-  if (!overlayEl) {
-    overlayEl = document.createElement("div");
-    overlayEl.style.position = "fixed";
-    overlayEl.style.right = "10px";
-    overlayEl.style.bottom = "10px";
-    overlayEl.style.zIndex = "999999";
-    overlayEl.style.background = "white";
-    overlayEl.style.border = "1px solid #ccc";
-    overlayEl.style.borderRadius = "6px";
-    overlayEl.style.padding = "8px";
-    overlayEl.style.fontSize = "12px";
-    overlayEl.style.boxShadow = "0 2px 6px rgba(0,0,0,0.2)";
-    overlayEl.style.maxWidth = "260px";
-    overlayEl.style.fontFamily = "system-ui, sans-serif";
-    document.body.appendChild(overlayEl);
-  }
+  overlayEnsure();
 
   const totalCalls = stats.total_calls || 0;
   const connected = stats.connected || 0;
   const appointments = stats.appointments || 0;
 
-  const lastStatus = (lastCall && lastCall.status) || "";
-  const lastDuration = (lastCall && lastCall.duration) || null;
+  const lastStatus = (lastCall && lastCall.status) || "–";
+  const lastDuration = lastCall && lastCall.duration != null ? `${lastCall.duration}s` : "–";
 
-  overlayEl.innerHTML = `
-    <div><strong>Now calling</strong></div>
-    <div>${name || "(unknown)"}</div>
-    <div>${phone || ""}</div>
-    <div>${email || ""}</div>
-    ${
-      recordUrl
-        ? `<div style="margin-top:4px;">
-             <button id="pb-open-record-btn" style="font-size:11px;padding:2px 6px;cursor:pointer;">
-               Open in CRM
-             </button>
-           </div>`
-        : ""
+  const hSub = overlayEl.querySelector("#pb-follow-h-sub");
+  const hTitle = overlayEl.querySelector("#pb-follow-h-title");
+
+  const elNowName = overlayEl.querySelector("#pb-now-name");
+  const elNowPhone = overlayEl.querySelector("#pb-now-phone");
+  const elNowEmail = overlayEl.querySelector("#pb-now-email");
+
+  const openBtn = overlayEl.querySelector("#pb-open-crm");
+
+  const elLastStatus = overlayEl.querySelector("#pb-last-status");
+  const elLastDuration = overlayEl.querySelector("#pb-last-duration");
+
+  const elStatTotal = overlayEl.querySelector("#pb-stat-total");
+  const elStatConn = overlayEl.querySelector("#pb-stat-connected");
+  const elStatAppt = overlayEl.querySelector("#pb-stat-appt");
+
+  const elMiniTotal = overlayEl.querySelector("#pb-mini-total");
+
+  const g1Label = overlayEl.querySelector("#pb-goal-1-label");
+  const g2Label = overlayEl.querySelector("#pb-goal-2-label");
+  const g1Val = overlayEl.querySelector("#pb-goal-1-val");
+  const g2Val = overlayEl.querySelector("#pb-goal-2-val");
+
+  if (hTitle) hTitle.textContent = "PhoneBurner Follow";
+  if (hSub) hSub.textContent = name ? `Now: ${name}` : "Now: (unknown)";
+
+  if (elNowName) elNowName.textContent = name || "(unknown)";
+  if (elNowPhone) elNowPhone.textContent = phone || "";
+  if (elNowEmail) elNowEmail.textContent = email || "";
+
+  if (elLastStatus) elLastStatus.textContent = lastStatus || "–";
+  if (elLastDuration) elLastDuration.textContent = lastDuration;
+
+  if (elStatTotal) elStatTotal.textContent = String(totalCalls);
+  if (elStatConn) elStatConn.textContent = String(connected);
+  if (elStatAppt) elStatAppt.textContent = String(appointments);
+  if (elMiniTotal) elMiniTotal.textContent = String(totalCalls);
+
+  if (g1Label) g1Label.textContent = goalConfig.primary || "Primary";
+  if (g2Label) g2Label.textContent = goalConfig.secondary || "Secondary";
+  if (g1Val) g1Val.textContent = String(primaryCount || 0);
+  if (g2Val) g2Val.textContent = String(secondaryCount || 0);
+
+  if (openBtn) {
+    if (recordUrl) {
+      openBtn.style.display = "inline-flex";
+      openBtn.onclick = () => {
+        overlayTouchInteraction();
+        window.open(recordUrl, "_blank");
+      };
+    } else {
+      openBtn.style.display = "none";
+      openBtn.onclick = null;
     }
-    <hr>
-    <div><strong>Last call</strong></div>
-    <div>Status: ${lastStatus || "–"}</div>
-    <div>${lastDuration != null ? `Duration: ${lastDuration}s` : ""}</div>
-    <hr>
-    <div><strong>Stats</strong></div>
-    <div>Total calls: ${totalCalls}</div>
-    <div>Connected: ${connected}</div>
-    <div>Appointments: ${appointments}</div>
-    <div style="margin-top:4px;"><strong>Goals</strong></div>
-    <div>${goalConfig.primary}: ${primaryCount}</div>
-    <div>${goalConfig.secondary}: ${secondaryCount}</div>
-    <div style="margin-top:4px; text-align:right;">
-      <a href="#" id="pb-stop-follow-link" style="font-size:11px;">Stop following</a>
-    </div>
-  `;
-
-  if (recordUrl) {
-    const btn = overlayEl.querySelector("#pb-open-record-btn");
-    if (btn) btn.onclick = () => window.open(recordUrl, "_blank");
   }
 
-  const stopLink = overlayEl.querySelector("#pb-stop-follow-link");
-  if (stopLink) {
-    stopLink.onclick = (e) => {
-      e.preventDefault();
-      stopFollowingSession();
-    };
+  // If expanded and user hasn't interacted, keep auto-collapse scheduled
+  if (!overlayPrefs.minimized) {
+    overlayScheduleAutoCollapse("render");
   }
 }
 

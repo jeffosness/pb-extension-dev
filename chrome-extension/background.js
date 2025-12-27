@@ -152,31 +152,66 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Everything else async
   (async () => {
     try {
-      // -------------------------
-      // Core state / PAT
-      // -------------------------
-      if (msg.type === "GET_STATE") {
-        const state = await api("core/state.php");
-        return sendResponse(state);
-      }
+// -------------------------
+// Core state / PAT
+// -------------------------
+if (msg.type === "GET_STATE") {
+  const raw = await api("core/state.php");
 
-      if (msg.type === "GET_CLIENT_ID") {
-        const client_id = await getClientId();
-        return sendResponse({ ok: true, client_id });
-      }
+  console.log("[GET_STATE] raw from core/state.php:", raw);
 
-      if (msg.type === "SAVE_PAT") {
-        const { pat } = msg;
-        const resp = await api("core/oauth_pb_save.php", { pat });
-        return sendResponse(resp);
-      }
+  // NOTE: server returns connection under raw.data.phoneburner.connected
+  const connected =
+    raw?.data?.phoneburner?.connected === true ||
+    raw?.data?.phoneburner?.connected === 1 ||
+    raw?.data?.phoneburner?.connected === "1" ||
+    raw?.data?.phoneburner?.connected === "true" ||
 
-      if (msg.type === "CLEAR_PAT") {
-        const resp = await api("core/oauth_pb_clear.php");
-        currentSession = { token: null, tabId: null, backendBase: null };
-        await saveCurrentSessionToStorage();
-        return sendResponse(resp);
-      }
+    // Back-compat / other shapes (keep these)
+    raw?.phoneburner?.connected === true ||
+    raw?.phoneburner?.connected === 1 ||
+    raw?.phoneburner?.connected === "1" ||
+    raw?.phoneburner?.connected === "true" ||
+    raw?.phoneburner?.ok === true ||
+    raw?.connected === true ||
+    raw?.connected === 1 ||
+    raw?.connected === "1" ||
+    raw?.pb_connected === true ||
+    raw?.pb_connected === 1 ||
+    raw?.pb_connected === "1" ||
+    raw?.has_pat === true ||
+    raw?.has_pat === 1 ||
+    raw?.has_pat === "1";
+
+  const normalized = {
+    ok: raw?.ok === true,
+    phoneburner: { connected: !!connected },
+    raw,
+  };
+
+  console.log("[GET_STATE] normalized returned to popup:", normalized);
+
+  return sendResponse(normalized);
+}
+
+
+if (msg.type === "GET_CLIENT_ID") {
+  const client_id = await getClientId();
+  return sendResponse({ ok: true, client_id });
+}
+
+if (msg.type === "SAVE_PAT") {
+  const { pat } = msg;
+  const resp = await api("core/oauth_pb_save.php", { pat });
+  return sendResponse(resp);
+}
+
+if (msg.type === "CLEAR_PAT") {
+  const resp = await api("core/oauth_pb_clear.php");
+  currentSession = { token: null, tabId: null, backendBase: null };
+  await saveCurrentSessionToStorage();
+  return sendResponse(resp);
+}
 
       // -------------------------
       // HubSpot Level 3: launch from selected
