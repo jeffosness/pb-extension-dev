@@ -24,17 +24,76 @@ if (!is_array($payload)) {
 }
 
 $state = load_session_state($session_token) ?? [];
-
-$externalId  = $payload['external_id'] ?? null;
 $contactsMap = $state['contacts_map'] ?? [];
-$fromMap     = ($externalId && isset($contactsMap[$externalId]))
-    ? $contactsMap[$externalId]
+
+/**
+ * Extract a stable lookup key for contacts_map.
+ * Priority:
+ *  1) external_id (Level 1/2)
+ *  2) external_crm_data hubspot entry crm_id (Level 3 HubSpot)
+ *  3) first external_crm_data crm_id (generic fallback)
+ */
+function extract_contact_lookup_key(array $payload): ?string {
+    // external_id could be top-level or nested depending on PB payload shape
+    $externalId =
+        $payload['external_id'] ??
+        ($payload['contact']['external_id'] ?? null) ??
+        ($payload['data']['external_id'] ?? null) ??
+        ($payload['data']['contact']['external_id'] ?? null) ??
+        null;
+
+    $externalId = is_scalar($externalId) ? trim((string)$externalId) : '';
+    if ($externalId !== '') {
+        return $externalId;
+    }
+
+    // external_crm_data could be top-level or nested
+    $ecd =
+        $payload['external_crm_data'] ??
+        ($payload['contact']['external_crm_data'] ?? null) ??
+        ($payload['data']['external_crm_data'] ?? null) ??
+        ($payload['data']['contact']['external_crm_data'] ?? null) ??
+        null;
+
+    // We expect array-of-arrays: [ ['crm_id'=>..., 'crm_name'=>...], ... ]
+    if (is_array($ecd)) {
+        // Prefer hubspot entry explicitly
+        foreach ($ecd as $row) {
+            if (!is_array($row)) continue;
+            $crmName = strtolower(trim((string)($row['crm_name'] ?? '')));
+            $crmId   = trim((string)($row['crm_id'] ?? ''));
+            if ($crmName === 'hubspot' && $crmId !== '') {
+                return $crmId;
+            }
+        }
+        // Fallback: first crm_id
+        foreach ($ecd as $row) {
+            if (!is_array($row)) continue;
+            $crmId = trim((string)($row['crm_id'] ?? ''));
+            if ($crmId !== '') {
+                return $crmId;
+            }
+        }
+    }
+
+    return null;
+}
+
+$lookupKey = extract_contact_lookup_key($payload);
+
+$fromMap = ($lookupKey && isset($contactsMap[$lookupKey]))
+    ? $contactsMap[$lookupKey]
     : null;
 
 $current = [
     'received_at'     => date('c'),
     'raw'             => $payload,
-    'external_id'     => $externalId,
+
+    // For debugging + UI parity
+    'lookup_key'      => $lookupKey,
+    'external_id'     => $payload['external_id'] ?? null,
+
+    // PB fields (if present)
     'contact_user_id' => $payload['contact_user_id'] ?? null,
     'custom_data'     => $payload['custom_data'] ?? [],
     'webhook_type'    => 'contact_displayed',
@@ -48,6 +107,12 @@ if ($fromMap) {
     $current['source_label'] = $fromMap['source_label'] ?? null;
     $current['crm_name']     = $fromMap['crm_name']     ?? null;
     $current['record_url']   = $fromMap['record_url']   ?? null;
+} else {
+    // helpful for debugging: show why it didn't match
+    $current['map_miss'] = [
+        'has_lookup_key' => (bool)$lookupKey,
+        'contacts_map_count' => is_array($contactsMap) ? count($contactsMap) : 0,
+    ];
 }
 
 $state['current']         = $current;
