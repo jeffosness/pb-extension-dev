@@ -30,8 +30,8 @@ $contactsMap = $state['contacts_map'] ?? [];
  * Extract a stable lookup key for contacts_map.
  * Priority:
  *  1) external_id (Level 1/2)
- *  2) external_crm_data hubspot entry crm_id (Level 3 HubSpot)
- *  3) first external_crm_data crm_id (generic fallback)
+ *  2) external_crm / external_crm_data hubspot entry crm_id (Level 3 HubSpot)
+ *  3) first crm_id in external_crm / external_crm_data (generic fallback)
  */
 function extract_contact_lookup_key(array $payload): ?string {
     // external_id could be top-level or nested depending on PB payload shape
@@ -47,11 +47,16 @@ function extract_contact_lookup_key(array $payload): ?string {
         return $externalId;
     }
 
-    // external_crm_data could be top-level or nested
+    // PB appears to send "external_crm" (not "external_crm_data")
+    // Support both + nested variants.
     $ecd =
+        $payload['external_crm'] ??
         $payload['external_crm_data'] ??
+        ($payload['contact']['external_crm'] ?? null) ??
         ($payload['contact']['external_crm_data'] ?? null) ??
+        ($payload['data']['external_crm'] ?? null) ??
         ($payload['data']['external_crm_data'] ?? null) ??
+        ($payload['data']['contact']['external_crm'] ?? null) ??
         ($payload['data']['contact']['external_crm_data'] ?? null) ??
         null;
 
@@ -108,10 +113,13 @@ if ($fromMap) {
     $current['crm_name']     = $fromMap['crm_name']     ?? null;
     $current['record_url']   = $fromMap['record_url']   ?? null;
 } else {
-    // helpful for debugging: show why it didn't match
+    // Helpful for debugging: show why it didn't match + what keys exist
     $current['map_miss'] = [
-        'has_lookup_key' => (bool)$lookupKey,
-        'contacts_map_count' => is_array($contactsMap) ? count($contactsMap) : 0,
+        'has_lookup_key'      => (bool)$lookupKey,
+        'contacts_map_count'  => is_array($contactsMap) ? count($contactsMap) : 0,
+        'payload_keys'        => array_slice(array_keys($payload), 0, 30),
+        'has_external_crm'    => isset($payload['external_crm']),
+        'has_external_crm_data' => isset($payload['external_crm_data']),
     ];
 }
 
