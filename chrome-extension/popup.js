@@ -1,4 +1,4 @@
-// popup.js — DROP-IN
+// popup.js — DROP-IN (Permission-on-start, no Follow Me toggle UI)
 const BASE_URL = "https://extension-dev.phoneburner.biz";
 
 function $(id) { return document.getElementById(id); }
@@ -6,8 +6,11 @@ function setVisible(el, isVisible) { if (el) el.classList.toggle("hidden", !isVi
 
 function sendToBackground(msg) {
   return new Promise((resolve) => {
-    try { chrome.runtime.sendMessage(msg, (resp) => resolve(resp)); }
-    catch (e) { resolve({ ok: false, error: e?.message || String(e) }); }
+    try {
+      chrome.runtime.sendMessage(msg, (resp) => resolve(resp));
+    } catch (e) {
+      resolve({ ok: false, error: e?.message || String(e) });
+    }
   });
 }
 
@@ -18,9 +21,79 @@ function getClientIdFromBackground() {
         if (resp && resp.ok && resp.client_id) resolve(resp.client_id);
         else resolve(null);
       });
-    } catch (e) { resolve(null); }
+    } catch (e) {
+      resolve(null);
+    }
   });
 }
+
+
+// ---------------------------
+// Follow Widget prefs (auto-collapse)
+// ---------------------------
+
+const OVERLAY_STORAGE_KEYS = {
+  autoCollapse: "pb_follow_widget_auto_collapse",
+};
+
+// Default behavior if nothing saved yet
+const DEFAULT_OVERLAY_PREFS = {
+  autoCollapse: true,
+};
+
+function loadFollowWidgetPrefs() {
+  const cb = $("follow-auto-collapse");
+  if (!cb) return;
+
+  chrome.storage.local.get([OVERLAY_STORAGE_KEYS.autoCollapse], (res) => {
+    const saved = res?.[OVERLAY_STORAGE_KEYS.autoCollapse];
+    cb.checked = typeof saved === "boolean" ? saved : DEFAULT_OVERLAY_PREFS.autoCollapse;
+  });
+}
+
+async function saveFollowWidgetPrefs() {
+  const cb = $("follow-auto-collapse");
+  if (!cb) return;
+
+  const value = !!cb.checked;
+
+  chrome.storage.local.set({ [OVERLAY_STORAGE_KEYS.autoCollapse]: value }, () => {
+    // nothing else needed
+  });
+}
+
+
+
+// ---------------------------
+// Permission on start (best-effort)
+// ---------------------------
+// We request permission ONLY when user clicks to start a dial session.
+// If the user denies, we still proceed; follow may not persist after navigation.
+async function requestOptionalPermissionForActiveSiteBestEffort() {
+  try {
+    if (!chrome?.permissions?.request) return { ok: false, error: "permissions api not available" };
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url) return { ok: false, error: "No active tab URL." };
+
+    let originPattern = null;
+    try {
+      const u = new URL(tab.url);
+      originPattern = `${u.origin}/*`;
+    } catch {
+      return { ok: false, error: "Invalid active tab URL." };
+    }
+
+    return await new Promise((resolve) => {
+      chrome.permissions.request({ origins: [originPattern] }, (granted) => {
+        resolve({ ok: !!granted, originPattern });
+      });
+    });
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 
 // ---------------------------
 // CRM header + Level UI toggles
@@ -59,10 +132,7 @@ function applyLevelUi(context) {
   const level = context?.level || 0;
   const showLevel3 = level === 3;
 
-  // Hide current page on Level 3
   setVisible(currentPageCard, !showLevel3);
-
-  // Show HubSpot card only for HubSpot L3
   setVisible(hsDialCard, isHubSpotL3(context));
 }
 
@@ -112,7 +182,6 @@ async function refreshHubSpotUi() {
 
   const connected = !!state?.hs_ready;
 
-  // DIAL TAB UI
   if (connected) {
     if (dialStatus) dialStatus.textContent = "Connected to HubSpot ✔";
     if (dialHelp) dialHelp.textContent = "Launch a dial session from the currently selected records.";
@@ -131,7 +200,6 @@ async function refreshHubSpotUi() {
     }
   }
 
-  // SETTINGS TAB UI (only show when connected)
   setVisible(settingsCard, connected);
   if (connected) {
     if (settingsStatus) settingsStatus.textContent = "Connected ✔";
@@ -163,6 +231,9 @@ async function startHubSpotOAuth() {
 async function launchHubSpotDialSession() {
   const dialStatus = $("hs-dial-status");
   const dialAction = $("hs-dial-action");
+
+  // Best-effort permission request (only at user click)
+  await requestOptionalPermissionForActiveSiteBestEffort();
 
   if (dialAction) dialAction.disabled = true;
   if (dialStatus) dialStatus.textContent = "Preparing dial session…";
@@ -203,8 +274,9 @@ async function disconnectHubSpot() {
 }
 
 // ---------------------------
-// PhoneBurner PAT UI
+// PhoneBurner PAT UI (keep your existing handlers)
 // ---------------------------
+
 function applyGetPbUi(isConnected) {
   const card = $("get-pb-card");
   setVisible(card, !isConnected);
@@ -230,6 +302,7 @@ async function savePAT() {
   const patInput = $("pat");
   const btn = $("save-pat");
   const pat = patInput?.value?.trim();
+
   if (!pat) return alert("Please paste your PAT first.");
   if (btn) btn.disabled = true;
 
@@ -247,6 +320,7 @@ async function savePAT() {
 async function disconnectPAT() {
   const confirmed = confirm("Disconnect from PhoneBurner and clear your PAT?");
   if (!confirmed) return;
+
   const btn = $("disconnect-pat");
   if (btn) btn.disabled = true;
 
@@ -261,77 +335,21 @@ async function disconnectPAT() {
   }
 }
 
+
 // ---------------------------
 // Scan & Launch (Level 1/2 only)
 // ---------------------------
 
 async function scanAndLaunch() {
-  if (ACTIVE_CTX?.level === 3) return; // hidden anyway
+  if (ACTIVE_CTX?.level === 3) return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return alert("No active tab found.");
-  chrome.tabs.sendMessage(tab.id, { type: "SCAN_PAGE" }, () => {
-    if (chrome.runtime.lastError) alert("Could not scan this page. Is the content script loaded?");
-  });
-}
 
-// ---------------------------
-// Goals
-// ---------------------------
+  // Best-effort permission request (only at user click)
+  await requestOptionalPermissionForActiveSiteBestEffort();
 
-function loadGoalsFromStorage() {
-  const primaryInput = $("goal-primary");
-  const secondaryInput = $("goal-secondary");
-  const statusEl = $("goals-status");
-  if (!primaryInput || !secondaryInput || !statusEl) return;
-
-  chrome.storage.local.get(["pb_goal_primary", "pb_goal_secondary"], (res) => {
-    const primary = res.pb_goal_primary || "Set Appointment";
-    const secondary = res.pb_goal_secondary || "Follow Up";
-    primaryInput.value = primary;
-    secondaryInput.value = secondary;
-    statusEl.textContent = `Goals saved: Primary="${primary}", Secondary="${secondary}"`;
-  });
-}
-
-async function saveGoals() {
-  const primaryInput = $("goal-primary");
-  const secondaryInput = $("goal-secondary");
-  const statusEl = $("goals-status");
-  if (!primaryInput || !secondaryInput || !statusEl) return;
-
-  const primary = primaryInput.value.trim() || "Set Appointment";
-  const secondary = secondaryInput.value.trim() || "Follow Up";
-
-  chrome.storage.local.set({ pb_goal_primary: primary, pb_goal_secondary: secondary }, () => {
-    statusEl.textContent = `Goals saved: Primary="${primary}", Secondary="${secondary}"`;
-  });
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "PB_GOAL_UPDATED", primary, secondary }, () => {});
-}
-
-// ---------------------------
-// Follow widget preferences
-// ---------------------------
-
-const FOLLOW_AUTO_COLLAPSE_KEY = "pb_follow_widget_auto_collapse";
-
-function loadFollowWidgetPrefs() {
-  const cb = $("follow-auto-collapse");
-  if (!cb) return;
-
-  chrome.storage.local.get([FOLLOW_AUTO_COLLAPSE_KEY], (res) => {
-    // Default ON
-    const val = res && Object.prototype.hasOwnProperty.call(res, FOLLOW_AUTO_COLLAPSE_KEY)
-      ? !!res[FOLLOW_AUTO_COLLAPSE_KEY]
-      : true;
-
-    cb.checked = val;
-  });
-
-  cb.addEventListener("change", () => {
-    chrome.storage.local.set({ [FOLLOW_AUTO_COLLAPSE_KEY]: !!cb.checked });
-  });
+  const resp = await sendToBackground({ type: "SCAN_AND_LAUNCH", tabId: tab.id });
+  if (!resp || !resp.ok) alert(resp?.error || "Could not scan this page.");
 }
 
 // ---------------------------
@@ -357,39 +375,33 @@ function activateTab(tabName) {
 // ---------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
-  // PAT
-  $("save-pat")?.addEventListener("click", savePAT);
-  $("disconnect-pat")?.addEventListener("click", disconnectPAT);
+$("save-pat")?.addEventListener("click", savePAT);
+$("disconnect-pat")?.addEventListener("click", disconnectPAT);
 
-  // Get PhoneBurner CTA
-  $("get-pb-btn")?.addEventListener("click", () => {
-    chrome.tabs.create({ url: "https://phoneburner.biz/" });
-  });
-  
+
+    // Follow Widget prefs
+  loadFollowWidgetPrefs();
+  $("follow-auto-collapse")?.addEventListener("change", saveFollowWidgetPrefs);
+
+  // Get PB
+  $("get-pb-btn")?.addEventListener("click", () => chrome.tabs.create({ url: "https://phoneburner.biz/" }));
+
   // Scan
   $("scan-launch")?.addEventListener("click", scanAndLaunch);
 
-  // Goals
-  $("save-goals")?.addEventListener("click", saveGoals);
-
-  // HubSpot dial action (connect or launch depending on state)
+  // HubSpot
   $("hs-dial-action")?.addEventListener("click", async () => {
     const mode = $("hs-dial-action")?.dataset?.mode;
     if (mode === "launch") return launchHubSpotDialSession();
     return startHubSpotOAuth();
   });
-
-  // HubSpot disconnect (settings)
   $("hs-disconnect")?.addEventListener("click", disconnectHubSpot);
 
   // Tabs
   $("tab-dial")?.addEventListener("click", () => activateTab("dial"));
   $("tab-settings")?.addEventListener("click", () => activateTab("settings"));
 
-  // Follow widget prefs
-  loadFollowWidgetPrefs();
-
-  // CRM context
+  // CRM context (no injection required; background can infer from URL)
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const activeTab = tabs?.[0];
     if (!activeTab) return setCrmHeader(null);
@@ -397,14 +409,9 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.runtime.sendMessage({ type: "GET_CONTEXT", tabId: activeTab.id }, async (resp) => {
       const ctx = resp?.context || null;
       setCrmHeader(ctx);
-
-      // If HubSpot L3, build HubSpot UI state
-      if (isHubSpotL3(ctx)) {
-        await refreshHubSpotUi();
-      }
+      if (isHubSpotL3(ctx)) await refreshHubSpotUi();
     });
   });
 
   refreshState();
-  loadGoalsFromStorage();
 });

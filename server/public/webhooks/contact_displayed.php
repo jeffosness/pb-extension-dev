@@ -28,27 +28,15 @@ $contactsMap = $state['contacts_map'] ?? [];
 
 /**
  * Extract a stable lookup key for contacts_map.
- * Priority:
- *  1) external_id (Level 1/2)
- *  2) external_crm / external_crm_data hubspot entry crm_id (Level 3 HubSpot)
- *  3) first crm_id in external_crm / external_crm_data (generic fallback)
+ * Priority (NEW):
+ *  1) first external_crm crm_id that exists in contacts_map (source of truth)
+ *  2) hubspot-ish fallback
+ *  3) first crm_id fallback
+ *  4) external_id fallback
  */
-function extract_contact_lookup_key(array $payload): ?string {
-    // external_id could be top-level or nested depending on PB payload shape
-    $externalId =
-        $payload['external_id'] ??
-        ($payload['contact']['external_id'] ?? null) ??
-        ($payload['data']['external_id'] ?? null) ??
-        ($payload['data']['contact']['external_id'] ?? null) ??
-        null;
+function extract_contact_lookup_key(array $payload, array $contactsMap): ?string {
+    $candidates = [];
 
-    $externalId = is_scalar($externalId) ? trim((string)$externalId) : '';
-    if ($externalId !== '') {
-        return $externalId;
-    }
-
-    // PB appears to send "external_crm" (not "external_crm_data")
-    // Support both + nested variants.
     $ecd =
         $payload['external_crm'] ??
         $payload['external_crm_data'] ??
@@ -60,31 +48,48 @@ function extract_contact_lookup_key(array $payload): ?string {
         ($payload['data']['contact']['external_crm_data'] ?? null) ??
         null;
 
-    // We expect array-of-arrays: [ ['crm_id'=>..., 'crm_name'=>...], ... ]
     if (is_array($ecd)) {
-        // Prefer hubspot entry explicitly
+        // collect all crm_id candidates in order
+        foreach ($ecd as $row) {
+            if (!is_array($row)) continue;
+            $crmId = trim((string)($row['crm_id'] ?? ''));
+            if ($crmId !== '') $candidates[] = $crmId;
+        }
+
+        // 1) strongest: pick the first candidate that exists in contacts_map
+        foreach ($candidates as $id) {
+            if (isset($contactsMap[$id])) return $id;
+        }
+
+        // 2) still helpful: prefer hubspot-ish if nothing matches (debug / fallback)
         foreach ($ecd as $row) {
             if (!is_array($row)) continue;
             $crmName = strtolower(trim((string)($row['crm_name'] ?? '')));
             $crmId   = trim((string)($row['crm_id'] ?? ''));
-            if ($crmName === 'hubspot' && $crmId !== '') {
+            if ($crmId !== '' && ($crmName === 'hubspot' || str_starts_with($crmName, 'hubspot'))) {
                 return $crmId;
             }
         }
-        // Fallback: first crm_id
-        foreach ($ecd as $row) {
-            if (!is_array($row)) continue;
-            $crmId = trim((string)($row['crm_id'] ?? ''));
-            if ($crmId !== '') {
-                return $crmId;
-            }
-        }
+
+        // 3) fallback: first crm_id
+        if (!empty($candidates)) return $candidates[0];
     }
+
+    // legacy fallback only
+    $externalId =
+        $payload['external_id'] ??
+        ($payload['contact']['external_id'] ?? null) ??
+        ($payload['data']['external_id'] ?? null) ??
+        ($payload['data']['contact']['external_id'] ?? null) ??
+        null;
+
+    $externalId = is_scalar($externalId) ? trim((string)$externalId) : '';
+    if ($externalId !== '') return $externalId;
 
     return null;
 }
 
-$lookupKey = extract_contact_lookup_key($payload);
+$lookupKey = extract_contact_lookup_key($payload, $contactsMap);
 
 $fromMap = ($lookupKey && isset($contactsMap[$lookupKey]))
     ? $contactsMap[$lookupKey]
@@ -101,6 +106,7 @@ $current = [
     // PB fields (if present)
     'contact_user_id' => $payload['contact_user_id'] ?? null,
     'custom_data'     => $payload['custom_data'] ?? [],
+    'external_crm'    => $payload['external_crm'] ?? ($payload['external_crm_data'] ?? null),
     'webhook_type'    => 'contact_displayed',
 ];
 

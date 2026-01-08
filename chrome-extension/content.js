@@ -1535,9 +1535,23 @@ async function hs_collectSelectedIdsDeep({ maxMs = 8000, targetCount = null } = 
   return Array.from(seen);
 }
 
-// One HubSpot listener (standalone parity). Keeps the port open with return true.
-chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
-  if (m && (m.type === "HS_GET_SELECTION" || m.type === "HS_GET_SELECTED_IDS")) {
+
+
+// ============================================================================
+//  🔁 MESSAGE HANDLER (popup/background ↔ content) — SINGLE LISTENER
+// ============================================================================
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const isTopWindow = window.top === window;
+
+  // --- Required for ensureContentScript() ping test ---
+  if (msg?.type === "PING") {
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // --- HubSpot L3 selection harvesting (standalone parity) ---
+  if (msg && (msg.type === "HS_GET_SELECTION" || msg.type === "HS_GET_SELECTED_IDS")) {
     (async () => {
       try {
         const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
@@ -1562,34 +1576,20 @@ chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
       }
     })();
 
-    return true; // async
+    return true; // async response
   }
 
-  return false;
-});
-
-// ============================================================================
-//  🔁 MESSAGE HANDLER (popup/background ↔ content)
-// ============================================================================
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  const isTopWindow = window.top === window;
-
-  // ✅ Guard: let the dedicated HubSpot listener handle HS_* messages
-  if (msg && (msg.type === "HS_GET_SELECTION" || msg.type === "HS_GET_SELECTED_IDS")) {
-    return false; // do not respond here
-  }
-
-  if (msg.type === "SCAN_PAGE" && !isTopWindow) {
+  // Ignore SCAN_PAGE in iframes
+  if (msg?.type === "SCAN_PAGE" && !isTopWindow) {
     sendResponse({ ok: false, error: "ignored_iframe" });
     return true;
   }
 
-  if (msg.type === "SCAN_PAGE") {
+  // --- Level 1/2 Scan ---
+  if (msg?.type === "SCAN_PAGE") {
     console.log("[PB-UNIFIED] content: SCAN_PAGE received on", window.location.href);
 
-    // 🚫 On HubSpot, do NOT use generic scanning.
-    // HubSpot dial sessions must be created via HS_LAUNCH_FROM_SELECTED (selection + server fetch).
+    // HubSpot must use selection flow
     if (CURRENT_CRM_CONTEXT?.crmId === "hubspot") {
       alert(
         "HubSpot detected.\n\n" +
@@ -1673,9 +1673,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === "START_FOLLOW_SESSION") {
-    const { sessionToken } = msg;
-    if (window.top === window) {
+  // --- Follow session start/stop ---
+  if (msg?.type === "START_FOLLOW_SESSION") {
+    const { sessionToken } = msg || {};
+    if (isTopWindow) {
       startFollowingSession(sessionToken);
       sendResponse({ ok: true });
       return true;
@@ -1684,13 +1685,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === "STOP_FOLLOW_SESSION") {
+  if (msg?.type === "STOP_FOLLOW_SESSION") {
     stopFollowingSession();
     sendResponse({ ok: true });
     return true;
   }
 
-  if (msg.type === "PB_GOAL_UPDATED") {
+  // --- Goals update from popup ---
+  if (msg?.type === "PB_GOAL_UPDATED") {
     if (msg.primary && msg.primary.trim()) goalConfig.primary = msg.primary.trim();
     if (msg.secondary && msg.secondary.trim()) goalConfig.secondary = msg.secondary.trim();
 
@@ -1723,29 +1725,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
-// ============================================================================
-//  🔁 AUTO-RESUME FOLLOWING ON PAGE LOAD (top window only)
-// ============================================================================
 
-if (window.top === window) {
-  try {
-    chrome.runtime.sendMessage({ type: "GET_ACTIVE_SESSION_FOR_TAB" }, (resp) => {
-      if (chrome.runtime.lastError) return;
-      if (resp && resp.sessionToken) {
-        console.log("Resuming follow for session", resp.sessionToken);
-
-        const idNow = extractSalesforceRecordIdSafe(window.location.href);
-        if (idNow) {
-          currentRecordId = idNow;
-          pendingRecordId = idNow;
-        }
-
-        startFollowingSession(resp.sessionToken);
-      }
-    });
-  } catch (e) {
-    console.error("Error requesting active session for tab", e);
-  }
-}
 
 console.log("[PB-UNIFIED-CRM] content script initialized");
