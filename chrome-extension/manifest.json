@@ -25,31 +25,23 @@
     "storage",
     "activeTab",
     "scripting",
-    "tabs"
+    "tabs",
+    "permissions"
   ],
 
   "host_permissions": [
-    "https://*/*",
-    "http://*/*",
     "https://webhooktest.phoneburner.biz/*",
     "https://extension-dev.phoneburner.biz/*",
     "https://extension.phoneburner.biz/*"
   ],
 
+"optional_host_permissions": [
+  "https://*/*",
+  "http://*/*"
+],
+
   "background": {
     "service_worker": "background.js",
     "type": "module"
-  },
-
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*/*",
-        "http://*/*"
-      ],
-      "js": ["content.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ]
+  }
 }
