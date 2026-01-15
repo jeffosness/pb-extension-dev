@@ -9,9 +9,6 @@ define('PB_BOOTSTRAP_NO_JSON', true);
 require_once __DIR__ . '/api/core/bootstrap.php';
 require_once __DIR__ . '/utils.php';
 
-// If bootstrap handled an OPTIONS preflight, it may have already exited.
-// (bootstrap.php does this now)
-
 // -------------------------
 // Read session token
 // -------------------------
@@ -24,32 +21,86 @@ $session_token =
 // -------------------------
 // SSE headers
 // -------------------------
-// CORS: bootstrap may already set these, but re-sending is harmless.
-// Keeping this preserves existing behavior.
 header('Access-Control-Allow-Origin: *');
-
 header('Content-Type: text/event-stream; charset=utf-8');
 header('Cache-Control: no-cache');
 header('Connection: keep-alive');
-
-// Helps proxies (nginx) not buffer SSE (harmless if unused)
 header('X-Accel-Buffering: no');
 
-// Make sure output buffering doesn't prevent streaming
 @ini_set('output_buffering', 'off');
 @ini_set('zlib.output_compression', '0');
 
-// For long-running connections
 @set_time_limit(0);
 @ignore_user_abort(true);
 
-// Optional debug logs (existing behavior)
-// Note: keep logs small; no PII / no token contents.
-log_msg("SSE REQUEST_URI=" . ($_SERVER['REQUEST_URI'] ?? ''));
-log_msg("SSE QUERY_STRING=" . ($_SERVER['QUERY_STRING'] ?? ''));
-
-// Avoid dumping full $_GET (it includes the session token). Log keys only.
+// Optional debug logs (keep small; avoid token contents)
+log_msg("SSE PATH=" . parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH));
 log_msg("SSE _GET keys=" . json_encode(array_keys($_GET ?? [])));
+
+// -------------------------
+// Helpers
+// -------------------------
+function hash12(string $value): string {
+  return substr(hash('sha256', $value), 0, 12);
+}
+
+function ensure_dir_local(string $dir): void {
+  if (!is_dir($dir)) {
+    @mkdir($dir, 0770, true);
+  }
+}
+
+/**
+ * Append a single JSON line to the daily SSE usage log.
+ * Path: server/public/metrics/sse_usage-YYYY-MM-DD.log
+ */
+function sse_log_activity(string $event, array $data = []): void {
+  $metricsDir = __DIR__ . '/metrics';
+  ensure_dir_local($metricsDir);
+
+  $logFile = $metricsDir . '/sse_usage-' . date('Y-m-d') . '.log';
+
+  $record = array_merge([
+    'event'   => $event,
+    'ts'      => date('c'),
+    'unix_ts' => time(),
+  ], $data);
+
+  @file_put_contents(
+    $logFile,
+    json_encode($record, JSON_UNESCAPED_SLASHES) . PHP_EOL,
+    FILE_APPEND | LOCK_EX
+  );
+}
+
+/**
+ * Presence file (overwritten periodically) to track "active now" without scanning logs.
+ * Path: server/public/metrics/sse_presence/{session_hash}.json
+ */
+function sse_presence_write(string $sessionHash, int $connectUnix, int $lastSeenUnix): void {
+  $presenceDir = __DIR__ . '/metrics/sse_presence';
+  ensure_dir_local($presenceDir);
+
+  $file = $presenceDir . '/' . $sessionHash . '.json';
+  $payload = [
+    'session'        => $sessionHash,
+    'connect_unix'   => $connectUnix,
+    'last_seen_unix' => $lastSeenUnix,
+  ];
+
+  @file_put_contents(
+    $file,
+    json_encode($payload, JSON_UNESCAPED_SLASHES),
+    LOCK_EX
+  );
+}
+
+function sse_presence_delete(string $sessionHash): void {
+  $file = __DIR__ . '/metrics/sse_presence/' . $sessionHash . '.json';
+  if (is_file($file)) {
+    @unlink($file);
+  }
+}
 
 // -------------------------
 // Validate token
@@ -61,9 +112,47 @@ if (!$session_token) {
   exit;
 }
 
-$path          = session_file_path($session_token);
-$last_mtime    = 0;
-$lastKeepalive = time();
+$sessionHash      = hash12((string)$session_token);
+$ipHash           = hash12((string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+$connectionStart  = time();
+$lastKeepalive    = $connectionStart;
+
+// Presence write cadence (overwrites file)
+$presenceIntervalSec = 120;
+$lastPresenceWrite   = 0;
+
+// Avoid double-disconnect logging
+$didFinalize = false;
+
+// Ensure we log disconnect + cleanup even if PHP exits unexpectedly
+register_shutdown_function(function () use (&$didFinalize, $sessionHash, $connectionStart) {
+  if ($didFinalize) return;
+
+  // Best-effort: log disconnect + cleanup presence
+  sse_log_activity('sse.disconnect', [
+    'session_token_hash' => $sessionHash,
+    'duration_sec'       => time() - $connectionStart,
+    'shutdown'           => true,
+  ]);
+  sse_presence_delete($sessionHash);
+
+  $didFinalize = true;
+});
+
+// -------------------------
+// Session state file
+// -------------------------
+$path       = session_file_path($session_token);
+$last_mtime = 0;
+
+// Log connect + initial presence
+sse_log_activity('sse.connect', [
+  'session_token_hash' => $sessionHash,
+  'ip_hash'            => $ipHash,
+]);
+
+sse_presence_write($sessionHash, $connectionStart, $connectionStart);
+$lastPresenceWrite = $connectionStart;
 
 // Optional: initial hello event (does not affect clients that only listen for "update")
 echo ": connected\n\n";
@@ -74,6 +163,7 @@ while (true) {
 
   clearstatcache(true, $path);
 
+  // Emit update when session state file changes
   if (file_exists($path)) {
     $mtime = @filemtime($path);
     if ($mtime && $mtime !== $last_mtime) {
@@ -98,5 +188,21 @@ while (true) {
     $lastKeepalive = time();
   }
 
+  // Presence update (overwrites presence file; no JSONL heartbeat spam)
+  if (time() - $lastPresenceWrite >= $presenceIntervalSec) {
+    sse_presence_write($sessionHash, $connectionStart, time());
+    $lastPresenceWrite = time();
+  }
+
   sleep(1);
 }
+
+// Normal disconnect path (also handled by shutdown fallback)
+sse_log_activity('sse.disconnect', [
+  'session_token_hash' => $sessionHash,
+  'duration_sec'       => time() - $connectionStart,
+  'shutdown'           => false,
+]);
+
+sse_presence_delete($sessionHash);
+$didFinalize = true;
