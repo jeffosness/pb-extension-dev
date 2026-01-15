@@ -9,6 +9,19 @@ $REQUEST_ID = bin2hex(random_bytes(8));
 $START_TS   = microtime(true);
 
 // -----------------------------------------------------------------------------
+// Timezone (set once globally for consistent "day" boundaries + timestamps)
+// - Defaults to America/Denver to match your operating timezone.
+// - If you later want to make it configurable, define PB_TIMEZONE in config.php.
+// -----------------------------------------------------------------------------
+if (function_exists('date_default_timezone_set')) {
+  $tz = defined('PB_TIMEZONE') ? (string)PB_TIMEZONE : 'America/Denver';
+  // Suppress warnings if timezone string is invalid; fallback to UTC.
+  if (!@date_default_timezone_set($tz)) {
+    @date_default_timezone_set('UTC');
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Basic hardening headers
 // -----------------------------------------------------------------------------
 header('X-Content-Type-Options: nosniff');
