@@ -70,6 +70,27 @@ api_log('crm_usage_dashboard.view', [
     }
     .stat .label { color: #666; font-size: 12px; }
     .stat .value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+    .filter-buttons {
+      display: flex;
+      gap: 8px;
+      margin: 16px 0;
+    }
+    .filter-btn {
+      padding: 8px 14px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+      background: #fff;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 13px;
+    }
+    .filter-btn.active {
+      background: #0066cc;
+      color: #fff;
+      border-color: #0066cc;
+    }
+    .filter-btn:hover { background: #f0f0f0; }
+    .filter-btn.active:hover { background: #0052a3; }
   </style>
 </head>
 <body>
@@ -84,7 +105,13 @@ api_log('crm_usage_dashboard.view', [
 
   <div id="content" style="display:none;">
 
-    <h2 class="section-title">SSE Dial Session Load (Today)</h2>
+    <div class="filter-buttons">
+      <button class="filter-btn active" data-range="today">Today</button>
+      <button class="filter-btn" data-range="week">This Week</button>
+      <button class="filter-btn" data-range="month">This Month</button>
+    </div>
+
+    <h2 class="section-title">SSE Dial Session Load</h2>
     <div class="grid" id="sse-grid"></div>
     <div class="muted">
       Data source: <code>../api/core/sse_usage_stats.php</code>
@@ -122,9 +149,124 @@ document.addEventListener("DOMContentLoaded", () => {
   const contentEl = document.getElementById("content");
   const summaryEl = document.getElementById("summary");
   const sseGridEl = document.getElementById("sse-grid");
+  const filterBtns = document.querySelectorAll(".filter-btn");
 
   const crmEndpoint = "../api/core/crm_usage_stats.php";
   const sseEndpoint = "../api/core/sse_usage_stats.php";
+
+  let currentRange = "today";
+
+  function getDateRange(range) {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    const todayStr = `${year}-${month}-${day}`;
+
+    if (range === "today") {
+      return { start: todayStr, end: todayStr, label: "Today" };
+    }
+
+    if (range === "week") {
+      const startOfWeek = new Date(today);
+      startOfWeek.setDate(today.getDate() - today.getDay());
+      const startYear = startOfWeek.getFullYear();
+      const startMonth = String(startOfWeek.getMonth() + 1).padStart(2, "0");
+      const startDay = String(startOfWeek.getDate()).padStart(2, "0");
+      const startStr = `${startYear}-${startMonth}-${startDay}`;
+      return { start: startStr, end: todayStr, label: "This Week" };
+    }
+
+    if (range === "month") {
+      const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+      const startYear = startOfMonth.getFullYear();
+      const startMonth = String(startOfMonth.getMonth() + 1).padStart(2, "0");
+      const startDay = String(startOfMonth.getDate()).padStart(2, "0");
+      const startStr = `${startYear}-${startMonth}-${startDay}`;
+      return { start: startStr, end: todayStr, label: "This Month" };
+    }
+
+    return { start: todayStr, end: todayStr, label: "Today" };
+  }
+
+  function loadDashboard() {
+    const dateRange = getDateRange(currentRange);
+    const sseUrl = sseEndpoint + `?start=${dateRange.start}&end=${dateRange.end}&t=${Date.now()}`;
+    const crmUrl = crmEndpoint + `?start=${dateRange.start}&end=${dateRange.end}&t=${Date.now()}`;
+
+    Promise.all([
+      fetch(sseUrl).then(r => { if (!r.ok) throw new Error("SSE stats HTTP " + r.status); return r.json(); }),
+      fetch(crmUrl).then(r => { if (!r.ok) throw new Error("CRM stats HTTP " + r.status); return r.json(); })
+    ]).then(([sseResp, crmResp]) => {
+      const sse = normalize(sseResp);
+      const crm = normalize(crmResp);
+
+      if (!sseResp || !sseResp.ok || !sse) {
+        showError("SSE stats API returned error or malformed response.");
+        return;
+      }
+      if (!crmResp || !crmResp.ok || !crm) {
+        showError("CRM stats API returned error or malformed response.");
+        return;
+      }
+
+      msgEl.innerHTML = "";
+      contentEl.style.display = "block";
+
+      // Calculate totals from per_day data
+      let totalConnects = 0, totalDisconnects = 0, totalAvgDur = 0, totalP95Dur = 0, totalMaxConcurrent = 0;
+      const perDays = sse.per_day || [];
+      
+      if (perDays.length > 0) {
+        totalConnects = perDays.reduce((sum, d) => sum + (d.connects || 0), 0);
+        totalDisconnects = perDays.reduce((sum, d) => sum + (d.disconnects || 0), 0);
+        
+        const durations = perDays.filter(d => d.avg_duration_sec > 0).map(d => d.avg_duration_sec);
+        if (durations.length > 0) {
+          totalAvgDur = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
+        }
+        
+        const p95s = perDays.filter(d => d.p95_duration_sec > 0).map(d => d.p95_duration_sec);
+        if (p95s.length > 0) {
+          totalP95Dur = Math.round(p95s.reduce((a, b) => a + b, 0) / p95s.length);
+        }
+        
+        totalMaxConcurrent = Math.max(...perDays.map(d => d.max_concurrent_est || 0), 0);
+      }
+
+      const activeNow = (sse.active_now && typeof sse.active_now.active_now === "number")
+        ? sse.active_now.active_now
+        : 0;
+
+      sseGridEl.innerHTML = "";
+      sseGridEl.appendChild(statCard("Active dial sessions now (SSE)", String(activeNow)));
+      sseGridEl.appendChild(statCard("Sessions started (" + dateRange.label + ")", String(totalConnects)));
+      sseGridEl.appendChild(statCard("Sessions ended (" + dateRange.label + ")", String(totalDisconnects)));
+      sseGridEl.appendChild(statCard("Avg session duration", secondsToFriendly(totalAvgDur)));
+      sseGridEl.appendChild(statCard("P95 duration", secondsToFriendly(totalP95Dur)));
+      sseGridEl.appendChild(statCard("Max concurrent estimate", String(totalMaxConcurrent)));
+
+      // CRM summary + tables
+      if (!crm.total_events || crm.total_events === 0) {
+        summaryEl.textContent =
+          "CRM usage (" + dateRange.label + "): No usage data found yet. SSE load is shown above.";
+        return;
+      }
+
+      summaryEl.textContent =
+        "CRM events logged (" + dateRange.label + "): " + crm.total_events +
+        " · Distinct CRMs: " + Object.keys(crm.by_crm_id || {}).length +
+        " · Distinct hosts: " + Object.keys(crm.by_host || {}).length;
+
+      fillTable("by-crm-table", crm.by_crm_id);
+      fillTable("by-host-table", crm.by_host);
+      fillTable("by-level-table", crm.by_level);
+
+    }).catch((err) => {
+      console.error("Dashboard load error:", err);
+      showError(err.message || String(err));
+    });
+  }
 
   function showError(text) {
     msgEl.innerHTML =
@@ -184,66 +326,18 @@ document.addEventListener("DOMContentLoaded", () => {
       });
   }
 
-  // Default to "today" for SSE stats (endpoint defaults to today anyway)
-  const sseUrl = sseEndpoint + "?t=" + Date.now();
-  const crmUrl = crmEndpoint + "?t=" + Date.now();
-
-  Promise.all([
-    fetch(sseUrl).then(r => { if (!r.ok) throw new Error("SSE stats HTTP " + r.status); return r.json(); }),
-    fetch(crmUrl).then(r => { if (!r.ok) throw new Error("CRM stats HTTP " + r.status); return r.json(); })
-  ]).then(([sseResp, crmResp]) => {
-    const sse = normalize(sseResp);
-    const crm = normalize(crmResp);
-
-    if (!sseResp || !sseResp.ok || !sse) {
-      showError("SSE stats API returned error or malformed response.");
-      return;
-    }
-    if (!crmResp || !crmResp.ok || !crm) {
-      showError("CRM stats API returned error or malformed response.");
-      return;
-    }
-
-    // If CRM has no data yet, still show SSE section (it may have data)
-    msgEl.innerHTML = "";
-    contentEl.style.display = "block";
-
-    // SSE Today summary
-    const perDay = (sse.per_day && sse.per_day.length) ? sse.per_day[0] : null;
-    const activeNow = (sse.active_now && typeof sse.active_now.active_now === "number")
-      ? sse.active_now.active_now
-      : 0;
-
-    sseGridEl.innerHTML = "";
-    sseGridEl.appendChild(statCard("Active dial sessions now (SSE)", String(activeNow)));
-    sseGridEl.appendChild(statCard("Sessions started today", String(perDay ? perDay.connects : 0)));
-    sseGridEl.appendChild(statCard("Sessions ended today", String(perDay ? perDay.disconnects : 0)));
-    sseGridEl.appendChild(statCard("Avg session duration (ended)", secondsToFriendly(perDay ? perDay.avg_duration_sec : 0)));
-    sseGridEl.appendChild(statCard("P95 duration (ended)", secondsToFriendly(perDay ? perDay.p95_duration_sec : 0)));
-    sseGridEl.appendChild(statCard("Max concurrent estimate (today)", String(perDay ? perDay.max_concurrent_est : 0)));
-
-    // CRM summary + tables
-    if (!crm.total_events || crm.total_events === 0) {
-      // Show SSE but warn CRM has no data
-      summaryEl.textContent =
-        "CRM usage: No usage data found yet. " +
-        "SSE load is shown above.";
-      return;
-    }
-
-    summaryEl.textContent =
-      "CRM events logged: " + crm.total_events +
-      " · Distinct CRMs: " + Object.keys(crm.by_crm_id || {}).length +
-      " · Distinct hosts: " + Object.keys(crm.by_host || {}).length;
-
-    fillTable("by-crm-table", crm.by_crm_id);
-    fillTable("by-host-table", crm.by_host);
-    fillTable("by-level-table", crm.by_level);
-
-  }).catch((err) => {
-    console.error("Dashboard load error:", err);
-    showError(err.message || String(err));
+  // Filter button listeners
+  filterBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      filterBtns.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentRange = btn.getAttribute("data-range");
+      loadDashboard();
+    });
   });
+
+  // Initial load
+  loadDashboard();
 });
 </script>
 </body>
