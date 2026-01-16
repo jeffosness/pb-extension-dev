@@ -121,6 +121,47 @@ function api_error(string $message, string $code = 'error', int $status = 400, a
 }
 
 // -----------------------------------------------------------------------------
+// PII Redaction: recursive filtering for sensitive data
+// - Handles nested arrays, pattern-based key matching, and exact key matches
+// - Runs before logging to prevent sensitive data leakage
+// - Safe to call on any array; non-matching data passes through unchanged
+// -----------------------------------------------------------------------------
+function redact_pii_recursive(array $data): array {
+  // Pattern-based key matching (case-insensitive)
+  $denyPatterns = [
+    '/^.*email.*$/i',           // email, user_email, email_address, etc.
+    '/^.*phone.*$/i',           // phone, phone_number, primary_phone, etc.
+    '/^.*token.*$/i',           // token, access_token, bearer_token, session_token, etc.
+    '/^.*password.*$/i',        // password, user_password, pwd, etc.
+    '/^.*secret.*$/i',          // secret, client_secret, api_secret, etc.
+    '/^.*auth.*$/i',            // authorization, auth_header, auth_token, etc.
+    '/^.*(paypal|credit|card).*$/i', // payment methods
+  ];
+  
+  // Exact key matches (for known bulk data fields)
+  $denyKeys = ['payload', 'contacts', 'response_body', 'request_body'];
+  
+  // Recursive array walk to find and redact all matching keys
+  array_walk_recursive($data, function(&$value, $key) use ($denyPatterns, $denyKeys) {
+    // Exact key match (fast path)
+    if (in_array($key, $denyKeys, true)) {
+      $value = '[REDACTED]';
+      return;
+    }
+    
+    // Pattern match (case-insensitive, for flexible key naming)
+    foreach ($denyPatterns as $pattern) {
+      if (preg_match($pattern, (string)$key)) {
+        $value = '[REDACTED]';
+        return;
+      }
+    }
+  });
+  
+  return $data;
+}
+
+// -----------------------------------------------------------------------------
 // Safe logger: logs metadata, never raw tokens/PII by default
 // -----------------------------------------------------------------------------
 function api_log(string $event, array $fields = []): void {
@@ -145,11 +186,8 @@ function api_log(string $event, array $fields = []): void {
     'path' => $_SERVER['REQUEST_URI'] ?? null,
   ];
 
-  // Never log these keys if they show up
-  $denyKeys = ['token', 'access_token', 'bearer', 'authorization', 'email', 'phone', 'contacts', 'payload'];
-  foreach ($denyKeys as $k) {
-    if (array_key_exists($k, $fields)) $fields[$k] = '[REDACTED]';
-  }
+  // Recursively redact any sensitive keys (including nested data)
+  $fields = redact_pii_recursive($fields);
 
   $line = json_encode($base + $fields, JSON_UNESCAPED_SLASHES) . PHP_EOL;
   @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);

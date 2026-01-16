@@ -78,7 +78,21 @@ function read_presence_active_now(int $activeWindowSec = 180): array {
 function read_daily_sse_log(string $dateYmd): array {
     $publicDir = dirname(__DIR__, 2); // core -> api -> public
     $metricsDir = $publicDir . '/metrics';
-    $logFile = $metricsDir . '/sse_usage-' . $dateYmd . '.log';
+    
+    // Use safe_file_path for defensive path traversal protection
+    $logFile = safe_file_path($metricsDir, 'sse_usage-' . $dateYmd . '.log');
+    if (!$logFile) {
+        return [
+            'date' => $dateYmd,
+            'file_present' => false,
+            'connects' => 0,
+            'disconnects' => 0,
+            'unique_sessions' => 0,
+            'avg_duration_sec' => 0,
+            'p95_duration_sec' => 0,
+            'max_concurrent_est' => 0,
+        ];
+    }
 
     $stats = [
         'date' => $dateYmd,
