@@ -158,103 +158,104 @@ function get_client_id_or_fail($from = null) {
 
 ---
 
-#### 4. Insufficient Directory Traversal Protection in File Operations
-**File:** [server/public/sse.php](server/public/sse.php#L76) and [server/public/api/core/sse_usage_stats.php](server/public/api/core/sse_usage_stats.php#L37)
-
+#### 4. Insufficient Directory Traversal Protection in File Operations ✅ FIXED
+**File:** [sse.php](server/public/sse.php#L76), [sse_usage_stats.php](server/public/api/core/sse_usage_stats.php#L37)  
 **Severity:** Medium  
-**Type:** Path Traversal
+**Type:** Path Traversal  
+**Status:** Fixed in [security/fix-medium-risk-issues](https://github.com/jeffosness/pb-extension-dev/tree/security/fix-medium-risk-issues)
 
+**Previous Code:**
 ```php
-// sse.php: presenceDir computed relative to __DIR__
-$presenceDir = __DIR__ . '/metrics/sse_presence';  // ✅ Safe (hardcoded path)
-
-// sse_usage_stats.php: relies on safe_date_ymd() but doesn't canonicalize
+// Safe but unvalidated; relies on input validation alone
+$presenceDir = __DIR__ . '/metrics/sse_presence';
 $logFile = $metricsDir . '/sse_usage-' . $dateYmd . '.log';
 ```
 
-**Current Protection:**
-- `safe_date_ymd()` validates `^\d{4}-\d{2}-\d{2}$` ✅ Good
-- Hard-coded base directories (no user input) ✅ Good
-- `realpath()` not used (could verify paths are within intended dir)
-
-**Risk (Minor):**
-- If `$metricsDir` path is ever user-influenced, validation alone is insufficient
-- Symbolic links could escape directory bounds
-
-**Recommendation:**
+**Fixed Code:**
 ```php
-// ✅ Verify resolved path is within expected directory
-function safe_file_path(string $base, string $relativePath): ?string {
-    $base = realpath($base);
-    $full = realpath($base . '/' . $relativePath);
-    
-    if ($base === false || $full === false) return null;
-    if (strpos($full, $base) !== 0) return null; // outside base dir
-    
-    return $full;
-}
-
-// Usage:
+// Now uses realpath() to verify path stays within base directory
 $logFile = safe_file_path($metricsDir, 'sse_usage-' . $dateYmd . '.log');
 if (!$logFile) api_error('Invalid file path', 'bad_request', 400);
 ```
 
-**Priority:** Medium. Implement as defensive hardening (current design is safe).
+**Implementation:**
+- Added `safe_file_path()` function to [utils.php](server/public/utils.php) with:
+  - `realpath()` canonicalization for both base and full paths
+  - String position check to verify resolved path stays within base
+  - Proper handling of non-existent files (checked via dirname/basename normalization)
+- Applied to all file operations:
+  - SSE log writing in [sse.php](server/public/sse.php)
+  - SSE presence file operations in [sse.php](server/public/sse.php)
+  - Daily stats reading in [sse_usage_stats.php](server/public/api/core/sse_usage_stats.php)
+
+**Risk Mitigated:** Defensive hardening. Symlinks and relative path components (../) can no longer escape the base directory. If input validation changes in the future, realpath() prevents bypass.
 
 ---
 
-#### 5. PII in Logs (Conditional Redaction)
-**File:** [server/public/api/core/bootstrap.php](server/public/api/core/bootstrap.php#L120)
-
+#### 5. PII in Logs (Conditional Redaction) ✅ FIXED
+**File:** [bootstrap.php](server/public/api/core/bootstrap.php#L120)  
 **Severity:** Medium  
-**Type:** Information Disclosure
+**Type:** Information Disclosure  
+**Status:** Fixed in [security/fix-medium-risk-issues](https://github.com/jeffosness/pb-extension-dev/tree/security/fix-medium-risk-issues)
 
+**Previous Code:**
 ```php
+// Only exact key matches; nested data leaks
 $denyKeys = ['token', 'access_token', 'bearer', 'authorization', 'email', 'phone', 'contacts', 'payload'];
 foreach ($denyKeys as $k) {
   if (array_key_exists($k, $fields)) $fields[$k] = '[REDACTED]';
 }
 ```
 
-**Risk:**
-- Redaction happens only if exact key name matches
-- Nested data (e.g., `context['email']`, `user['phone']`) is **not redacted**
-- Binary data or encoded tokens in non-standard keys bypass redaction
+**Examples that LEAKED data:**
+- `['user_email' => 'admin@example.com']` — Key name "user_email" doesn't match "email" ❌
+- `['context' => ['email' => 'user@example.com']]` — Nested array not scanned ❌
+- `['hub_id' => 12345]` — Portal ID not in deny list ❌
 
-**Examples that leak data:**
+**Fixed Code:**
 ```php
-api_log('event', ['user_email' => 'admin@example.com']);  // ❌ NOT redacted (key is 'user_email', not 'email')
-api_log('event', ['context' => ['email' => 'user@example.com']]);  // ❌ Nested not redacted
-api_log('event', ['data' => base64_encode($token)]);  // ❌ Encoded token not recognized
-```
-
-**Recommendation:**
-```php
-function redact_pii(array $data, array $denyKeys): array {
-    $denyPatterns = [
-        '/^.*email.*$/i',
-        '/^.*phone.*$/i',
-        '/^.*token.*$/i',
-        '/^.*password.*$/i',
-    ];
+function redact_pii_recursive(array $data): array {
+  $denyPatterns = [
+    '/^.*email.*$/i',           // Matches: email, user_email, email_address
+    '/^.*phone.*$/i',           // Matches: phone, phone_number, primary_phone
+    '/^.*token.*$/i',           // Matches: token, access_token, bearer_token
+    '/^.*password.*$/i',        // Matches: password, user_password
+    '/^.*secret.*$/i',          // Matches: secret, api_secret
+    '/^.*auth.*$/i',            // Matches: authorization, auth_token
+    '/^.*(paypal|credit|card).*$/i', // Payment info
+  ];
+  
+  $denyKeys = ['payload', 'contacts', 'response_body', 'request_body'];
+  
+  // Recursive scan finds and redacts all matching keys
+  array_walk_recursive($data, function(&$value, $key) use ($denyPatterns, $denyKeys) {
+    if (in_array($key, $denyKeys, true)) {
+      $value = '[REDACTED]';
+      return;
+    }
     
-    return array_map(function($value) use ($denyPatterns) {
-        if (is_array($value)) {
-            return redact_pii($value, $denyKeys);  // Recursive
-        }
-        if (is_string($value) && strlen($value) > 0) {
-            foreach ($denyPatterns as $pattern) {
-                if (preg_match($pattern, (string)key($value))) {
-                    return '[REDACTED]';
-                }
-            }
-        }
-        return $value;
-    }, $data);
+    foreach ($denyPatterns as $pattern) {
+      if (preg_match($pattern, (string)$key)) {
+        $value = '[REDACTED]';
+        return;
+      }
+    }
+  });
+  
+  return $data;
 }
+
+// Updated api_log() to use recursive redaction
+$fields = redact_pii_recursive($fields);
 ```
 
-**Priority:** Medium. Add recursive redaction and pattern-based matching.
+**Implementation:**
+- Added `redact_pii_recursive()` function to [bootstrap.php](server/public/api/core/bootstrap.php)
+- Uses `array_walk_recursive()` to scan nested arrays
+- Pattern-based matching (case-insensitive) for key name variations
+- Applied to all logging in `api_log()`
+
+**Risk Mitigated:** Now catches nested user data, context arrays, and key naming variations. Both exact matches and pattern-based matches are redacted.
 
 ---
 
@@ -446,10 +447,12 @@ function verify_client_ownership($client_id, $session_token) {
 - [x] **CRITICAL:** Implement origin whitelist — ✅ DONE ([PR](https://github.com/jeffosness/pb-extension-dev/pull/new/security/fix-cors-and-session-tokens))
 - [x] **CRITICAL:** Use temporary codes for session tokens — ✅ DONE ([PR](https://github.com/jeffosness/pb-extension-dev/pull/new/security/fix-cors-and-session-tokens))
 
+### Medium-Risk Issues (Resolved):
+- [x] **MEDIUM:** Path traversal protection with realpath() — ✅ DONE ([PR](https://github.com/jeffosness/pb-extension-dev/pull/new/security/fix-medium-risk-issues))
+- [x] **MEDIUM:** Recursive PII redaction — ✅ DONE ([PR](https://github.com/jeffosness/pb-extension-dev/pull/new/security/fix-medium-risk-issues))
+
 ### Before Production:
 - [ ] **HIGH:** Implement client_id format validation (Issue #3)
-- [ ] **HIGH:** Add realpath() verification for file paths (Issue #4)
-- [ ] **MEDIUM:** Implement recursive PII redaction (Issue #5)
 - [ ] **MEDIUM:** Add future-date validation (Issue #6)
 - [ ] **LOW:** Add rate limiting (Issue #7)
 
