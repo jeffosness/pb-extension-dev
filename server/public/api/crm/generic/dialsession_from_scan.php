@@ -222,9 +222,16 @@ api_log('dialsession_from_scan.ok', [
     'pb_ms'          => $pb_ms,
 ]);
 
+// -------------------------
+// Generate temporary code for secure URL (not embedding token)
+// -------------------------
+$tempCode = temp_code_store($session_token, 300);  // 5-minute TTL
+
 api_ok_flat([
   'session_token'   => $session_token,
+  'temp_code'       => $tempCode,
   'dialsession_url' => $launch_url,
+  'launch_url'      => $launch_url . (strpos($launch_url, '?') ? '&' : '?') . 'code=' . urlencode($tempCode),
   'contacts_sent'   => count($pbContacts),
   'skipped'         => $skipped,
   'pb_ms'           => $pb_ms,

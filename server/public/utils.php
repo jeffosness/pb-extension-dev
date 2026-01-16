@@ -73,6 +73,58 @@ function get_client_id_or_fail($from = null)
     return preg_replace('/[^a-zA-Z0-9_-]/', '', $client_id);
 }
 
+// -------------------------
+// Temporary session code management (for secure dial session URLs)
+// -------------------------
+// Instead of embedding session tokens in URLs (?s=token), we use temporary codes (?code=CODE)
+// The code is exchanged for the token once, then deleted.
+// TTL: 5 minutes (300 seconds)
+
+function temp_code_file_path(string $code): string {
+    $cacheDir = cfg()['CACHE_DIR'] ?? (dirname(__DIR__) . '/cache');
+    ensure_dir($cacheDir);
+    // Sanitize code to prevent directory traversal
+    $safe_code = preg_replace('/[^a-zA-Z0-9_-]/', '', $code);
+    return $cacheDir . '/temp_code_' . $safe_code . '.json';
+}
+
+function temp_code_store(string $sessionToken, int $ttlSec = 300): string {
+    $code = bin2hex(random_bytes(16));
+    $data = [
+        'session_token' => $sessionToken,
+        'created_at' => time(),
+        'expires_at' => time() + $ttlSec,
+    ];
+    $path = temp_code_file_path($code);
+    @file_put_contents($path, json_encode($data, JSON_UNESCAPED_SLASHES), LOCK_EX);
+    // Set file permissions restrictive
+    @chmod($path, 0600);
+    return $code;
+}
+
+function temp_code_retrieve_and_delete(string $code): ?string {
+    $path = temp_code_file_path($code);
+    if (!is_file($path)) return null;
+    
+    $raw = @file_get_contents($path);
+    $data = $raw ? json_decode($raw, true) : null;
+    
+    if (!is_array($data)) {
+        @unlink($path);
+        return null;
+    }
+    
+    // Check expiration
+    $expires = isset($data['expires_at']) ? (int)$data['expires_at'] : 0;
+    if ($expires < time()) {
+        @unlink($path);
+        return null;
+    }
+    
+    $token = $data['session_token'] ?? null;
+    @unlink($path);
+    return $token;
+}
 
 function token_file_path($client_id)
 {

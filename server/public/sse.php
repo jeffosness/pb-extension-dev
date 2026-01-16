@@ -10,13 +10,33 @@ require_once __DIR__ . '/api/core/bootstrap.php';
 require_once __DIR__ . '/utils.php';
 
 // -------------------------
-// Read session token
+// Read session token (via temporary code or direct token)
 // -------------------------
-$session_token =
-  $_GET['s']
-  ?? $_GET['session']
-  ?? $_GET['sessionToken']
-  ?? '';
+// For security, session tokens should be passed via temporary codes (?code=CODE)
+// which are single-use and expire after 5 minutes.
+// Direct token query params (?s=...) are deprecated but still supported for compatibility.
+$session_token = '';
+
+// Try temp code first (preferred method)
+$code = $_GET['code'] ?? $_GET['temp_code'] ?? '';
+if ($code) {
+    $session_token = temp_code_retrieve_and_delete($code);
+    if (!$session_token) {
+        echo "event: error\n";
+        echo 'data: ' . json_encode(['error' => 'Invalid or expired session code'], JSON_UNESCAPED_SLASHES) . "\n\n";
+        @ob_flush(); @flush();
+        exit;
+    }
+}
+
+// Fallback: direct token (deprecated, for backward compatibility)
+if (!$session_token) {
+    $session_token =
+      $_GET['s']
+      ?? $_GET['session']
+      ?? $_GET['sessionToken']
+      ?? '';
+}
 
 // -------------------------
 // SSE headers
