@@ -29,12 +29,21 @@ header('X-Frame-Options: DENY');
 header('Referrer-Policy: no-referrer');
 
 // -----------------------------------------------------------------------------
-// CORS (reflect Origin so credentials work)
-// - This is intentionally permissive for dev/unified extension usage.
-// - If you later want to lock it down, restrict allowed origins via config.
+// CORS (whitelist allowed origins)
+// - Only allow requests from known PhoneBurner domains
+// - Credentials are only sent if origin matches whitelist
+// - Configure via PB_CORS_ORIGINS in config.php if needed
 // -----------------------------------------------------------------------------
+$corsAllowedOrigins = defined('PB_CORS_ORIGINS')
+  ? PB_CORS_ORIGINS
+  : [
+      'https://extension-dev.phoneburner.biz',
+      'https://extension.phoneburner.biz',
+      'https://webhooktest.phoneburner.biz',
+    ];
+
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-if ($origin !== '') {
+if (in_array($origin, $corsAllowedOrigins, true)) {
   header('Access-Control-Allow-Origin: ' . $origin);
   header('Vary: Origin');
   header('Access-Control-Allow-Credentials: true');

@@ -509,11 +509,17 @@ $state = [
 
 save_session_state($session_token, $state);
 
+// -------------------------
+// Generate temporary code for secure URL (not embedding token)
+// -------------------------
+$tempCode = temp_code_store($session_token, 300);  // 5-minute TTL
+
 // Unified-style response (flat keys)
 api_ok_flat([
   'session_token'   => $session_token,
+  'temp_code'       => $tempCode,
   'dialsession_url' => $launch_url,
-  'launch_url'      => $launch_url, // optional backward compat
+  'launch_url'      => $launch_url . (strpos($launch_url, '?') ? '&' : '?') . 'code=' . urlencode($tempCode),
   'contacts_sent'   => count($pbContacts),
   'skipped'         => $skipped,
   'pb_ms'           => $pb_ms,
