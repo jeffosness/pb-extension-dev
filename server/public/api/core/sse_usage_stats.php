@@ -11,6 +11,11 @@
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../utils.php';
 
+// ✅ Rate limit: 60 requests per minute (1 per second avg)
+$data      = json_input();
+$client_id = get_client_id_or_fail($data);
+rate_limit_or_fail($client_id, 60);
+
 function safe_date_ymd(?string $s): ?string {
     if (!$s) return null;
     $s = trim($s);
