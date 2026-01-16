@@ -11,9 +11,16 @@
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../utils.php';
 
-// ✅ Rate limit: 60 requests per minute (1 per second avg)
+// ✅ Rate limit: 60 requests per minute per client_id
+// For GET requests (dashboard), use a generic "dashboard" key for rate limiting
 $data      = json_input();
-$client_id = get_client_id_or_fail($data);
+$client_id = $data ? ($data['client_id'] ?? null) : null;
+
+if (!$client_id) {
+    // For GET requests from dashboard, use a special identifier
+    $client_id = 'dashboard:' . $_SERVER['REMOTE_ADDR'];
+}
+
 rate_limit_or_fail($client_id, 60);
 
 function safe_date_ymd(?string $s): ?string {
