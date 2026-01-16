@@ -78,7 +78,11 @@ function sse_log_activity(string $event, array $data = []): void {
   $metricsDir = __DIR__ . '/metrics';
   ensure_dir_local($metricsDir);
 
-  $logFile = $metricsDir . '/sse_usage-' . date('Y-m-d') . '.log';
+  // Use safe_file_path for defensive path traversal protection
+  $logFile = safe_file_path($metricsDir, 'sse_usage-' . date('Y-m-d') . '.log');
+  if (!$logFile) {
+    return;  // Path validation failed; skip logging
+  }
 
   $record = array_merge([
     'event'   => $event,
@@ -101,7 +105,12 @@ function sse_presence_write(string $sessionHash, int $connectUnix, int $lastSeen
   $presenceDir = __DIR__ . '/metrics/sse_presence';
   ensure_dir_local($presenceDir);
 
-  $file = $presenceDir . '/' . $sessionHash . '.json';
+  // Use safe_file_path for defensive path traversal protection
+  $file = safe_file_path($presenceDir, $sessionHash . '.json');
+  if (!$file) {
+    return;  // Path validation failed; skip write
+  }
+
   $payload = [
     'session'        => $sessionHash,
     'connect_unix'   => $connectUnix,
@@ -116,8 +125,10 @@ function sse_presence_write(string $sessionHash, int $connectUnix, int $lastSeen
 }
 
 function sse_presence_delete(string $sessionHash): void {
-  $file = __DIR__ . '/metrics/sse_presence/' . $sessionHash . '.json';
-  if (is_file($file)) {
+  $presenceDir = __DIR__ . '/metrics/sse_presence';
+  // Use safe_file_path for defensive path traversal protection
+  $file = safe_file_path($presenceDir, $sessionHash . '.json');
+  if ($file && is_file($file)) {
     @unlink($file);
   }
 }

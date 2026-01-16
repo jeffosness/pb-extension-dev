@@ -126,6 +126,41 @@ function temp_code_retrieve_and_delete(string $code): ?string {
     return $token;
 }
 
+// -------------------------
+// Safe file path validation (defensive path traversal protection)
+// -------------------------
+// Ensures a constructed file path stays within the intended base directory.
+// Uses realpath() to resolve symlinks and relative path components (../).
+function safe_file_path(string $baseDir, string $relativePath): ?string {
+    // Canonicalize base directory
+    $base = @realpath($baseDir);
+    if ($base === false) {
+        return null;  // Base dir doesn't exist or isn't readable
+    }
+    
+    // Construct and canonicalize the full path
+    $full = @realpath($base . DIRECTORY_SEPARATOR . $relativePath);
+    if ($full === false) {
+        // File might not exist yet; try without realpath
+        $full = $base . DIRECTORY_SEPARATOR . $relativePath;
+        $full = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $full);
+        
+        // Verify it doesn't escape the base after simple normalization
+        $full = realpath(dirname($full)) . DIRECTORY_SEPARATOR . basename($full);
+        if ($full === false) {
+            return null;
+        }
+    }
+    
+    // Verify the resolved path is within base directory
+    $base = realpath($base);  // Re-canonicalize for comparison
+    if ($base === false || strpos($full, $base) !== 0) {
+        return null;  // Path escapes base directory
+    }
+    
+    return $full;
+}
+
 function token_file_path($client_id)
 {
     $dir = cfg()['TOKENS_DIR'];
