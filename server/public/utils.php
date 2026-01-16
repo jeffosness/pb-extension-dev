@@ -507,3 +507,67 @@ function pb_api_call($pat, $method, $path, $body = null)
     $data = json_decode($resp, true);
     return [$info, $data];
 }
+/**
+ * Rate limiting per client_id using file-based rolling window.
+ * 
+ * Tracks request timestamps in a cache file. Returns true if under limit.
+ * File format: comma-separated unix timestamps within the last 60 seconds.
+ */
+function rate_limit_check(string $client_id, int $maxPerMinute = 60): bool {
+    $cacheDir = __DIR__ . '/cache';
+    if (!is_dir($cacheDir)) {
+        @mkdir($cacheDir, 0770, true);
+    }
+    
+    $cacheFile = $cacheDir . '/rl_' . hash('sha256', (string)$client_id) . '.txt';
+    $now = time();
+    $window = $now - 60;  // 60-second rolling window
+    
+    // Read existing timestamps
+    $data = @file_get_contents($cacheFile);
+    $times = $data ? array_map('intval', explode(',', trim($data))) : [];
+    
+    // Filter to timestamps within the rolling window
+    $times = array_filter($times, fn($t) => $t > $window);
+    
+    // Check if under limit
+    $underLimit = count($times) < $maxPerMinute;
+    
+    // Add current timestamp and write back
+    $times[] = $now;
+    @file_put_contents($cacheFile, implode(',', $times), LOCK_EX);
+    
+    return $underLimit;
+}
+
+/**
+ * Enforce rate limit or fail with 429 Too Many Requests.
+ * 
+ * Call this at the start of endpoints that need rate limiting.
+ */
+function rate_limit_or_fail(string $client_id, int $maxPerMinute = 60): void {
+    if (!rate_limit_check($client_id, $maxPerMinute)) {
+        header('Retry-After: 60');
+        api_error('Rate limit exceeded', 'rate_limited', 429);
+    }
+}
+
+/**
+ * Clean up stale rate limit cache files older than 1 hour.
+ * 
+ * Call this periodically (e.g., daily cron) to prevent cache bloat.
+ */
+function cleanup_rate_limit_cache(): void {
+    $cacheDir = __DIR__ . '/cache';
+    if (!is_dir($cacheDir)) {
+        return;
+    }
+    
+    $cutoff = time() - 3600;  // 1 hour ago
+    
+    foreach (glob($cacheDir . '/rl_*.txt') as $file) {
+        if (@filemtime($file) < $cutoff) {
+            @unlink($file);
+        }
+    }
+}

@@ -10,6 +10,9 @@ require_once __DIR__ . '/../../utils.php';
 $data      = json_input();
 $client_id = get_client_id_or_fail($data);
 
+// ✅ Rate limit: 300 requests per minute (5 per second avg)
+rate_limit_or_fail($client_id, 300);
+
 $crmId = isset($data['crm_id']) ? (string)$data['crm_id'] : 'unknown';
 $host  = isset($data['host'])   ? (string)$data['host']   : '';
 $path  = isset($data['path'])   ? (string)$data['path']   : '';
