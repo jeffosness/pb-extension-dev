@@ -161,79 +161,231 @@ function safe_file_path(string $baseDir, string $relativePath): ?string {
     return $full;
 }
 
+// -------------------------
+// Token storage helpers
+// -------------------------
+
+/**
+ * Create directory securely (0700) if missing.
+ * We do NOT use ensure_dir() for tokens because it creates 0775.
+ */
+function ensure_dir_secure(string $dir): void
+{
+    if (!is_dir($dir)) {
+        mkdir($dir, 0700, true);
+    }
+    @chmod($dir, 0700);
+}
+
+/**
+ * Atomic write with safe permissions (0600).
+ */
+function atomic_write_json(string $path, array $data): void
+{
+    $dir = dirname($path);
+    ensure_dir_secure($dir);
+
+    $tmp = tempnam($dir, 'tmp_');
+    if ($tmp === false) {
+        throw new Exception('Unable to create temp file for token write');
+    }
+
+    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    if ($json === false) {
+        @unlink($tmp);
+        throw new Exception('Unable to encode token JSON');
+    }
+
+    file_put_contents($tmp, $json, LOCK_EX);
+    @chmod($tmp, 0600);
+
+    if (!rename($tmp, $path)) {
+        @unlink($tmp);
+        throw new Exception('Unable to write token file');
+    }
+
+    @chmod($path, 0600);
+}
+
+/**
+ * Return the new base tokens dir from config.
+ */
+function tokens_base_dir(): string
+{
+    $dir = cfg()['TOKENS_DIR'] ?? (__DIR__ . '/tokens');
+    return rtrim($dir, '/\\');
+}
+
+/**
+ * Legacy token dirs (old web-root location). Used only for migration fallback.
+ */
+function legacy_tokens_dir(): string
+{
+    // Apache DocumentRoot is /opt/pb-extension-dev/public, and legacy tokens lived under /public/tokens
+    return '/opt/pb-extension-dev/public/tokens';
+}
+
+/**
+ * PB token file paths (new + legacy).
+ */
+function pb_token_path_new(string $client_id): string
+{
+    $dir = tokens_base_dir() . '/pb';
+    ensure_dir_secure($dir);
+    return $dir . '/' . $client_id . '.json';
+}
+
+function pb_token_path_legacy(string $client_id): string
+{
+    return rtrim(legacy_tokens_dir(), '/\\') . '/' . $client_id . '.json';
+}
+
+/**
+ * HubSpot token file paths (new + legacy).
+ */
+function hs_token_path_new(string $client_id): string
+{
+    $dir = tokens_base_dir() . '/hubspot';
+    ensure_dir_secure($dir);
+    return $dir . '/' . $client_id . '.json';
+}
+
+function hs_token_path_legacy(string $client_id): string
+{
+    return rtrim(legacy_tokens_dir(), '/\\') . '/hubspot/' . $client_id . '.json';
+}
+
+/**
+ * Migrate a token file from legacy -> new location if present.
+ */
+function migrate_token_file_if_needed(string $legacyPath, string $newPath): void
+{
+    if (is_file($newPath)) {
+        return; // already migrated
+    }
+    if (!is_file($legacyPath)) {
+        return; // nothing to migrate
+    }
+
+    // Read legacy
+    $raw = @file_get_contents($legacyPath);
+    $data = $raw ? json_decode($raw, true) : null;
+    if (!is_array($data)) {
+        return; // don't migrate garbage
+    }
+
+    // Write to new securely, then delete legacy
+    atomic_write_json($newPath, $data);
+    @unlink($legacyPath);
+}
+
+// -------------------------
+// PhoneBurner PAT helpers
+// -------------------------
+
 function token_file_path($client_id)
 {
-    $dir = cfg()['TOKENS_DIR'];
-    ensure_dir($dir);
-    return $dir . '/' . $client_id . '.json';
+    // Kept for compatibility with existing code that calls token_file_path(),
+    // but now points to the NEW PB subdir.
+    return pb_token_path_new((string)$client_id);
 }
 
 function save_pb_token($client_id, $pat)
 {
-    $path = token_file_path($client_id);
+    $client_id = (string)$client_id;
+    $path = pb_token_path_new($client_id);
+
     $data = [
-        'pat' => $pat,
+        'pat'      => $pat,
         'saved_at' => date('c'),
     ];
-    file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT));
+
+    atomic_write_json($path, $data);
 }
 
 function load_pb_token($client_id)
 {
-    $path = token_file_path($client_id);
-    if (!file_exists($path)) {
+    $client_id = (string)$client_id;
+
+    $newPath = pb_token_path_new($client_id);
+    $legacy  = pb_token_path_legacy($client_id);
+
+    // Migrate on first use if needed
+    migrate_token_file_if_needed($legacy, $newPath);
+
+    if (!is_file($newPath)) {
         return null;
     }
-    $data = json_decode(file_get_contents($path), true);
-    return $data['pat'] ?? null;
+
+    $data = json_decode(@file_get_contents($newPath), true);
+    return is_array($data) ? ($data['pat'] ?? null) : null;
 }
 
 function clear_pb_token($client_id)
 {
-    $path = token_file_path($client_id);
-    if (file_exists($path)) {
-        unlink($path);
+    $client_id = (string)$client_id;
+    $newPath = pb_token_path_new($client_id);
+    $legacy  = pb_token_path_legacy($client_id);
+
+    if (is_file($newPath)) {
+        @unlink($newPath);
+    }
+    if (is_file($legacy)) {
+        @unlink($legacy);
     }
 }
 
 // -------------------------------------------------------------------------
-// HubSpot token helpers (per client_id, stored under TOKENS_DIR/hubspot)
+// HubSpot token helpers (per client_id)
 // -------------------------------------------------------------------------
 
 function hs_token_file_path($client_id)
 {
-    $dir = rtrim(cfg()['TOKENS_DIR'], '/\\') . '/hubspot';
-    ensure_dir($dir);
-    return $dir . '/' . $client_id . '.json';
+    // Kept for compatibility with existing code that calls hs_token_file_path(),
+    // but now points to the NEW hubspot subdir.
+    return hs_token_path_new((string)$client_id);
 }
 
 function save_hs_tokens($client_id, array $tokens)
 {
-    $path = hs_token_file_path($client_id);
+    $client_id = (string)$client_id;
+    $path = hs_token_path_new($client_id);
+
     $tokens['saved_at'] = date('c');
-    file_put_contents($path, json_encode($tokens, JSON_PRETTY_PRINT));
+    atomic_write_json($path, $tokens);
 }
 
 function load_hs_tokens($client_id)
 {
-    $path = hs_token_file_path($client_id);
-    if (!file_exists($path)) {
+    $client_id = (string)$client_id;
+
+    $newPath = hs_token_path_new($client_id);
+    $legacy  = hs_token_path_legacy($client_id);
+
+    migrate_token_file_if_needed($legacy, $newPath);
+
+    if (!is_file($newPath)) {
         return null;
     }
-    $data = json_decode(file_get_contents($path), true);
-    if (!is_array($data)) {
-        return null;
-    }
-    return $data;
+
+    $data = json_decode(@file_get_contents($newPath), true);
+    return is_array($data) ? $data : null;
 }
 
 function clear_hs_tokens($client_id)
 {
-    $path = hs_token_file_path($client_id);
-    if (file_exists($path)) {
-        @unlink($path);
+    $client_id = (string)$client_id;
+    $newPath = hs_token_path_new($client_id);
+    $legacy  = hs_token_path_legacy($client_id);
+
+    if (is_file($newPath)) {
+        @unlink($newPath);
+    }
+    if (is_file($legacy)) {
+        @unlink($legacy);
     }
 }
+
 
 
 function get_user_settings_dir()
