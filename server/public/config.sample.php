@@ -7,7 +7,7 @@ return [
     'BASE_URL' => 'https://extension-dev.phoneburner.biz',
 
     // Where to store PhoneBurner PATs (per client_id).
-    'TOKENS_DIR' => __DIR__ . '/tokens',
+    'TOKENS_DIR' => '/var/lib/pb-extension-dev/tokens',
 
     // Where to store per-dial-session JSON state files.
     'SESSIONS_DIR' => __DIR__ . '/sessions',
