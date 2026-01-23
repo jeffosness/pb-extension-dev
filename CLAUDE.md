@@ -111,11 +111,11 @@
 
 ### Three-Level CRM Integration Model
 
-| Level | Method | CRMs | Capabilities |
-|-------|--------|------|--------------|
-| **L1** | Generic HTML scraping | Salesforce, Zoho, Monday.com | Extract from HTML tables/ARIA grids |
-| **L2** | CRM-specific scraping | Pipedrive | Custom DOM selectors per CRM |
-| **L3** | Full API integration | HubSpot | OAuth + server-side API calls + associations |
+| Level  | Method                | CRMs                         | Capabilities                                 |
+| ------ | --------------------- | ---------------------------- | -------------------------------------------- |
+| **L1** | Generic HTML scraping | Salesforce, Zoho, Monday.com | Extract from HTML tables/ARIA grids          |
+| **L2** | CRM-specific scraping | Pipedrive                    | Custom DOM selectors per CRM                 |
+| **L3** | Full API integration  | HubSpot                      | OAuth + server-side API calls + associations |
 
 **Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
 
@@ -174,11 +174,13 @@ $client_id = get_client_id_or_fail($data); // Validates + sanitizes
 ### Known Remaining Security Issues
 
 **MEDIUM RISK (fix before production):**
+
 1. Session state file permissions are 0777 — should be 0700/0600
 2. Webhooks lack origin validation — add HMAC signature or origin check
 3. Webhook session tokens in URLs — consider webhook signature verification
 
 **LOW RISK (harden when time permits):**
+
 1. Date validation allows future dates
 2. No cleanup of stale presence files
 3. No CSP on extension popup
@@ -240,6 +242,7 @@ state.php
 ### bootstrap.php (API Framework)
 
 **Include at top of EVERY API endpoint:**
+
 ```php
 <?php
 require_once __DIR__ . '/../../config.php';
@@ -248,12 +251,14 @@ require_once __DIR__ . '/bootstrap.php';
 ```
 
 **Key Features:**
+
 - CORS whitelist (configurable via `PB_CORS_ORIGINS`)
 - Security headers (X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
 - Automatic PII redaction in logging
 - Structured JSON responses
 
 **Response Helpers:**
+
 ```php
 api_ok($data, $status = 200);           // { "ok": true, "data": {...} }
 api_ok_flat($data, $status = 200);      // { "ok": true, ...flatKeys }
@@ -261,6 +266,7 @@ api_error($msg, $code, $status, $extra);// { "ok": false, "error": {...} }
 ```
 
 **Logging:**
+
 ```php
 api_log('event_name', [
   'client_id_hash' => substr(hash('sha256', $client_id), 0, 12),
@@ -273,19 +279,20 @@ api_log('event_name', [
 
 **Critical Functions:**
 
-| Function | Purpose | Security Level |
-|----------|---------|----------------|
-| `safe_file_path($base, $relative)` | Prevent path traversal | **CRITICAL** |
-| `atomic_write_json($path, $data)` | Secure token storage | **CRITICAL** |
-| `temp_code_store($token, $ttl)` | Generate single-use codes | **CRITICAL** |
-| `temp_code_retrieve_and_delete($code)` | Exchange code for token | **CRITICAL** |
-| `redact_pii_recursive($data)` | Scrub sensitive data | **CRITICAL** |
-| `rate_limit_or_fail($id, $max)` | Enforce rate limits | **HIGH** |
-| `get_client_id_or_fail($data)` | Validate client ID | **HIGH** |
-| `load_pb_token($client_id)` | Load PAT (migrates legacy) | **HIGH** |
-| `load_hs_token($client_id)` | Load HubSpot tokens | **HIGH** |
+| Function                               | Purpose                    | Security Level |
+| -------------------------------------- | -------------------------- | -------------- |
+| `safe_file_path($base, $relative)`     | Prevent path traversal     | **CRITICAL**   |
+| `atomic_write_json($path, $data)`      | Secure token storage       | **CRITICAL**   |
+| `temp_code_store($token, $ttl)`        | Generate single-use codes  | **CRITICAL**   |
+| `temp_code_retrieve_and_delete($code)` | Exchange code for token    | **CRITICAL**   |
+| `redact_pii_recursive($data)`          | Scrub sensitive data       | **CRITICAL**   |
+| `rate_limit_or_fail($id, $max)`        | Enforce rate limits        | **HIGH**       |
+| `get_client_id_or_fail($data)`         | Validate client ID         | **HIGH**       |
+| `load_pb_token($client_id)`            | Load PAT (migrates legacy) | **HIGH**       |
+| `load_hs_token($client_id)`            | Load HubSpot tokens        | **HIGH**       |
 
 **Token Migration Logic:**
+
 ```php
 // Automatically migrates tokens from old location (inside webroot)
 // to new location (outside webroot) on first load
@@ -314,6 +321,7 @@ Return profile to extension
 ```
 
 **Implementation:**
+
 ```php
 // In oauth_pb_save.php
 $pat = $data['pat'] ?? null;
@@ -338,6 +346,7 @@ atomic_write_json(pb_token_path($client_id), [
 ```
 
 **Token Refresh:**
+
 ```php
 // Automatically refresh expired tokens
 $hsToken = load_hs_token($client_id);
@@ -351,6 +360,7 @@ if (time() > $hsToken['expires_at']) {
 **NEVER expose session tokens directly in URLs.**
 
 **Correct Pattern:**
+
 ```php
 // 1. Create session token
 $session_token = bin2hex(random_bytes(16)); // 32-char hex
@@ -400,7 +410,9 @@ Location: `server/public/sessions/{session_token}.json`
   },
 
   "contacts_map": {
-    "{contactId}": { /* contact details */ }
+    "{contactId}": {
+      /* contact details */
+    }
   }
 }
 ```
@@ -418,6 +430,7 @@ save_session_state($session_token, $state);
 **Purpose:** Real-time follow-me updates from PhoneBurner webhooks to extension overlay.
 
 **Connection Flow:**
+
 ```
 Browser: new EventSource('/sse.php?code=temp_code')
   ↓
@@ -431,6 +444,7 @@ Browser: content.js receives update → render overlay → navigate CRM
 ```
 
 **Implementation Notes:**
+
 - SSE endpoint opts out of JSON response via `PB_BOOTSTRAP_NO_JSON`
 - Uses `text/event-stream` content type
 - Emits `event: update` with JSON payload
@@ -440,6 +454,7 @@ Browser: content.js receives update → render overlay → navigate CRM
 ### Webhook Handlers
 
 **contact_displayed.php** — PhoneBurner sends when now calling a contact
+
 ```php
 // PhoneBurner calls: /webhooks/contact_displayed.php?s=session_token
 // Payload: { external_crm_data: { crm_identifier: "123" } }
@@ -447,6 +462,7 @@ Browser: content.js receives update → render overlay → navigate CRM
 ```
 
 **call_done.php** — PhoneBurner sends when call finishes
+
 ```php
 // Payload: { status: "Set Appointment", duration: 245, connected: "1" }
 // Action: Update stats, last_call, daily_stats/{member_user_id}.json
@@ -461,6 +477,7 @@ Browser: content.js receives update → render overlay → navigate CRM
 ### Before Writing Code
 
 1. **Search for existing implementation**
+
    ```bash
    # Find similar endpoints
    grep -r "function_name" server/public/
@@ -475,6 +492,7 @@ Browser: content.js receives update → render overlay → navigate CRM
    - Look in `content.js` for CRM detection patterns
 
 3. **Trace call sites if changing shared code**
+
    ```bash
    # Find all usages
    grep -r "safe_file_path" server/public/
@@ -487,6 +505,7 @@ Browser: content.js receives update → render overlay → navigate CRM
 ### After Writing Code
 
 1. **Run security checks**
+
    ```bash
    # Check for exposed secrets
    git diff | grep -iE "(password|token|secret|key)"
@@ -559,15 +578,15 @@ curl -X POST http://127.0.0.1:8000/api/core/state.php \
 
 ```javascript
 // Check CRM context
-chrome.tabs.query({active: true}, (tabs) => {
-  chrome.tabs.sendMessage(tabs[0].id, {type: "GET_CONTEXT"}, console.log);
+chrome.tabs.query({ active: true }, (tabs) => {
+  chrome.tabs.sendMessage(tabs[0].id, { type: "GET_CONTEXT" }, console.log);
 });
 
 // Get session status
-chrome.runtime.sendMessage({type: "GET_ACTIVE_SESSION_FOR_TAB"}, console.log);
+chrome.runtime.sendMessage({ type: "GET_ACTIVE_SESSION_FOR_TAB" }, console.log);
 
 // Get stored client ID
-chrome.storage.local.get(['pb_unified_client_id'], console.log);
+chrome.storage.local.get(["pb_unified_client_id"], console.log);
 ```
 
 ### Server Log Monitoring
@@ -585,14 +604,14 @@ cat server/public/sessions/{session_token}.json | jq
 
 ### Common Issues & Solutions
 
-| Issue | Diagnosis | Solution |
-|-------|-----------|----------|
-| "PAT invalid" | PAT expired or wrong format | Re-save PAT in popup |
-| "No dialable contacts" | Missing phone/email in scraped data | Check content.js scanner output |
-| SSE not connecting | CORS or permissions issue | Check browser console + Network tab |
-| Webhooks not firing | PhoneBurner config issue | Verify webhook URLs in PB admin |
-| Session file not found | Session token mismatch | Check logs for session creation error |
-| CORS error | Origin not whitelisted | Add origin to `PB_CORS_ORIGINS` in config.php |
+| Issue                  | Diagnosis                           | Solution                                      |
+| ---------------------- | ----------------------------------- | --------------------------------------------- |
+| "PAT invalid"          | PAT expired or wrong format         | Re-save PAT in popup                          |
+| "No dialable contacts" | Missing phone/email in scraped data | Check content.js scanner output               |
+| SSE not connecting     | CORS or permissions issue           | Check browser console + Network tab           |
+| Webhooks not firing    | PhoneBurner config issue            | Verify webhook URLs in PB admin               |
+| Session file not found | Session token mismatch              | Check logs for session creation error         |
+| CORS error             | Origin not whitelisted              | Add origin to `PB_CORS_ORIGINS` in config.php |
 
 ---
 
@@ -620,6 +639,7 @@ data: { current: {...}, stats: {...}, last_call: {...} }
 ### Message Types (Extension Internal)
 
 Chrome extension message types (handled in `background.js`):
+
 - `GET_CONTEXT` — Get current CRM context
 - `SCAN_AND_LAUNCH` — Scan page + create dial session (L1/L2)
 - `HS_LAUNCH_FROM_SELECTED` — Create dial from selected records (L3)
@@ -635,15 +655,22 @@ Chrome extension message types (handled in `background.js`):
 ### Session State Schema
 
 Session files must always have:
+
 ```json
 {
   "session_token": "string",
   "dialsession_id": "string",
   "client_id": "string",
   "created_at": "ISO8601",
-  "current": { /* current contact */ },
-  "stats": { /* aggregate stats */ },
-  "contacts_map": { /* id -> contact */ }
+  "current": {
+    /* current contact */
+  },
+  "stats": {
+    /* aggregate stats */
+  },
+  "contacts_map": {
+    /* id -> contact */
+  }
 }
 ```
 
@@ -652,6 +679,7 @@ Session files must always have:
 ### Webhook Payload Parsing
 
 PhoneBurner sends:
+
 ```json
 // contact_displayed
 {
@@ -674,9 +702,10 @@ PhoneBurner sends:
 ### Token File Format
 
 All token files must include:
+
 ```json
 {
-  "created_at": "ISO8601",
+  "created_at": "ISO8601"
   // ... provider-specific fields
 }
 ```
@@ -690,6 +719,7 @@ All token files must include:
 ### Adding L1/L2 Provider (HTML Scraping)
 
 **Step 1:** Add to CRM registry in `content.js`
+
 ```javascript
 const CRM_REGISTRY = [
   {
@@ -703,22 +733,26 @@ const CRM_REGISTRY = [
 ```
 
 **Step 2:** Implement scanner function
+
 ```javascript
 function scanMyNewCrmContacts() {
   // Find table/list in DOM
-  const rows = document.querySelectorAll('.crm-table tr');
+  const rows = document.querySelectorAll(".crm-table tr");
 
-  return Array.from(rows).map(row => ({
-    name: row.querySelector('.name').textContent,
-    phone: row.querySelector('.phone').textContent,
-    email: row.querySelector('.email').textContent,
-    record_url: row.querySelector('a').href,
-    crm_identifier: extractIdFromUrl(row.querySelector('a').href),
-  })).filter(c => c.phone || c.email); // Must have contact method
+  return Array.from(rows)
+    .map((row) => ({
+      name: row.querySelector(".name").textContent,
+      phone: row.querySelector(".phone").textContent,
+      email: row.querySelector(".email").textContent,
+      record_url: row.querySelector("a").href,
+      crm_identifier: extractIdFromUrl(row.querySelector("a").href),
+    }))
+    .filter((c) => c.phone || c.email); // Must have contact method
 }
 ```
 
 **Step 3:** Add to dispatcher
+
 ```javascript
 function scanPageForContacts() {
   // ...
@@ -730,17 +764,20 @@ function scanPageForContacts() {
 ```
 
 **Step 4:** Test via generic endpoint
+
 - Use `/api/crm/generic/dialsession_from_scan.php`
 - No server changes needed (generic endpoint handles all L1/L2)
 
 ### Adding L3 Provider (Full API Integration)
 
 **Step 1:** Create provider directory
+
 ```bash
 mkdir -p server/public/api/crm/mynewcrm
 ```
 
 **Step 2:** Implement OAuth flow
+
 ```php
 // oauth_mynewcrm_start.php
 $auth_url = "https://mynewcrm.com/oauth/authorize?" . http_build_query([
@@ -763,6 +800,7 @@ atomic_write_json(mynewcrm_token_path($client_id), $token_response);
 ```
 
 **Step 3:** Implement token refresh
+
 ```php
 function mynewcrm_refresh_access_token_or_fail($client_id) {
   $token = load_mynewcrm_token($client_id);
@@ -773,6 +811,7 @@ function mynewcrm_refresh_access_token_or_fail($client_id) {
 ```
 
 **Step 4:** Implement dial session creation
+
 ```php
 // pb_dialsession_selection.php
 $access_token = mynewcrm_refresh_access_token_or_fail($client_id);
@@ -798,10 +837,11 @@ $pb_response = pb_create_dialsession($pat, $normalized, $contactsMap);
 ```
 
 **Step 5:** Update extension detection
+
 ```javascript
 // In background.js → detectCrmFromUrl()
-if (host.includes('mynewcrm.example.com')) {
-  return { crmId: 'mynewcrm', crmName: 'My New CRM', level: 3 };
+if (host.includes("mynewcrm.example.com")) {
+  return { crmId: "mynewcrm", crmName: "My New CRM", level: 3 };
 }
 ```
 
@@ -877,19 +917,19 @@ return [
 ```json
 {
   "version": "0.3.0",
-  "host_permissions": [
-    "https://extension-dev.phoneburner.biz/*"
-  ]
+  "host_permissions": ["https://extension-dev.phoneburner.biz/*"]
 }
 ```
 
 Update `BASE_URL` in:
+
 - `chrome-extension/background.js`
 - `chrome-extension/popup.js`
 
 ### PhoneBurner Webhook Configuration
 
 Configure webhooks in PhoneBurner admin:
+
 - `api_contact_displayed` → `https://extension-dev.phoneburner.biz/webhooks/contact_displayed.php`
 - `api_calldone` → `https://extension-dev.phoneburner.biz/webhooks/call_done.php`
 
@@ -903,6 +943,7 @@ Configure webhooks in PhoneBurner admin:
 ### Monitoring & Maintenance
 
 **Log Rotation:**
+
 ```bash
 # /etc/logrotate.d/pb-extension
 /opt/pb-extension-dev/var/log/*.log {
@@ -916,6 +957,7 @@ Configure webhooks in PhoneBurner admin:
 ```
 
 **Stale File Cleanup (cron):**
+
 ```bash
 # Cleanup old presence files (daily at 3am)
 0 3 * * * find /opt/pb-extension-dev/public/metrics/sse_presence -type f -mtime +1 -delete
@@ -940,12 +982,14 @@ Configure webhooks in PhoneBurner admin:
 ### Privacy Policy Requirements
 
 Keep these answers in sync:
+
 1. `chrome-extension/privacy.html`
 2. Chrome Web Store privacy declaration
 3. In-extension onboarding copy
 4. Actual runtime behavior
 
 **Current Privacy Stance:**
+
 - ✅ Collect: CRM contact data (name, phone, email) for dial session creation
 - ✅ Store: PhoneBurner PAT, HubSpot OAuth tokens (local only, not transmitted to third parties)
 - ❌ Sell or share: No data sold or shared with third parties
@@ -1039,6 +1083,7 @@ Extension:
 ## Questions or Clarifications?
 
 If anything in this guide is unclear or you need expanded rules for:
+
 - Naming conventions
 - Linting setup
 - Test commands

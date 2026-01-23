@@ -26,14 +26,17 @@ const DEFAULT_ICON_PATH = {
 // Persist currentSession
 function saveCurrentSessionToStorage() {
   return new Promise((resolve) => {
-    chrome.storage.local.set({ pb_current_session: currentSession }, () => resolve());
+    chrome.storage.local.set({ pb_current_session: currentSession }, () =>
+      resolve(),
+    );
   });
 }
 
 function loadCurrentSessionFromStorage() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["pb_current_session"], (res) => {
-      if (res && res.pb_current_session) currentSession = res.pb_current_session;
+      if (res && res.pb_current_session)
+        currentSession = res.pb_current_session;
       resolve(currentSession);
     });
   });
@@ -52,13 +55,25 @@ function deriveHostPathFromTabUrl(tabUrl) {
 // Lightweight CRM detection WITHOUT content.js
 function detectCrmFromUrl(tabUrl) {
   const { host, path } = deriveHostPathFromTabUrl(tabUrl || "");
-  if (!host) return { host: "", path: "", crmId: "generic", crmName: "Unknown", level: 1 };
+  if (!host)
+    return {
+      host: "",
+      path: "",
+      crmId: "generic",
+      crmName: "Unknown",
+      level: 1,
+    };
 
-  if (host.includes("app.hubspot.com")) return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3 };
-  if (host.includes("pipedrive.com")) return { host, path, crmId: "pipedrive", crmName: "Pipedrive", level: 2 };
-  if (host.includes("lightning.force.com")) return { host, path, crmId: "salesforce", crmName: "Salesforce", level: 1 };
-  if (host.includes("crm.zoho.com")) return { host, path, crmId: "zoho", crmName: "Zoho CRM", level: 1 };
-  if (host.includes("monday.com")) return { host, path, crmId: "monday", crmName: "monday.com", level: 1 };
+  if (host.includes("app.hubspot.com"))
+    return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3 };
+  if (host.includes("pipedrive.com"))
+    return { host, path, crmId: "pipedrive", crmName: "Pipedrive", level: 2 };
+  if (host.includes("lightning.force.com"))
+    return { host, path, crmId: "salesforce", crmName: "Salesforce", level: 1 };
+  if (host.includes("crm.zoho.com"))
+    return { host, path, crmId: "zoho", crmName: "Zoho CRM", level: 1 };
+  if (host.includes("monday.com"))
+    return { host, path, crmId: "monday", crmName: "monday.com", level: 1 };
 
   return { host, path, crmId: "generic", crmName: host, level: 1 };
 }
@@ -69,10 +84,15 @@ async function ensureContentScript(tabId) {
 
   const pong = await new Promise((resolve) => {
     try {
-      chrome.tabs.sendMessage(tabId, { type: "PING" }, { frameId: 0 }, (res) => {
-        if (chrome.runtime.lastError) return resolve(null);
-        resolve(res);
-      });
+      chrome.tabs.sendMessage(
+        tabId,
+        { type: "PING" },
+        { frameId: 0 },
+        (res) => {
+          if (chrome.runtime.lastError) return resolve(null);
+          resolve(res);
+        },
+      );
     } catch (e) {
       resolve(null);
     }
@@ -102,9 +122,13 @@ async function registerSessionForTab(tabId, sessionToken, backendBase) {
   try {
     chrome.tabs.sendMessage(
       tabId,
-      { type: "START_FOLLOW_SESSION", sessionToken, backendBase: currentSession.backendBase },
+      {
+        type: "START_FOLLOW_SESSION",
+        sessionToken,
+        backendBase: currentSession.backendBase,
+      },
       { frameId: 0 },
-      () => {}
+      () => {},
     );
   } catch (e) {}
 }
@@ -123,7 +147,9 @@ async function getClientId() {
           typeof crypto !== "undefined" && crypto.randomUUID
             ? crypto.randomUUID()
             : String(Date.now());
-        chrome.storage.local.set({ pb_unified_client_id: id }, () => resolve(id));
+        chrome.storage.local.set({ pb_unified_client_id: id }, () =>
+          resolve(id),
+        );
       }
     });
   });
@@ -171,12 +197,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (tabId == null) return sendResponse({ context: null });
 
         // Prefer context from injected content.js if we have it
-        if (Object.prototype.hasOwnProperty.call(tabContexts, tabId) && tabContexts[tabId]) {
+        if (
+          Object.prototype.hasOwnProperty.call(tabContexts, tabId) &&
+          tabContexts[tabId]
+        ) {
           return sendResponse({ context: tabContexts[tabId] });
         }
 
         // Otherwise infer from the active tab URL
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const [tab] = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
         const inferred = detectCrmFromUrl(tab?.url || "");
         return sendResponse({ context: inferred });
       } catch {
@@ -206,10 +238,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           { frameId: 0 },
           (resp) => {
             if (chrome.runtime.lastError) {
-              return sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+              return sendResponse({
+                ok: false,
+                error: chrome.runtime.lastError.message,
+              });
             }
             return sendResponse(resp || { ok: true });
-          }
+          },
         );
 
         return; // sendResponse happens in callback
@@ -226,7 +261,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           raw?.data?.phoneburner?.connected === 1 ||
           raw?.data?.phoneburner?.connected === "1" ||
           raw?.data?.phoneburner?.connected === "true" ||
-
           raw?.phoneburner?.connected === true ||
           raw?.phoneburner?.connected === 1 ||
           raw?.phoneburner?.connected === "1" ||
@@ -271,10 +305,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // HubSpot L3: launch from selected
       // -------------------------
       if (msg.type === "HS_LAUNCH_FROM_SELECTED") {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        const hubTab = (tabs || []).find((t) => (t.url || "").includes("app.hubspot.com"));
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const hubTab = (tabs || []).find((t) =>
+          (t.url || "").includes("app.hubspot.com"),
+        );
         if (!hubTab || !hubTab.id) {
-          return sendResponse({ ok: false, error: "Open a HubSpot view with selected records." });
+          return sendResponse({
+            ok: false,
+            error: "Open a HubSpot view with selected records.",
+          });
         }
 
         await ensureContentScript(hubTab.id);
@@ -285,21 +327,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             { type: "HS_GET_SELECTED_IDS" },
             { frameId: 0 },
             (res) => {
-              if (chrome.runtime.lastError) return resolve({ error: chrome.runtime.lastError.message });
+              if (chrome.runtime.lastError)
+                return resolve({ error: chrome.runtime.lastError.message });
               resolve(res);
-            }
+            },
           );
         });
 
         if (!selected || selected.error) {
-          return sendResponse({ ok: false, error: selected?.error || "Could not read HubSpot selection." });
+          return sendResponse({
+            ok: false,
+            error: selected?.error || "Could not read HubSpot selection.",
+          });
         }
 
         const ids = Array.isArray(selected.ids) ? selected.ids : [];
         const objectType = selected.objectType || "contact";
         const portalId = selected.portalId || null;
 
-        if (!ids.length) return sendResponse({ ok: false, error: "No records selected in this view." });
+        if (!ids.length)
+          return sendResponse({
+            ok: false,
+            error: "No records selected in this view.",
+          });
 
         // Track usage (best effort)
         try {
@@ -331,7 +381,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           },
         });
 
-        const sessionToken = resp.session_token || resp.data?.session_token || null;
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
         const dialUrl =
           resp.launch_url ||
           resp.dialsession_url ||
@@ -340,7 +391,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           null;
 
         if (!sessionToken || !dialUrl) {
-          return sendResponse({ ok: false, error: resp?.error || "Failed to create dial session.", details: resp });
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session.",
+            details: resp,
+          });
         }
 
         await registerSessionForTab(hubTab.id, sessionToken, BASE_URL);
@@ -363,10 +418,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const { contacts, context } = msg || {};
         const ctx = context || {};
 
-        const senderTabId = sender.tab && sender.tab.id != null ? sender.tab.id : null;
-        const tabCtx = senderTabId != null ? tabContexts[senderTabId] || null : null;
+        const senderTabId =
+          sender.tab && sender.tab.id != null ? sender.tab.id : null;
+        const tabCtx =
+          senderTabId != null ? tabContexts[senderTabId] || null : null;
 
-        const crmId = (tabCtx && tabCtx.crmId) || (ctx && ctx.crm_id) || "generic";
+        const crmId =
+          (tabCtx && tabCtx.crmId) || (ctx && ctx.crm_id) || "generic";
 
         let host = (tabCtx && tabCtx.host) || "";
         let path = (tabCtx && tabCtx.path) || "";
@@ -379,16 +437,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const level = (tabCtx && tabCtx.level) || 1;
 
         try {
-          await api("core/track_crm_usage.php", { crm_id: crmId, host, path, level });
+          await api("core/track_crm_usage.php", {
+            crm_id: crmId,
+            host,
+            path,
+            level,
+          });
         } catch (e) {}
 
-        const resp = await api("crm/generic/dialsession_from_scan.php", { contacts, context: ctx });
+        const resp = await api("crm/generic/dialsession_from_scan.php", {
+          contacts,
+          context: ctx,
+        });
 
         const sessionToken = resp.session_token || null;
         const dialUrl = resp.launch_url || resp.dialsession_url || null;
 
         if (sessionToken && dialUrl) {
-          const tabId = sender.tab && sender.tab.id != null ? sender.tab.id : null;
+          const tabId =
+            sender.tab && sender.tab.id != null ? sender.tab.id : null;
           await registerSessionForTab(tabId, sessionToken, BASE_URL);
 
           chrome.windows.create({
@@ -404,7 +471,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         return sendResponse({
           ok: false,
-          error: resp.error || "Failed to create dial session (missing token/url).",
+          error:
+            resp.error || "Failed to create dial session (missing token/url).",
           details: resp,
         });
       }
@@ -416,7 +484,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await loadCurrentSessionFromStorage();
 
         const senderTabId = sender.tab && sender.tab.id;
-        if (currentSession.token && currentSession.tabId != null && senderTabId === currentSession.tabId) {
+        if (
+          currentSession.token &&
+          currentSession.tabId != null &&
+          senderTabId === currentSession.tabId
+        ) {
           return sendResponse({
             ok: true,
             sessionToken: currentSession.token,
@@ -438,15 +510,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === "LOAD_SERVER_GOALS") {
         const resp = await api("core/user_settings_get.php");
         if (!resp || !resp.ok) {
-          return sendResponse({ ok: false, error: resp?.error || "Unable to load goals from server" });
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Unable to load goals from server",
+          });
         }
         const goals = resp.goals || {};
-        return sendResponse({ ok: true, primary: goals.primary || null, secondary: goals.secondary || null });
+        return sendResponse({
+          ok: true,
+          primary: goals.primary || null,
+          secondary: goals.secondary || null,
+        });
       }
 
       if (msg.type === "SAVE_GOALS") {
         const { goals } = msg;
-        const resp = await api("core/user_settings_save.php", { goals: goals || {} });
+        const resp = await api("core/user_settings_save.php", {
+          goals: goals || {},
+        });
         return sendResponse(resp);
       }
 
@@ -462,7 +543,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Clean up contexts when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (Object.prototype.hasOwnProperty.call(tabContexts, tabId)) delete tabContexts[tabId];
+  if (Object.prototype.hasOwnProperty.call(tabContexts, tabId))
+    delete tabContexts[tabId];
 });
 
 // Re-inject after navigation/reload IF:
@@ -488,7 +570,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
         restore: true,
       },
       { frameId: 0 },
-      () => {}
+      () => {},
     );
   } catch (e) {}
 });
