@@ -108,16 +108,19 @@ let goalConfig = {
 function loadGoalConfig() {
   try {
     if (!chrome?.storage?.local) return;
-    chrome.storage.local.get(["pb_goal_primary", "pb_goal_secondary"], (res) => {
-      if (res && typeof res === "object") {
-        if (res.pb_goal_primary && res.pb_goal_primary.trim()) {
-          goalConfig.primary = res.pb_goal_primary.trim();
+    chrome.storage.local.get(
+      ["pb_goal_primary", "pb_goal_secondary"],
+      (res) => {
+        if (res && typeof res === "object") {
+          if (res.pb_goal_primary && res.pb_goal_primary.trim()) {
+            goalConfig.primary = res.pb_goal_primary.trim();
+          }
+          if (res.pb_goal_secondary && res.pb_goal_secondary.trim()) {
+            goalConfig.secondary = res.pb_goal_secondary.trim();
+          }
         }
-        if (res.pb_goal_secondary && res.pb_goal_secondary.trim()) {
-          goalConfig.secondary = res.pb_goal_secondary.trim();
-        }
-      }
-    });
+      },
+    );
   } catch (e) {
     console.error("Error loading goal config", e);
   }
@@ -129,7 +132,10 @@ function syncGoalsFromServer() {
 
     chrome.runtime.sendMessage({ type: "LOAD_SERVER_GOALS" }, (resp) => {
       if (chrome.runtime.lastError) {
-        console.warn("LOAD_SERVER_GOALS error:", chrome.runtime.lastError.message);
+        console.warn(
+          "LOAD_SERVER_GOALS error:",
+          chrome.runtime.lastError.message,
+        );
         return;
       }
       if (!resp || !resp.ok) return;
@@ -207,9 +213,9 @@ function isRowSelectedForActiveCrm(row) {
 
 function findRecordUrlInRow(row) {
   const link =
-    row.querySelector('a[data-recordid]') ||
+    row.querySelector("a[data-recordid]") ||
     row.querySelector(
-      'a[href*="/lightning/r/"], a[href*="/Contact/"], a[href^="/"], a[href^="http"]'
+      'a[href*="/lightning/r/"], a[href*="/Contact/"], a[href^="/"], a[href^="http"]',
     );
 
   if (!link) return null;
@@ -232,11 +238,14 @@ function looksLikePhone(text) {
 function extractPhoneFromRowFallback(row, currentPhone) {
   if (currentPhone && currentPhone.trim()) return currentPhone;
 
-  const anchor = row.querySelector('a[data-phone], a[class*="call"], a[class*="phone"]');
+  const anchor = row.querySelector(
+    'a[data-phone], a[class*="call"], a[class*="phone"]',
+  );
   if (anchor) {
     const attrPhone = anchor.getAttribute("data-phone");
     if (attrPhone && attrPhone.trim()) return attrPhone.trim();
-    if (anchor.innerText && anchor.innerText.trim()) return anchor.innerText.trim();
+    if (anchor.innerText && anchor.innerText.trim())
+      return anchor.innerText.trim();
   }
 
   return currentPhone;
@@ -306,7 +315,9 @@ function extractIdFromHrefPath(href) {
   if (!href) return null;
   try {
     const url = new URL(href, window.location.origin);
-    const m = url.pathname.match(/\/(person|contact|lead|candidate|record)\/(\d+)/i);
+    const m = url.pathname.match(
+      /\/(person|contact|lead|candidate|record)\/(\d+)/i,
+    );
     if (m && m[2]) return m[2];
   } catch (e) {}
   return null;
@@ -363,10 +374,18 @@ function scanHtmlTableContacts() {
     const headerRow = t.querySelector("thead tr") || t.querySelector("tr");
     if (!headerRow) continue;
 
-    const headerCells = Array.from(headerRow.children).map((th) => th.innerText.trim());
+    const headerCells = Array.from(headerRow.children).map((th) =>
+      th.innerText.trim(),
+    );
     if (!headerCells.length) continue;
 
-    let nameIdx = guessColumnIndex(headerCells, ["name", "contact", "person", "candidate", "full name"]);
+    let nameIdx = guessColumnIndex(headerCells, [
+      "name",
+      "contact",
+      "person",
+      "candidate",
+      "full name",
+    ]);
     let phoneIdx = guessColumnIndex(headerCells, [
       "phone",
       "mobile",
@@ -449,10 +468,13 @@ function scanHtmlTableContacts() {
     const cells = Array.from(row.children);
     if (!cells.length) return;
 
-    const name = nameIdx >= 0 && cells[nameIdx] ? cells[nameIdx].innerText.trim() : "";
+    const name =
+      nameIdx >= 0 && cells[nameIdx] ? cells[nameIdx].innerText.trim() : "";
 
-    let phone = phoneIdx >= 0 && cells[phoneIdx] ? cells[phoneIdx].innerText.trim() : "";
-    const email = emailIdx >= 0 && cells[emailIdx] ? cells[emailIdx].innerText.trim() : "";
+    let phone =
+      phoneIdx >= 0 && cells[phoneIdx] ? cells[phoneIdx].innerText.trim() : "";
+    const email =
+      emailIdx >= 0 && cells[emailIdx] ? cells[emailIdx].innerText.trim() : "";
 
     phone = extractPhoneFromRowFallback(row, phone);
 
@@ -481,7 +503,9 @@ function scanHtmlTableContacts() {
 // ============================================================================
 
 function scanAriaGridContacts() {
-  const grid = document.querySelector('[role="grid"]') || document.querySelector('[role="treegrid"]');
+  const grid =
+    document.querySelector('[role="grid"]') ||
+    document.querySelector('[role="treegrid"]');
   if (!grid) return [];
 
   const rowEls = Array.from(grid.querySelectorAll('[role="row"]'));
@@ -489,7 +513,7 @@ function scanAriaGridContacts() {
 
   const headerRow = rowEls[0];
   const headerCells = Array.from(
-    headerRow.querySelectorAll('[role="columnheader"], [role="gridcell"]')
+    headerRow.querySelectorAll('[role="columnheader"], [role="gridcell"]'),
   ).map((el) => el.innerText.trim());
 
   const nameIdx = guessColumnIndex(headerCells, ["name", "contact", "person"]);
@@ -502,12 +526,17 @@ function scanAriaGridContacts() {
 
   const contacts = [];
   rowsToUse.forEach((row, idx) => {
-    const cells = Array.from(row.querySelectorAll('[role="gridcell"], [role="columnheader"]'));
+    const cells = Array.from(
+      row.querySelectorAll('[role="gridcell"], [role="columnheader"]'),
+    );
     if (!cells.length) return;
 
-    const name = nameIdx >= 0 && cells[nameIdx] ? cells[nameIdx].innerText.trim() : "";
-    let phone = phoneIdx >= 0 && cells[phoneIdx] ? cells[phoneIdx].innerText.trim() : "";
-    const email = emailIdx >= 0 && cells[emailIdx] ? cells[emailIdx].innerText.trim() : "";
+    const name =
+      nameIdx >= 0 && cells[nameIdx] ? cells[nameIdx].innerText.trim() : "";
+    let phone =
+      phoneIdx >= 0 && cells[phoneIdx] ? cells[phoneIdx].innerText.trim() : "";
+    const email =
+      emailIdx >= 0 && cells[emailIdx] ? cells[emailIdx].innerText.trim() : "";
 
     phone = extractPhoneFromRowFallback(row, phone);
 
@@ -555,12 +584,16 @@ function getPipedriveRowIdFromDataCy(dataCy) {
 
 function findPipedriveEmailCell(rowId) {
   if (!rowId) return null;
-  return document.querySelector(`[data-test="person.email"][data-cy^="grid-cell-column-${rowId}-"]`);
+  return document.querySelector(
+    `[data-test="person.email"][data-cy^="grid-cell-column-${rowId}-"]`,
+  );
 }
 
 function findPipedrivePhoneCell(rowId) {
   if (!rowId) return null;
-  return document.querySelector(`[data-test="person.phone"][data-cy^="grid-cell-column-${rowId}-"]`);
+  return document.querySelector(
+    `[data-test="person.phone"][data-cy^="grid-cell-column-${rowId}-"]`,
+  );
 }
 
 function extractPipedrivePersonIdFromHref(href) {
@@ -626,8 +659,10 @@ function scanPipedriveContacts(maxContacts = 500) {
     const phoneCell = findPipedrivePhoneCell(rowId);
     if (phoneCell) {
       const phoneLink =
-        phoneCell.querySelector('a[href^="callto:"], a[href^="tel:"]') || phoneCell.querySelector("a[href]");
-      if (phoneLink) phone = (phoneLink.textContent || "").replace(/\s+/g, " ").trim();
+        phoneCell.querySelector('a[href^="callto:"], a[href^="tel:"]') ||
+        phoneCell.querySelector("a[href]");
+      if (phoneLink)
+        phone = (phoneLink.textContent || "").replace(/\s+/g, " ").trim();
     }
 
     if (!phone && !email) return;
@@ -716,7 +751,8 @@ function extractJobDivaInfoFromUrl(urlString) {
     const cid = u.searchParams.get("cid");
     if (cid) return { crm: "jobdiva", type: "contact", id: cid };
     const candidateId = u.searchParams.get("candidateid");
-    if (candidateId) return { crm: "jobdiva", type: "candidate", id: candidateId };
+    if (candidateId)
+      return { crm: "jobdiva", type: "candidate", id: candidateId };
     return null;
   } catch (e) {
     return null;
@@ -793,7 +829,8 @@ function openSseConnection(sessionToken) {
     if (!sseReconnectTimer) {
       sseReconnectTimer = setTimeout(() => {
         sseReconnectTimer = null;
-        if (currentSessionToken === sessionToken) openSseConnection(sessionToken);
+        if (currentSessionToken === sessionToken)
+          openSseConnection(sessionToken);
       }, 5000);
     }
   };
@@ -863,19 +900,22 @@ function overlayLoadPrefsOnce() {
 
   try {
     if (!chrome?.storage?.local) return;
-    chrome.storage.local.get([OVERLAY_STORAGE_KEYS.minimized, OVERLAY_STORAGE_KEYS.autoCollapse], (res) => {
-      if (!res || typeof res !== "object") return;
+    chrome.storage.local.get(
+      [OVERLAY_STORAGE_KEYS.minimized, OVERLAY_STORAGE_KEYS.autoCollapse],
+      (res) => {
+        if (!res || typeof res !== "object") return;
 
-      if (typeof res[OVERLAY_STORAGE_KEYS.minimized] === "boolean") {
-        overlayPrefs.minimized = res[OVERLAY_STORAGE_KEYS.minimized];
-      }
-      if (typeof res[OVERLAY_STORAGE_KEYS.autoCollapse] === "boolean") {
-        overlayPrefs.autoCollapse = res[OVERLAY_STORAGE_KEYS.autoCollapse];
-      }
+        if (typeof res[OVERLAY_STORAGE_KEYS.minimized] === "boolean") {
+          overlayPrefs.minimized = res[OVERLAY_STORAGE_KEYS.minimized];
+        }
+        if (typeof res[OVERLAY_STORAGE_KEYS.autoCollapse] === "boolean") {
+          overlayPrefs.autoCollapse = res[OVERLAY_STORAGE_KEYS.autoCollapse];
+        }
 
-      // If overlay already exists, apply
-      if (overlayEl) overlayApplyMode();
-    });
+        // If overlay already exists, apply
+        if (overlayEl) overlayApplyMode();
+      },
+    );
   } catch (e) {
     // ignore
   }
@@ -902,7 +942,8 @@ function overlayEnsure() {
   overlayEl.style.bottom = "10px";
   overlayEl.style.zIndex = "999999";
   overlayEl.style.maxWidth = "280px";
-  overlayEl.style.fontFamily = "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+  overlayEl.style.fontFamily =
+    "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
 
   overlayEl.innerHTML = `
     <style>
@@ -1158,7 +1199,6 @@ function overlayEnsure() {
   overlayApplyMode();
 
   return overlayEl;
-
 }
 
 function overlayApplyMode() {
@@ -1174,7 +1214,8 @@ function overlayApplyMode() {
 function overlaySetMinimized(minimized, persist = true) {
   overlayPrefs.minimized = !!minimized;
   overlayApplyMode();
-  if (persist) overlaySavePref(OVERLAY_STORAGE_KEYS.minimized, overlayPrefs.minimized);
+  if (persist)
+    overlaySavePref(OVERLAY_STORAGE_KEYS.minimized, overlayPrefs.minimized);
 }
 
 function overlayClearAutoCollapseTimer() {
@@ -1222,9 +1263,18 @@ function handleSessionUpdate(state) {
     if (!current.record_type) current.record_type = jobdivaInfo.type;
   }
 
-  const name = current.name || (current.raw && current.raw.contact && current.raw.contact.name) || "";
-  const phone = current.phone || (current.raw && current.raw.contact && current.raw.contact.phone) || "";
-  const email = current.email || (current.raw && current.raw.contact && current.raw.contact.email) || "";
+  const name =
+    current.name ||
+    (current.raw && current.raw.contact && current.raw.contact.name) ||
+    "";
+  const phone =
+    current.phone ||
+    (current.raw && current.raw.contact && current.raw.contact.phone) ||
+    "";
+  const email =
+    current.email ||
+    (current.raw && current.raw.contact && current.raw.contact.email) ||
+    "";
 
   const recordUrl = current.record_url || current.crm_url || null;
 
@@ -1281,7 +1331,8 @@ function renderOverlay({
   const appointments = stats.appointments || 0;
 
   const lastStatus = (lastCall && lastCall.status) || "–";
-  const lastDuration = lastCall && lastCall.duration != null ? `${lastCall.duration}s` : "–";
+  const lastDuration =
+    lastCall && lastCall.duration != null ? `${lastCall.duration}s` : "–";
 
   const hSub = overlayEl.querySelector("#pb-follow-h-sub");
   const hTitle = overlayEl.querySelector("#pb-follow-h-title");
@@ -1404,24 +1455,35 @@ function hs_readSelectedCountFromUI() {
 }
 
 function hs_findTableScroller() {
-  const anyRow = document.querySelector("table tr, [role='row'], [data-row-key]");
+  const anyRow = document.querySelector(
+    "table tr, [role='row'], [data-row-key]",
+  );
   let el = anyRow ? anyRow.parentElement : null;
 
   while (el) {
     const style = getComputedStyle(el);
-    if (/(auto|scroll)/i.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20) {
+    if (
+      /(auto|scroll)/i.test(style.overflowY) &&
+      el.scrollHeight > el.clientHeight + 20
+    ) {
       return el;
     }
     el = el.parentElement;
   }
 
-  return document.querySelector("div[role='grid']") || document.scrollingElement || document.body;
+  return (
+    document.querySelector("div[role='grid']") ||
+    document.scrollingElement ||
+    document.body
+  );
 }
 
 function hs_collectIdsFromDom() {
   const ids = [];
 
-  const checkedBox = document.querySelector("input[type='checkbox']:checked, input[type='radio']:checked");
+  const checkedBox = document.querySelector(
+    "input[type='checkbox']:checked, input[type='radio']:checked",
+  );
 
   let scopeRoot = document;
   if (checkedBox) {
@@ -1439,10 +1501,13 @@ function hs_collectIdsFromDom() {
   const rows = scopeRoot.querySelectorAll("tr, [role='row'], [data-row-key]");
 
   rows.forEach((tr) => {
-    const checked = tr.querySelector("input[type='checkbox']:checked") || tr.getAttribute("aria-selected") === "true";
+    const checked =
+      tr.querySelector("input[type='checkbox']:checked") ||
+      tr.getAttribute("aria-selected") === "true";
     if (!checked) return;
 
-    let id = tr.getAttribute("data-row-key") || tr.getAttribute("data-object-id");
+    let id =
+      tr.getAttribute("data-row-key") || tr.getAttribute("data-object-id");
 
     if (!id) {
       const testId = tr.getAttribute("data-test-id") || "";
@@ -1459,7 +1524,7 @@ function hs_collectIdsFromDom() {
     const a = tr.querySelector(
       'a[href*="/record/0-1/"], a[href^="/contacts/"][href*="/record/0-1/"],' +
         'a[href*="/record/0-2/"], a[href^="/contacts/"][href*="/record/0-2/"],' +
-        'a[href*="/record/0-3/"], a[href^="/contacts/"][href*="/record/0-3/"]'
+        'a[href*="/record/0-3/"], a[href^="/contacts/"][href*="/record/0-3/"]',
     );
 
     if (a) {
@@ -1481,7 +1546,10 @@ function hs_nextFrame() {
   return new Promise((r) => requestAnimationFrame(() => r()));
 }
 
-async function hs_collectSelectedIdsDeep({ maxMs = 8000, targetCount = null } = {}) {
+async function hs_collectSelectedIdsDeep({
+  maxMs = 8000,
+  targetCount = null,
+} = {}) {
   const scroller = hs_findTableScroller();
   const start = Date.now();
   const seen = new Set();
@@ -1505,7 +1573,10 @@ async function hs_collectSelectedIdsDeep({ maxMs = 8000, targetCount = null } = 
 
     if (scroller) {
       for (let i = 0; i < 4; i++) {
-        scroller.scrollTop = Math.min(scroller.scrollTop + scroller.clientHeight, scroller.scrollHeight);
+        scroller.scrollTop = Math.min(
+          scroller.scrollTop + scroller.clientHeight,
+          scroller.scrollHeight,
+        );
         await hs_nextFrame();
         await hs_sleep(120);
         harvest();
@@ -1535,8 +1606,6 @@ async function hs_collectSelectedIdsDeep({ maxMs = 8000, targetCount = null } = 
   return Array.from(seen);
 }
 
-
-
 // ============================================================================
 //  🔁 MESSAGE HANDLER (popup/background ↔ content) — SINGLE LISTENER
 // ============================================================================
@@ -1551,7 +1620,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // --- HubSpot L3 selection harvesting (standalone parity) ---
-  if (msg && (msg.type === "HS_GET_SELECTION" || msg.type === "HS_GET_SELECTED_IDS")) {
+  if (
+    msg &&
+    (msg.type === "HS_GET_SELECTION" || msg.type === "HS_GET_SELECTED_IDS")
+  ) {
     (async () => {
       try {
         const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
@@ -1561,7 +1633,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
 
         const targetCount = hs_readSelectedCountFromUI();
-        const ids = await hs_collectSelectedIdsDeep({ maxMs: 8000, targetCount });
+        const ids = await hs_collectSelectedIdsDeep({
+          maxMs: 8000,
+          targetCount,
+        });
         const pageCtx = hs_getPageContext();
 
         sendResponse({
@@ -1587,14 +1662,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- Level 1/2 Scan ---
   if (msg?.type === "SCAN_PAGE") {
-    console.log("[PB-UNIFIED] content: SCAN_PAGE received on", window.location.href);
+    console.log(
+      "[PB-UNIFIED] content: SCAN_PAGE received on",
+      window.location.href,
+    );
 
     // HubSpot must use selection flow
     if (CURRENT_CRM_CONTEXT?.crmId === "hubspot") {
       alert(
         "HubSpot detected.\n\n" +
           "Use 'Launch HubSpot Dial Session' to dial selected records.\n" +
-          "Generic page scanning is disabled on HubSpot to match standalone behavior."
+          "Generic page scanning is disabled on HubSpot to match standalone behavior.",
       );
       sendResponse({ ok: false, error: "hubspot_requires_selection_flow" });
       return true;
@@ -1614,7 +1692,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return { rows: rows.length, firstRow };
         });
 
-      const ariaGridsDebug = Array.from(document.querySelectorAll('[role="grid"], [role="treegrid"]'))
+      const ariaGridsDebug = Array.from(
+        document.querySelectorAll('[role="grid"], [role="treegrid"]'),
+      )
         .slice(0, 5)
         .map((g) => {
           const rows = g.querySelectorAll('[role="row"]');
@@ -1663,10 +1743,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           console.log("Dial session requested");
         } else {
           console.error("Error creating dial session", resp);
-          const msgText = (resp && (resp.error || resp.details)) || "Unknown error creating dial session";
+          const msgText =
+            (resp && (resp.error || resp.details)) ||
+            "Unknown error creating dial session";
           alert("Error creating dial session:\n" + pbToText(msgText));
         }
-      }
+      },
     );
 
     sendResponse({ ok: true });
@@ -1693,8 +1775,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- Goals update from popup ---
   if (msg?.type === "PB_GOAL_UPDATED") {
-    if (msg.primary && msg.primary.trim()) goalConfig.primary = msg.primary.trim();
-    if (msg.secondary && msg.secondary.trim()) goalConfig.secondary = msg.secondary.trim();
+    if (msg.primary && msg.primary.trim())
+      goalConfig.primary = msg.primary.trim();
+    if (msg.secondary && msg.secondary.trim())
+      goalConfig.secondary = msg.secondary.trim();
 
     try {
       if (chrome?.storage?.local) {
@@ -1711,7 +1795,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (chrome?.runtime) {
         chrome.runtime.sendMessage({
           type: "SAVE_GOALS",
-          goals: { primary: goalConfig.primary, secondary: goalConfig.secondary },
+          goals: {
+            primary: goalConfig.primary,
+            secondary: goalConfig.secondary,
+          },
         });
       }
     } catch (e) {
@@ -1724,7 +1811,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   return false;
 });
-
-
 
 console.log("[PB-UNIFIED-CRM] content script initialized");

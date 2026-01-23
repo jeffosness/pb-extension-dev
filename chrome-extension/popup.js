@@ -1,8 +1,12 @@
 // popup.js — DROP-IN (Permission-on-start, no Follow Me toggle UI)
 const BASE_URL = "https://extension-dev.phoneburner.biz";
 
-function $(id) { return document.getElementById(id); }
-function setVisible(el, isVisible) { if (el) el.classList.toggle("hidden", !isVisible); }
+function $(id) {
+  return document.getElementById(id);
+}
+function setVisible(el, isVisible) {
+  if (el) el.classList.toggle("hidden", !isVisible);
+}
 
 function sendToBackground(msg) {
   return new Promise((resolve) => {
@@ -27,7 +31,6 @@ function getClientIdFromBackground() {
   });
 }
 
-
 // ---------------------------
 // Follow Widget prefs (auto-collapse)
 // ---------------------------
@@ -47,7 +50,8 @@ function loadFollowWidgetPrefs() {
 
   chrome.storage.local.get([OVERLAY_STORAGE_KEYS.autoCollapse], (res) => {
     const saved = res?.[OVERLAY_STORAGE_KEYS.autoCollapse];
-    cb.checked = typeof saved === "boolean" ? saved : DEFAULT_OVERLAY_PREFS.autoCollapse;
+    cb.checked =
+      typeof saved === "boolean" ? saved : DEFAULT_OVERLAY_PREFS.autoCollapse;
   });
 }
 
@@ -57,12 +61,13 @@ async function saveFollowWidgetPrefs() {
 
   const value = !!cb.checked;
 
-  chrome.storage.local.set({ [OVERLAY_STORAGE_KEYS.autoCollapse]: value }, () => {
-    // nothing else needed
-  });
+  chrome.storage.local.set(
+    { [OVERLAY_STORAGE_KEYS.autoCollapse]: value },
+    () => {
+      // nothing else needed
+    },
+  );
 }
-
-
 
 // ---------------------------
 // Permission on start (best-effort)
@@ -71,9 +76,13 @@ async function saveFollowWidgetPrefs() {
 // If the user denies, we still proceed; follow may not persist after navigation.
 async function requestOptionalPermissionForActiveSiteBestEffort() {
   try {
-    if (!chrome?.permissions?.request) return { ok: false, error: "permissions api not available" };
+    if (!chrome?.permissions?.request)
+      return { ok: false, error: "permissions api not available" };
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
     if (!tab?.url) return { ok: false, error: "No active tab URL." };
 
     let originPattern = null;
@@ -94,7 +103,6 @@ async function requestOptionalPermissionForActiveSiteBestEffort() {
   }
 }
 
-
 // ---------------------------
 // CRM header + Level UI toggles
 // ---------------------------
@@ -107,15 +115,19 @@ function setCrmHeader(context) {
   const nameEl = $("crm-name");
   const levelEl = $("crm-level");
 
-  if (nameEl) nameEl.textContent = context?.crmName || context?.host || "Unknown";
+  if (nameEl)
+    nameEl.textContent = context?.crmName || context?.host || "Unknown";
 
   if (levelEl) {
     const lvl = context?.level;
     levelEl.textContent =
-      lvl === 3 ? "Level 3 – Full integration" :
-      lvl === 2 ? "Level 2 – Optimized scraping" :
-      lvl === 1 ? "Level 1 – Generic mode" :
-      "Unknown level";
+      lvl === 3
+        ? "Level 3 – Full integration"
+        : lvl === 2
+          ? "Level 2 – Optimized scraping"
+          : lvl === 1
+            ? "Level 1 – Generic mode"
+            : "Unknown level";
   }
 
   applyLevelUi(context);
@@ -168,14 +180,21 @@ async function refreshHubSpotUi() {
 
   if (dialStatus) dialStatus.textContent = "Checking HubSpot connection…";
   if (dialHelp) dialHelp.textContent = "";
-  if (dialAction) { dialAction.disabled = true; dialAction.textContent = "Loading…"; }
+  if (dialAction) {
+    dialAction.disabled = true;
+    dialAction.textContent = "Loading…";
+  }
 
   let state;
   try {
     state = await hsPost("crm/hubspot/state.php");
   } catch (e) {
-    if (dialStatus) dialStatus.textContent = "Error checking HubSpot connection.";
-    if (dialAction) { dialAction.disabled = false; dialAction.textContent = "Retry"; }
+    if (dialStatus)
+      dialStatus.textContent = "Error checking HubSpot connection.";
+    if (dialAction) {
+      dialAction.disabled = false;
+      dialAction.textContent = "Retry";
+    }
     setVisible(settingsCard, false);
     return;
   }
@@ -184,7 +203,9 @@ async function refreshHubSpotUi() {
 
   if (connected) {
     if (dialStatus) dialStatus.textContent = "Connected to HubSpot ✔";
-    if (dialHelp) dialHelp.textContent = "Launch a dial session from the currently selected records.";
+    if (dialHelp)
+      dialHelp.textContent =
+        "Launch a dial session from the currently selected records.";
     if (dialAction) {
       dialAction.disabled = false;
       dialAction.textContent = "Launch HubSpot Dial Session";
@@ -192,7 +213,9 @@ async function refreshHubSpotUi() {
     }
   } else {
     if (dialStatus) dialStatus.textContent = "Not connected to HubSpot";
-    if (dialHelp) dialHelp.textContent = "Connect HubSpot to enable API-based selection + call logging.";
+    if (dialHelp)
+      dialHelp.textContent =
+        "Connect HubSpot to enable API-based selection + call logging.";
     if (dialAction) {
       dialAction.disabled = false;
       dialAction.textContent = "Connect HubSpot";
@@ -218,7 +241,9 @@ async function startHubSpotOAuth() {
   const authUrl = resp?.auth_url;
 
   if (!authUrl) {
-    if (dialStatus) dialStatus.textContent = "Could not start HubSpot OAuth (missing auth_url).";
+    if (dialStatus)
+      dialStatus.textContent =
+        "Could not start HubSpot OAuth (missing auth_url).";
     if (dialAction) dialAction.disabled = false;
     alert("Server did not return auth_url. Check server logs.");
     return;
@@ -241,7 +266,9 @@ async function launchHubSpotDialSession() {
   const resp = await sendToBackground({ type: "HS_LAUNCH_FROM_SELECTED" });
 
   if (!resp || !resp.ok) {
-    if (dialStatus) dialStatus.textContent = resp?.error || "Could not launch from selection.";
+    if (dialStatus)
+      dialStatus.textContent =
+        resp?.error || "Could not launch from selection.";
     if (dialAction) dialAction.disabled = false;
     alert(resp?.error || "Could not launch HubSpot dial session.");
     return;
@@ -260,7 +287,9 @@ async function disconnectHubSpot() {
   if (btn) btn.disabled = true;
   if (settingsStatus) settingsStatus.textContent = "Disconnecting…";
 
-  const resp = await hsPost("crm/hubspot/oauth_disconnect.php", { provider: "hs" });
+  const resp = await hsPost("crm/hubspot/oauth_disconnect.php", {
+    provider: "hs",
+  });
 
   if (!resp || resp.ok !== true) {
     if (settingsStatus) settingsStatus.textContent = "Failed to disconnect.";
@@ -286,7 +315,8 @@ function applyPatUi(isConnected) {
   const pbStatus = $("pb-status");
   const patCardDial = $("pat-card-dial");
   const patCardSettings = $("pat-card-settings");
-  if (pbStatus) pbStatus.textContent = isConnected ? "Connected ✔" : "Not connected";
+  if (pbStatus)
+    pbStatus.textContent = isConnected ? "Connected ✔" : "Not connected";
   setVisible(patCardDial, !isConnected);
   setVisible(patCardSettings, isConnected);
   applyGetPbUi(isConnected);
@@ -335,7 +365,6 @@ async function disconnectPAT() {
   }
 }
 
-
 // ---------------------------
 // Scan & Launch (Level 1/2 only)
 // ---------------------------
@@ -348,7 +377,10 @@ async function scanAndLaunch() {
   // Best-effort permission request (only at user click)
   await requestOptionalPermissionForActiveSiteBestEffort();
 
-  const resp = await sendToBackground({ type: "SCAN_AND_LAUNCH", tabId: tab.id });
+  const resp = await sendToBackground({
+    type: "SCAN_AND_LAUNCH",
+    tabId: tab.id,
+  });
   if (!resp || !resp.ok) alert(resp?.error || "Could not scan this page.");
 }
 
@@ -375,16 +407,17 @@ function activateTab(tabName) {
 // ---------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
-$("save-pat")?.addEventListener("click", savePAT);
-$("disconnect-pat")?.addEventListener("click", disconnectPAT);
+  $("save-pat")?.addEventListener("click", savePAT);
+  $("disconnect-pat")?.addEventListener("click", disconnectPAT);
 
-
-    // Follow Widget prefs
+  // Follow Widget prefs
   loadFollowWidgetPrefs();
   $("follow-auto-collapse")?.addEventListener("change", saveFollowWidgetPrefs);
 
   // Get PB
-  $("get-pb-btn")?.addEventListener("click", () => chrome.tabs.create({ url: "https://phoneburner.biz/" }));
+  $("get-pb-btn")?.addEventListener("click", () =>
+    chrome.tabs.create({ url: "https://phoneburner.biz/" }),
+  );
 
   // Scan
   $("scan-launch")?.addEventListener("click", scanAndLaunch);
@@ -406,11 +439,14 @@ $("disconnect-pat")?.addEventListener("click", disconnectPAT);
     const activeTab = tabs?.[0];
     if (!activeTab) return setCrmHeader(null);
 
-    chrome.runtime.sendMessage({ type: "GET_CONTEXT", tabId: activeTab.id }, async (resp) => {
-      const ctx = resp?.context || null;
-      setCrmHeader(ctx);
-      if (isHubSpotL3(ctx)) await refreshHubSpotUi();
-    });
+    chrome.runtime.sendMessage(
+      { type: "GET_CONTEXT", tabId: activeTab.id },
+      async (resp) => {
+        const ctx = resp?.context || null;
+        setCrmHeader(ctx);
+        if (isHubSpotL3(ctx)) await refreshHubSpotUi();
+      },
+    );
   });
 
   refreshState();
