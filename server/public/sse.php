@@ -152,6 +152,10 @@ $lastKeepalive    = $connectionStart;
 $presenceIntervalSec = 120;
 $lastPresenceWrite   = 0;
 
+// Inactivity timeout: close SSE if no webhook activity for 60 minutes
+$inactivityTimeoutSec = 3600; // 60 minutes
+$lastWebhookActivity  = $connectionStart;
+
 // Avoid double-disconnect logging
 $didFinalize = false;
 
@@ -203,6 +207,12 @@ while (true) {
       $data = @file_get_contents($path);
       if ($data === false || $data === '') {
         $data = json_encode(['error' => 'empty session state'], JSON_UNESCAPED_SLASHES);
+      } else {
+        // Check if webhooks have updated last_activity_unix
+        $sessionState = json_decode($data, true);
+        if (is_array($sessionState) && isset($sessionState['last_activity_unix'])) {
+          $lastWebhookActivity = (int)$sessionState['last_activity_unix'];
+        }
       }
 
       echo "event: update\n";
@@ -210,6 +220,17 @@ while (true) {
       echo "data: {$data}\n\n";
       @ob_flush(); @flush();
     }
+  }
+
+  // ✅ INACTIVITY TIMEOUT: Close connection if no webhook activity for 60 minutes
+  $inactiveSec = time() - $lastWebhookActivity;
+  if ($inactiveSec > $inactivityTimeoutSec) {
+    sse_log_activity('sse.timeout_inactive', [
+      'session_token_hash' => $sessionHash,
+      'duration_sec' => time() - $connectionStart,
+      'inactive_sec' => $inactiveSec,
+    ]);
+    break; // Exit cleanly - cleanup handled by shutdown function
   }
 
   // Keepalive comment line (existing behavior)

@@ -49,6 +49,7 @@ if (isset($payload['custom_data'])) {
 
 $state['last_call']       = $lastCall;
 $state['last_event_type'] = 'call_done';
+$state['last_activity_unix'] = time(); // Track webhook activity for SSE timeout
 
 // stats
 if (!isset($state['stats']) || !is_array($state['stats'])) {

@@ -131,6 +131,7 @@ if ($fromMap) {
 
 $state['current']         = $current;
 $state['last_event_type'] = 'contact_displayed';
+$state['last_activity_unix'] = time(); // Track webhook activity for SSE timeout
 
 // Keep stats/last_call if they already exist
 if (!isset($state['last_call'])) {
