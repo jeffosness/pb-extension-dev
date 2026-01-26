@@ -212,7 +212,8 @@ if (count($dates) > 31) {
 }
 
 // Active-now window (seconds)
-$activeWindowSec = (int)($_GET['active_window_sec'] ?? 180);
+// Default 240 seconds = 2× the presence update interval (120s) to prevent flapping
+$activeWindowSec = (int)($_GET['active_window_sec'] ?? 240);
 if ($activeWindowSec < 60) $activeWindowSec = 60;
 if ($activeWindowSec > 900) $activeWindowSec = 900;
 
