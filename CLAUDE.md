@@ -178,12 +178,14 @@ $client_id = get_client_id_or_fail($data); // Validates + sanitizes
 1. Session state file permissions are 0777 — should be 0700/0600
 2. Webhooks lack origin validation — add HMAC signature or origin check
 3. Webhook session tokens in URLs — consider webhook signature verification
+4. Metrics directories exposed under web root — `metrics/` and `metrics/sse_presence/` contain operational data (SSE usage logs, presence files) that are publicly accessible if directory listing is enabled. Move to `/var/lib/pb-extension-dev/metrics/` or add Apache deny rules.
 
 **LOW RISK (harden when time permits):**
 
 1. Date validation allows future dates
 2. No cleanup of stale presence files
 3. No CSP on extension popup
+4. Webhook handlers log full payloads with PII — `log_msg('call_done: ' . $raw)` and `log_msg('contact_displayed: ' . $raw)` in webhook handlers log complete payloads containing names, phone numbers, emails, and CRM IDs. Use selective logging or debug flag.
 
 ---
 
