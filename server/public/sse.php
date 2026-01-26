@@ -159,17 +159,19 @@ $lastWebhookActivity  = $connectionStart;
 // Avoid double-disconnect logging
 $didFinalize = false;
 
-// Ensure we log disconnect + cleanup even if PHP exits unexpectedly
+// Ensure we log disconnect even if PHP exits unexpectedly
+// NOTE: We do NOT delete presence files here because SSE reconnects
+// during CRM navigation should not clear the "active now" status.
+// Stale presence files are cleaned up by cron (see CLAUDE.md).
 register_shutdown_function(function () use (&$didFinalize, $sessionHash, $connectionStart) {
   if ($didFinalize) return;
 
-  // Best-effort: log disconnect + cleanup presence
+  // Best-effort: log disconnect (but keep presence file)
   sse_log_activity('sse.disconnect', [
     'session_token_hash' => $sessionHash,
     'duration_sec'       => time() - $connectionStart,
     'shutdown'           => true,
   ]);
-  sse_presence_delete($sessionHash);
 
   $didFinalize = true;
 });
@@ -230,7 +232,10 @@ while (true) {
       'duration_sec' => time() - $connectionStart,
       'inactive_sec' => $inactiveSec,
     ]);
-    break; // Exit cleanly - cleanup handled by shutdown function
+    // Delete presence file on true timeout (session ended)
+    sse_presence_delete($sessionHash);
+    $didFinalize = true;
+    break;
   }
 
   // Keepalive comment line (existing behavior)
@@ -249,12 +254,14 @@ while (true) {
   sleep(1);
 }
 
-// Normal disconnect path (also handled by shutdown fallback)
+// Normal disconnect path (SSE reconnect during navigation)
+// NOTE: We do NOT delete presence files on normal disconnects because
+// the extension reconnects SSE when navigating to new contacts.
+// Presence files remain active and are cleaned up by cron when stale.
 sse_log_activity('sse.disconnect', [
   'session_token_hash' => $sessionHash,
   'duration_sec'       => time() - $connectionStart,
   'shutdown'           => false,
 ]);
 
-sse_presence_delete($sessionHash);
 $didFinalize = true;

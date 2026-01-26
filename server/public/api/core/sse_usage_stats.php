@@ -128,11 +128,17 @@ function read_daily_sse_log(string $dateYmd): array {
 
     $stats['file_present'] = true;
 
+    // Track unique session hashes and timeout events
+    // NOTE: SSE reconnects during CRM navigation create multiple connect/disconnect
+    // events per dial session. We only count:
+    // - connects: unique sessions started (deduplicated by session hash)
+    // - disconnects: only sse.timeout_inactive (true session ends)
     $connectSeen = [];
-    $disconnectSeen = [];
+    $timeoutsSeen = [];
     $durations = [];
 
-    // Simple sweep-line for "max concurrent estimate" from connect/disconnect ordering.
+    // Sweep-line for "max concurrent estimate"
+    // This works across reconnects because we track live connection state
     $current = 0;
     $max = 0;
 
@@ -153,23 +159,27 @@ function read_daily_sse_log(string $dateYmd): array {
             if (!isset($connectSeen[$session])) {
                 $connectSeen[$session] = true;
                 $stats['connects']++;
-
-                $current++;
-                if ($current > $max) $max = $current;
             }
+            // Always increment current for concurrent tracking (even on reconnects)
+            $current++;
+            if ($current > $max) $max = $current;
         } elseif ($event === 'sse.disconnect') {
-            if (!isset($disconnectSeen[$session])) {
-                $disconnectSeen[$session] = true;
+            // Only decrement concurrent count on disconnects
+            if ($current > 0) {
+                $current--;
+            }
+        } elseif ($event === 'sse.timeout_inactive') {
+            // Only count timeouts as "truly ended" sessions
+            if (!isset($timeoutsSeen[$session])) {
+                $timeoutsSeen[$session] = true;
                 $stats['disconnects']++;
 
                 $dur = isset($j['duration_sec']) ? (int)$j['duration_sec'] : 0;
                 if ($dur > 0) $durations[] = $dur;
-
-                // Only decrement if we previously counted a connect for this session,
-                // and ensure we don't go negative.
-                if (isset($connectSeen[$session]) && $current > 0) {
-                    $current--;
-                }
+            }
+            // Decrement concurrent count
+            if ($current > 0) {
+                $current--;
             }
         }
     }
