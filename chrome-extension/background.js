@@ -159,11 +159,11 @@ async function getClientId() {
 // API helper (unified)
 // -------------------------
 
-async function api(path, body = {}) {
+async function api(path, body = {}, baseUrl = BASE_URL) {
   const client_id = await getClientId();
   const payload = { client_id, ...(body || {}) };
 
-  const res = await fetch(`${BASE_URL}/api/${path}`, {
+  const res = await fetch(`${baseUrl}/api/${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Client-Id": client_id },
     body: JSON.stringify(payload),
@@ -499,6 +499,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg.type === "STOP_FOLLOW_SESSION") {
+        // Load session from storage first (service workers restart)
+        await loadCurrentSessionFromStorage();
+
+        // Notify server that session was explicitly stopped (for dashboard metrics)
+        if (currentSession.token) {
+          try {
+            const backendBase = currentSession.backendBase || BASE_URL;
+            await api("core/session_stop.php", {
+              session_token: currentSession.token,
+            }, backendBase);
+          } catch (err) {
+            console.warn("Failed to notify server of session stop:", err);
+            // Continue anyway - this is best-effort for metrics
+          }
+        }
+
+        // Notify content script to stop follow UI
+        if (currentSession.tabId != null) {
+          try {
+            chrome.tabs.sendMessage(
+              currentSession.tabId,
+              { type: "STOP_FOLLOW_SESSION_UI" },
+              { frameId: 0 },
+              () => {}
+            );
+          } catch (e) {
+            // Ignore errors if tab is closed or content script not available
+          }
+        }
+
         currentSession = { token: null, tabId: null, backendBase: null };
         await saveCurrentSessionToStorage();
         return sendResponse({ ok: true });

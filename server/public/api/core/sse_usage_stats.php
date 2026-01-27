@@ -128,13 +128,13 @@ function read_daily_sse_log(string $dateYmd): array {
 
     $stats['file_present'] = true;
 
-    // Track unique session hashes and timeout events
+    // Track unique session hashes and ended events
     // NOTE: SSE reconnects during CRM navigation create multiple connect/disconnect
     // events per dial session. We only count:
     // - connects: unique sessions started (deduplicated by session hash)
-    // - disconnects: only sse.timeout_inactive (true session ends)
+    // - disconnects: sse.timeout_inactive OR sse.session_stopped (true session ends)
     $connectSeen = [];
-    $timeoutsSeen = [];
+    $endedSeen = [];
     $durations = [];
 
     // Sweep-line for "max concurrent estimate"
@@ -168,10 +168,10 @@ function read_daily_sse_log(string $dateYmd): array {
             if ($current > 0) {
                 $current--;
             }
-        } elseif ($event === 'sse.timeout_inactive') {
-            // Only count timeouts as "truly ended" sessions
-            if (!isset($timeoutsSeen[$session])) {
-                $timeoutsSeen[$session] = true;
+        } elseif ($event === 'sse.timeout_inactive' || $event === 'sse.session_stopped') {
+            // Count both timeouts and explicit stops as "truly ended" sessions
+            if (!isset($endedSeen[$session])) {
+                $endedSeen[$session] = true;
                 $stats['disconnects']++;
 
                 $dur = isset($j['duration_sec']) ? (int)$j['duration_sec'] : 0;
