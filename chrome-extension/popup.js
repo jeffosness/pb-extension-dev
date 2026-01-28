@@ -74,6 +74,9 @@ async function saveFollowWidgetPrefs() {
 // ---------------------------
 // We request permission ONLY when user clicks to start a dial session.
 // If the user denies, we still proceed; follow may not persist after navigation.
+//
+// IMPORTANT: Chrome permission dialogs can sometimes get stuck (browser bug).
+// We add a 30-second timeout to prevent blocking the entire browser.
 async function requestOptionalPermissionForActiveSiteBestEffort() {
   try {
     if (!chrome?.permissions?.request)
@@ -93,12 +96,32 @@ async function requestOptionalPermissionForActiveSiteBestEffort() {
       return { ok: false, error: "Invalid active tab URL." };
     }
 
+    // Add 30-second timeout to prevent stuck modal from blocking browser
     return await new Promise((resolve) => {
+      let resolved = false;
+
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.warn("Permission request timed out after 30 seconds");
+          resolve({
+            ok: false,
+            error: "Permission request timed out. Try closing and reopening the popup.",
+            timeout: true
+          });
+        }
+      }, 30000);
+
       chrome.permissions.request({ origins: [originPattern] }, (granted) => {
-        resolve({ ok: !!granted, originPattern });
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          resolve({ ok: !!granted, originPattern });
+        }
       });
     });
   } catch (e) {
+    console.error("Permission request error:", e);
     return { ok: false, error: e?.message || String(e) };
   }
 }
@@ -258,7 +281,22 @@ async function launchHubSpotDialSession() {
   const dialAction = $("hs-dial-action");
 
   // Best-effort permission request (only at user click)
-  await requestOptionalPermissionForActiveSiteBestEffort();
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult.timeout) {
+      // Permission dialog timed out - warn user but continue
+      console.warn("Permission request timed out, continuing anyway");
+      if (dialStatus) {
+        dialStatus.textContent = "Permission timeout - extension may not persist after navigation";
+      }
+    } else if (!permResult.ok) {
+      console.warn("Permission request failed:", permResult.error);
+      // Continue anyway - extension will work, just might not persist
+    }
+  } catch (err) {
+    console.error("Permission request crashed:", err);
+    // Recover gracefully - continue with dial session
+  }
 
   if (dialAction) dialAction.disabled = true;
   if (dialStatus) dialStatus.textContent = "Preparing dial session…";
@@ -375,7 +413,25 @@ async function scanAndLaunch() {
   if (!tab?.id) return alert("No active tab found.");
 
   // Best-effort permission request (only at user click)
-  await requestOptionalPermissionForActiveSiteBestEffort();
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult.timeout) {
+      console.warn("Permission request timed out, continuing anyway");
+      // Show warning but continue
+      const continueAnyway = confirm(
+        "Permission request timed out. Continue anyway?\n\n" +
+        "Note: Extension may not persist after page navigation.\n" +
+        "Press ESC if a permission dialog is stuck."
+      );
+      if (!continueAnyway) return;
+    } else if (!permResult.ok) {
+      console.warn("Permission request failed:", permResult.error);
+      // Continue anyway - extension will work
+    }
+  } catch (err) {
+    console.error("Permission request crashed:", err);
+    // Recover gracefully - continue with scan
+  }
 
   const resp = await sendToBackground({
     type: "SCAN_AND_LAUNCH",

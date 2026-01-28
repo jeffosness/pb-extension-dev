@@ -535,6 +535,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       // -------------------------
+      // Emergency reset (if extension gets stuck)
+      // -------------------------
+      if (msg.type === "FORCE_RESET_ALL_STATE") {
+        console.warn("FORCE_RESET_ALL_STATE invoked - clearing all extension state");
+
+        // Clear session
+        currentSession = { token: null, tabId: null, backendBase: null };
+        await saveCurrentSessionToStorage();
+
+        // Clear all storage
+        await new Promise(resolve => chrome.storage.local.clear(resolve));
+
+        // Clear tab contexts
+        for (const tabId in tabContexts) {
+          delete tabContexts[tabId];
+        }
+
+        return sendResponse({
+          ok: true,
+          message: "All extension state cleared. Reload any open CRM tabs and reopen the popup."
+        });
+      }
+
+      // -------------------------
       // Server goals/settings
       // -------------------------
       if (msg.type === "LOAD_SERVER_GOALS") {
