@@ -8,6 +8,106 @@ function setVisible(el, isVisible) {
   if (el) el.classList.toggle("hidden", !isVisible);
 }
 
+// ---------------------------
+// Custom modal dialogs (replaces native alert/confirm to prevent Chrome rendering bugs)
+// ---------------------------
+
+function showAlert(message, title = "PhoneBurner Extension") {
+  return new Promise((resolve) => {
+    const overlay = $("modal-overlay");
+    const titleEl = $("modal-title");
+    const messageEl = $("modal-message");
+    const buttonsEl = $("modal-buttons");
+
+    if (!overlay || !titleEl || !messageEl || !buttonsEl) {
+      // Fallback to console if modal not available
+      console.error("Modal not available:", message);
+      resolve();
+      return;
+    }
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    buttonsEl.innerHTML = "";
+
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "OK";
+    okBtn.className = "primary";
+    okBtn.addEventListener("click", () => {
+      overlay.classList.remove("show");
+      resolve();
+    });
+
+    buttonsEl.appendChild(okBtn);
+    overlay.classList.add("show");
+
+    // Allow Esc key to dismiss
+    const escHandler = (e) => {
+      if (e.key === "Escape") {
+        overlay.classList.remove("show");
+        document.removeEventListener("keydown", escHandler);
+        resolve();
+      }
+    };
+    document.addEventListener("keydown", escHandler);
+
+    // Focus OK button for accessibility
+    setTimeout(() => okBtn.focus(), 0);
+  });
+}
+
+function showConfirm(message, title = "Confirm") {
+  return new Promise((resolve) => {
+    const overlay = $("modal-overlay");
+    const titleEl = $("modal-title");
+    const messageEl = $("modal-message");
+    const buttonsEl = $("modal-buttons");
+
+    if (!overlay || !titleEl || !messageEl || !buttonsEl) {
+      // Fallback to console if modal not available
+      console.error("Modal not available:", message);
+      resolve(false);
+      return;
+    }
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    buttonsEl.innerHTML = "";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => {
+      overlay.classList.remove("show");
+      resolve(false);
+    });
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.textContent = "OK";
+    confirmBtn.className = "primary";
+    confirmBtn.addEventListener("click", () => {
+      overlay.classList.remove("show");
+      resolve(true);
+    });
+
+    buttonsEl.appendChild(cancelBtn);
+    buttonsEl.appendChild(confirmBtn);
+    overlay.classList.add("show");
+
+    // Allow Esc key to cancel
+    const escHandler = (e) => {
+      if (e.key === "Escape") {
+        overlay.classList.remove("show");
+        document.removeEventListener("keydown", escHandler);
+        resolve(false);
+      }
+    };
+    document.addEventListener("keydown", escHandler);
+
+    // Focus confirm button for accessibility
+    setTimeout(() => confirmBtn.focus(), 0);
+  });
+}
+
 function sendToBackground(msg) {
   return new Promise((resolve) => {
     try {
@@ -268,7 +368,7 @@ async function startHubSpotOAuth() {
       dialStatus.textContent =
         "Could not start HubSpot OAuth (missing auth_url).";
     if (dialAction) dialAction.disabled = false;
-    alert("Server did not return auth_url. Check server logs.");
+    await showAlert("Server did not return auth_url. Check server logs.");
     return;
   }
 
@@ -308,7 +408,7 @@ async function launchHubSpotDialSession() {
       dialStatus.textContent =
         resp?.error || "Could not launch from selection.";
     if (dialAction) dialAction.disabled = false;
-    alert(resp?.error || "Could not launch HubSpot dial session.");
+    await showAlert(resp?.error || "Could not launch HubSpot dial session.");
     return;
   }
 
@@ -317,7 +417,7 @@ async function launchHubSpotDialSession() {
 }
 
 async function disconnectHubSpot() {
-  const confirmed = confirm("Disconnect HubSpot for this session?");
+  const confirmed = await showConfirm("Disconnect HubSpot for this session?");
   if (!confirmed) return;
 
   const btn = $("hs-disconnect");
@@ -332,7 +432,7 @@ async function disconnectHubSpot() {
   if (!resp || resp.ok !== true) {
     if (settingsStatus) settingsStatus.textContent = "Failed to disconnect.";
     if (btn) btn.disabled = false;
-    alert(resp?.error || "Failed to disconnect HubSpot.");
+    await showAlert(resp?.error || "Failed to disconnect HubSpot.");
     return;
   }
 
@@ -371,22 +471,25 @@ async function savePAT() {
   const btn = $("save-pat");
   const pat = patInput?.value?.trim();
 
-  if (!pat) return alert("Please paste your PAT first.");
+  if (!pat) {
+    await showAlert("Please paste your PAT first.");
+    return;
+  }
   if (btn) btn.disabled = true;
 
   const resp = await sendToBackground({ type: "SAVE_PAT", pat });
   if (resp && resp.ok) {
-    alert("PAT saved.");
+    await showAlert("PAT saved.");
     await refreshState();
     activateTab("settings");
   } else {
-    alert("Error saving PAT: " + (resp?.error || "Unknown error"));
+    await showAlert("Error saving PAT: " + (resp?.error || "Unknown error"));
     if (btn) btn.disabled = false;
   }
 }
 
 async function disconnectPAT() {
-  const confirmed = confirm("Disconnect from PhoneBurner and clear your PAT?");
+  const confirmed = await showConfirm("Disconnect from PhoneBurner and clear your PAT?");
   if (!confirmed) return;
 
   const btn = $("disconnect-pat");
@@ -394,11 +497,11 @@ async function disconnectPAT() {
 
   const resp = await sendToBackground({ type: "CLEAR_PAT" });
   if (resp && resp.ok) {
-    alert("Disconnected from PhoneBurner.");
+    await showAlert("Disconnected from PhoneBurner.");
     await refreshState();
     activateTab("dial");
   } else {
-    alert("Error disconnecting: " + (resp?.error || "Unknown error"));
+    await showAlert("Error disconnecting: " + (resp?.error || "Unknown error"));
     if (btn) btn.disabled = false;
   }
 }
@@ -410,7 +513,10 @@ async function disconnectPAT() {
 async function scanAndLaunch() {
   if (ACTIVE_CTX?.level === 3) return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return alert("No active tab found.");
+  if (!tab?.id) {
+    await showAlert("No active tab found.");
+    return;
+  }
 
   // Best-effort permission request (only at user click)
   try {
@@ -418,10 +524,11 @@ async function scanAndLaunch() {
     if (permResult.timeout) {
       console.warn("Permission request timed out, continuing anyway");
       // Show warning but continue
-      const continueAnyway = confirm(
+      const continueAnyway = await showConfirm(
         "Permission request timed out. Continue anyway?\n\n" +
         "Note: Extension may not persist after page navigation.\n" +
-        "Press ESC if a permission dialog is stuck."
+        "Press ESC if a permission dialog is stuck.",
+        "Permission Timeout"
       );
       if (!continueAnyway) return;
     } else if (!permResult.ok) {
@@ -437,7 +544,9 @@ async function scanAndLaunch() {
     type: "SCAN_AND_LAUNCH",
     tabId: tab.id,
   });
-  if (!resp || !resp.ok) alert(resp?.error || "Could not scan this page.");
+  if (!resp || !resp.ok) {
+    await showAlert(resp?.error || "Could not scan this page.");
+  }
 }
 
 // ---------------------------
