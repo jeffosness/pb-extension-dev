@@ -589,7 +589,58 @@ chrome.runtime.sendMessage({ type: "GET_ACTIVE_SESSION_FOR_TAB" }, console.log);
 
 // Get stored client ID
 chrome.storage.local.get(["pb_unified_client_id"], console.log);
+
+// Emergency reset (if extension gets stuck)
+chrome.runtime.sendMessage({ type: "FORCE_RESET_ALL_STATE" }, console.log);
 ```
+
+### Recovery from Stuck Permission Dialog
+
+If Chrome's permission dialog gets stuck and blocks your browser:
+
+**Quick Fixes (Try First):**
+1. Press `Esc` - Should dismiss most dialogs
+2. Press `Enter` - May accept or close the dialog
+3. Click outside the dialog area - May dismiss it
+
+**If Browser is Completely Stuck:**
+
+4. **Task Manager Approach** (Recommended):
+   - Press `Shift+Esc` in Chrome to open Task Manager
+   - Find "Extension: PhoneBurner Dial Session Companion"
+   - Click "End process"
+   - This kills only the extension, not your whole browser
+
+5. **Command Line Approach** (Linux/Mac):
+   ```bash
+   # Kill only Chrome extension processes
+   pkill -f "chrome.*--type=extension"
+
+   # Or restart Chrome without extensions
+   google-chrome-stable --disable-extensions
+   ```
+
+6. **Windows Task Manager**:
+   - Open Task Manager (`Ctrl+Shift+Esc`)
+   - Find Chrome processes
+   - Look for "Extension: PhoneBurner" or similar
+   - End that specific process
+
+**After Recovery:**
+
+Clear extension state from browser console (F12):
+```javascript
+// Force reset all extension state
+chrome.runtime.sendMessage({ type: "FORCE_RESET_ALL_STATE" }, (resp) => {
+  console.log("Reset complete:", resp);
+  location.reload(); // Reload CRM tab
+});
+```
+
+**Prevention:**
+- The extension now has a 30-second timeout on permission requests
+- If you see "Permission request timed out", close and reopen the popup
+- Permission dialogs only appear when launching dial sessions
 
 ### Server Log Monitoring
 
