@@ -15,7 +15,7 @@ const CRM_REGISTRY = [
   {
     id: "salesforce",
     displayName: "Salesforce",
-    level: 1,
+    level: 2,
     match: (host) => host.includes("lightning.force.com"),
   },
   {
@@ -689,10 +689,146 @@ function scanPipedriveContacts(maxContacts = 500) {
 }
 
 // ============================================================================
+//  🧩 SALESFORCE-SPECIFIC SCANNER (LEVEL 2 with virtual scrolling support)
+// ============================================================================
+
+function sf_sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function sf_nextFrame() {
+  return new Promise((r) => requestAnimationFrame(() => r()));
+}
+
+async function scanSalesforceContactsWithSelection(maxMs = 10000) {
+  const host = window.location.hostname || "";
+  if (!host.includes("lightning.force.com")) return [];
+
+  // Find Lightning datatable
+  const table = document.querySelector('table[role="grid"][data-num-rows]');
+  if (!table) {
+    console.log("[PB-SF] No Lightning datatable found");
+    return [];
+  }
+
+  // Check how many contacts are selected
+  const targetCount = parseInt(table.getAttribute('data-num-selected-rows') || '0', 10);
+  console.log("[PB-SF] Target selected count:", targetCount);
+
+  if (targetCount === 0) {
+    console.log("[PB-SF] No contacts selected");
+    return [];
+  }
+
+  // Find scrollable container
+  const scroller = table.closest('.slds-scrollable_y') ||
+                   table.closest('[style*="overflow"]') ||
+                   document.querySelector('.slds-scrollable_y');
+
+  const selectedContacts = [];
+  const seenIds = new Set();
+  const startScrollTop = scroller ? scroller.scrollTop : 0;
+  const startTime = Date.now();
+  let stableCount = 0;
+
+  console.log("[PB-SF] Starting harvest, scroller found:", !!scroller);
+
+  // Harvest loop
+  while (selectedContacts.length < targetCount && Date.now() - startTime < maxMs) {
+    const sizeBefore = selectedContacts.length;
+
+    // Query for selected rows in current viewport
+    const rows = Array.from(table.querySelectorAll('tbody tr[aria-selected="true"], tbody tr.slds-is-selected'));
+
+    for (const row of rows) {
+      const recordId = row.getAttribute('data-row-key-value');
+      if (!recordId || recordId === 'HEADER' || seenIds.has(recordId)) continue;
+
+      seenIds.add(recordId);
+
+      // Extract contact data from row
+      const nameCell = row.querySelector('th[role="rowheader"]');
+      const nameLink = nameCell?.querySelector('a[href*="/lightning/r/"]');
+      const name = nameLink?.innerText.trim() || '';
+
+      const recordUrl = nameLink?.getAttribute('href');
+      const fullUrl = recordUrl ? new URL(recordUrl, window.location.origin).href : null;
+
+      // Extract phone - look for lightning-click-to-dial component or td[data-label="Phone"]
+      let phone = '';
+      const phoneCell = row.querySelector('td[data-label="Phone"]');
+      if (phoneCell) {
+        const phoneComponent = phoneCell.querySelector('lightning-click-to-dial');
+        phone = (phoneComponent?.innerText || phoneCell.innerText).trim().replace(/\s+/g, ' ');
+      }
+
+      // Extract email - look for mailto link or td[data-label="Email"]
+      let email = '';
+      const emailCell = row.querySelector('td[data-label="Email"]');
+      if (emailCell) {
+        const emailLink = emailCell.querySelector('a[href^="mailto:"]');
+        email = emailLink ? emailLink.innerText.trim() : emailCell.innerText.trim();
+      }
+
+      // Only add if we have at least name or contact method
+      if (name || phone || email) {
+        selectedContacts.push({
+          name,
+          phone,
+          email,
+          source_url: window.location.href,
+          source_label: document.title || '',
+          record_url: fullUrl,
+          crm_identifier: recordId,
+        });
+
+        console.log(`[PB-SF] Collected contact ${selectedContacts.length}/${targetCount}: ${name}`);
+      }
+    }
+
+    // Stop if we've found all selected contacts
+    if (selectedContacts.length >= targetCount) {
+      console.log(`[PB-SF] Target reached: ${selectedContacts.length}/${targetCount}`);
+      break;
+    }
+
+    // Stop if no new contacts found in last 3 iterations
+    if (selectedContacts.length === sizeBefore) {
+      stableCount++;
+      if (stableCount >= 3) {
+        console.log(`[PB-SF] No new contacts after 3 iterations, stopping at ${selectedContacts.length}/${targetCount}`);
+        break;
+      }
+    } else {
+      stableCount = 0;
+    }
+
+    // Scroll down to load more rows
+    if (scroller) {
+      scroller.scrollTop += scroller.clientHeight;
+      await sf_nextFrame();
+      await sf_sleep(200); // Wait for Lightning to render new rows
+    } else {
+      console.log("[PB-SF] No scroller found, cannot load more rows");
+      break;
+    }
+  }
+
+  // Restore scroll position
+  if (scroller) {
+    scroller.scrollTop = startScrollTop;
+    await sf_nextFrame();
+  }
+
+  console.log(`[PB-SF] Final harvest: ${selectedContacts.length}/${targetCount} contacts`);
+  return selectedContacts;
+}
+
+// ============================================================================
 //  🔎 Dispatcher (IMPORTANT: HubSpot is NOT scanned via generic scanners)
 // ============================================================================
 
-function scanPageForContacts() {
+async function scanPageForContacts() {
   const crmId = CURRENT_CRM_CONTEXT?.crmId || "generic";
 
   // 🚫 HubSpot must NOT use generic scanning (standalone parity uses selected IDs + server fetch)
@@ -706,6 +842,9 @@ function scanPageForContacts() {
     contacts = scanMondayContacts();
   } else if (crmId === "pipedrive") {
     contacts = scanPipedriveContacts();
+  } else if (crmId === "salesforce") {
+    // Use specialized Salesforce scanner with virtual scrolling support
+    contacts = await scanSalesforceContactsWithSelection();
   }
 
   if (!contacts || !contacts.length) {
@@ -1678,80 +1817,84 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
 
-    const contacts = scanPageForContacts();
-    console.log("[PB-UNIFIED] content: contacts found:", contacts.length);
+    // Wrap in async function to support await for Salesforce scanner
+    (async () => {
+      const contacts = await scanPageForContacts();
+      console.log("[PB-UNIFIED] content: contacts found:", contacts.length);
 
-    if (!contacts.length) {
-      const host = window.location.hostname;
+      if (!contacts.length) {
+        const host = window.location.hostname;
 
-      const tablesDebug = Array.from(document.querySelectorAll("table"))
-        .slice(0, 5)
-        .map((t) => {
-          const rows = t.querySelectorAll("tr");
-          const firstRow = rows[0] ? rows[0].innerText.slice(0, 200) : "";
-          return { rows: rows.length, firstRow };
-        });
+        const tablesDebug = Array.from(document.querySelectorAll("table"))
+          .slice(0, 5)
+          .map((t) => {
+            const rows = t.querySelectorAll("tr");
+            const firstRow = rows[0] ? rows[0].innerText.slice(0, 200) : "";
+            return { rows: rows.length, firstRow };
+          });
 
-      const ariaGridsDebug = Array.from(
-        document.querySelectorAll('[role="grid"], [role="treegrid"]'),
-      )
-        .slice(0, 5)
-        .map((g) => {
-          const rows = g.querySelectorAll('[role="row"]');
-          const headerRow = rows[0];
-          const headerText = headerRow ? headerRow.innerText.slice(0, 200) : "";
-          return { rows: rows.length, headerText };
-        });
+        const ariaGridsDebug = Array.from(
+          document.querySelectorAll('[role="grid"], [role="treegrid"]'),
+        )
+          .slice(0, 5)
+          .map((g) => {
+            const rows = g.querySelectorAll('[role="row"]');
+            const headerRow = rows[0];
+            const headerText = headerRow ? headerRow.innerText.slice(0, 200) : "";
+            return { rows: rows.length, headerText };
+          });
 
-      const debugPayload = {
-        host,
-        url: window.location.href,
-        title: document.title || "",
-        timestamp: new Date().toISOString(),
-        mode: "no_contacts_found",
-        tables: tablesDebug,
-        ariaGrids: ariaGridsDebug,
-      };
+        const debugPayload = {
+          host,
+          url: window.location.href,
+          title: document.title || "",
+          timestamp: new Date().toISOString(),
+          mode: "no_contacts_found",
+          tables: tablesDebug,
+          ariaGrids: ariaGridsDebug,
+        };
 
-      fetch(`${BASE_URL}/scan_debug.php`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(debugPayload),
-      }).catch((err) => console.error("scan_debug failed", err));
+        fetch(`${BASE_URL}/scan_debug.php`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(debugPayload),
+        }).catch((err) => console.error("scan_debug failed", err));
 
-      alert("Could not find a contact table on this page.");
-      sendResponse({ ok: false, error: "No contacts found" });
-      return true;
-    }
+        alert("Could not find a contact table on this page.");
+        sendResponse({ ok: false, error: "No contacts found" });
+        return;
+      }
 
-    const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+      const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
 
-    chrome.runtime.sendMessage(
-      {
-        type: "SCANNED_CONTACTS",
-        contacts,
-        context: {
-          crm_id: ctx.crmId,
-          crm_name: ctx.crmName,
-          host: ctx.host,
-          path: ctx.path,
-          level: ctx.level,
+      chrome.runtime.sendMessage(
+        {
+          type: "SCANNED_CONTACTS",
+          contacts,
+          context: {
+            crm_id: ctx.crmId,
+            crm_name: ctx.crmName,
+            host: ctx.host,
+            path: ctx.path,
+            level: ctx.level,
+          },
         },
-      },
-      (resp) => {
-        if (resp && resp.ok) {
-          console.log("Dial session requested");
-        } else {
-          console.error("Error creating dial session", resp);
-          const msgText =
-            (resp && (resp.error || resp.details)) ||
-            "Unknown error creating dial session";
-          alert("Error creating dial session:\n" + pbToText(msgText));
-        }
-      },
-    );
+        (resp) => {
+          if (resp && resp.ok) {
+            console.log("Dial session requested");
+          } else {
+            console.error("Error creating dial session", resp);
+            const msgText =
+              (resp && (resp.error || resp.details)) ||
+              "Unknown error creating dial session";
+            alert("Error creating dial session:\n" + pbToText(msgText));
+          }
+        },
+      );
 
-    sendResponse({ ok: true });
+      sendResponse({ ok: true });
+    })();
+
     return true;
   }
 
