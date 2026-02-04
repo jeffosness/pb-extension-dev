@@ -137,10 +137,10 @@ function read_daily_sse_log(string $dateYmd): array {
     $endedSeen = [];
     $durations = [];
 
-    // Sweep-line for "max concurrent estimate"
-    // This works across reconnects because we track live connection state
-    $current = 0;
-    $max = 0;
+    // Track currently active unique sessions (not connections)
+    // Use set-based approach to deduplicate reconnects and multi-tab connections
+    $activeSessions = [];  // session_hash => true
+    $maxConcurrent = 0;
 
     while (!feof($fh)) {
         $line = fgets($fh);
@@ -160,14 +160,15 @@ function read_daily_sse_log(string $dateYmd): array {
                 $connectSeen[$session] = true;
                 $stats['connects']++;
             }
-            // Always increment current for concurrent tracking (even on reconnects)
-            $current++;
-            if ($current > $max) $max = $current;
-        } elseif ($event === 'sse.disconnect') {
-            // Only decrement concurrent count on disconnects
-            if ($current > 0) {
-                $current--;
+            // Add to active set (deduplicates by session hash)
+            $activeSessions[$session] = true;
+            $currentCount = count($activeSessions);
+            if ($currentCount > $maxConcurrent) {
+                $maxConcurrent = $currentCount;
             }
+        } elseif ($event === 'sse.disconnect') {
+            // Remove from active set (not just decrement counter)
+            unset($activeSessions[$session]);
         } elseif ($event === 'sse.timeout_inactive' || $event === 'sse.session_stopped') {
             // Count both timeouts and explicit stops as "truly ended" sessions
             if (!isset($endedSeen[$session])) {
@@ -177,17 +178,15 @@ function read_daily_sse_log(string $dateYmd): array {
                 $dur = isset($j['duration_sec']) ? (int)$j['duration_sec'] : 0;
                 if ($dur > 0) $durations[] = $dur;
             }
-            // Decrement concurrent count
-            if ($current > 0) {
-                $current--;
-            }
+            // Remove from active set
+            unset($activeSessions[$session]);
         }
     }
 
     fclose($fh);
 
     $stats['unique_sessions'] = count($connectSeen);
-    $stats['max_concurrent_est'] = $max;
+    $stats['max_concurrent_est'] = $maxConcurrent;
 
     if (count($durations) > 0) {
         sort($durations);
