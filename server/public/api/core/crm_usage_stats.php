@@ -7,6 +7,24 @@
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../utils.php';
 
+// Date filtering (same pattern as sse_usage_stats.php)
+function safe_date_ymd(?string $s): ?string {
+    if (!$s) return null;
+    $s = trim($s);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $s)) return null;
+    return $s;
+}
+
+$start = safe_date_ymd($_GET['start'] ?? null);
+$end = safe_date_ymd($_GET['end'] ?? null);
+
+$today = date('Y-m-d');
+if (!$start) $start = $today;
+if (!$end) $end = $today;
+
+$startTs = strtotime($start . ' 00:00:00');
+$endTs = strtotime($end . ' 23:59:59');
+
 // ✅ Correct metrics dir: server/public/metrics
 $publicDir  = dirname(__DIR__, 2); // core -> api -> public
 $metricsDir = $publicDir . '/metrics';
@@ -45,6 +63,12 @@ while (($line = fgets($fh)) !== false) {
 
     $entry = json_decode($line, true);
     if (!is_array($entry)) continue;
+
+    // Filter by date range
+    $logTs = isset($entry['ts']) ? strtotime($entry['ts']) : 0;
+    if ($logTs < $startTs || $logTs > $endTs) {
+        continue; // Skip events outside date range
+    }
 
     $total++;
 

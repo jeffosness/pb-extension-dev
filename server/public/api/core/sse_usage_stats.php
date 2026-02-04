@@ -246,6 +246,46 @@ foreach ($dates as $d) {
 
 $activeNow = read_presence_active_now($activeWindowSec);
 
+// Calculate true P95 from all durations across all days
+$publicDir = dirname(__DIR__, 2); // core -> api -> public
+$metricsDir = $publicDir . '/metrics';
+$allDurations = [];
+
+foreach ($dates as $d) {
+    $logFile = safe_file_path($metricsDir, 'sse_usage-' . $d . '.log');
+    if (!$logFile || !is_file($logFile)) continue;
+
+    $fh = @fopen($logFile, 'rb');
+    if (!$fh) continue;
+
+    while (!feof($fh)) {
+        $line = fgets($fh);
+        if ($line === false) break;
+        $line = trim($line);
+        if ($line === '') continue;
+
+        $j = json_decode($line, true);
+        if (!is_array($j)) continue;
+
+        $event = $j['event'] ?? '';
+        if ($event === 'sse.timeout_inactive' || $event === 'sse.session_stopped') {
+            $dur = isset($j['duration_sec']) ? (int)$j['duration_sec'] : 0;
+            if ($dur > 0) {
+                $allDurations[] = $dur;
+            }
+        }
+    }
+    fclose($fh);
+}
+
+// Calculate true overall P95
+$overallP95 = 0;
+if (count($allDurations) > 0) {
+    sort($allDurations);
+    $idx = (int)floor(0.95 * (count($allDurations) - 1));
+    $overallP95 = $allDurations[$idx];
+}
+
 api_ok([
     'range' => [
         'start' => $start,
@@ -259,4 +299,5 @@ api_ok([
         'unique_sessions_sum' => $totalUnique,
     ],
     'per_day' => $perDay,
+    'overall_p95' => $overallP95,
 ]);
