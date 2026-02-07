@@ -301,7 +301,16 @@
           <div id="hs-dial-status" class="status"></div>
           <div id="hs-dial-help" class="help-text"></div>
 
-          <button id="hs-dial-action" class="primary">Loading…</button>
+          <!-- Single button for contacts/deals (existing behavior) -->
+          <button id="hs-dial-action" class="primary hidden">Loading…</button>
+
+          <!-- Two buttons for companies (new modes) -->
+          <button id="hs-dial-contacts" class="primary hidden">
+            Launch Dial Session (Contacts)
+          </button>
+          <button id="hs-dial-companies" class="primary hidden" style="margin-top: 8px;">
+            Launch Dial Session (Companies)
+          </button>
         </div>
       </div>
     </div>

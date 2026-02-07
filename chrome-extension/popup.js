@@ -295,17 +295,36 @@ async function refreshHubSpotUi() {
 
   const dialStatus = $("hs-dial-status");
   const dialHelp = $("hs-dial-help");
-  const dialAction = $("hs-dial-action");
+  const dialAction = $("hs-dial-action");      // Single button (contacts/deals)
+  const dialContacts = $("hs-dial-contacts");  // Company → contacts
+  const dialCompanies = $("hs-dial-companies");// Company → companies
 
   const settingsCard = $("hubspot-settings-card");
   const settingsStatus = $("hs-settings-status");
   const disconnectBtn = $("hs-disconnect");
+
+  // Determine which buttons to show based on object type
+  const objectType = ACTIVE_CTX?.objectType || 'contact';
+  const isCompanyList = objectType === 'company';
+
+  // Show appropriate buttons based on object type
+  if (dialAction) setVisible(dialAction, !isCompanyList);
+  if (dialContacts) setVisible(dialContacts, isCompanyList);
+  if (dialCompanies) setVisible(dialCompanies, isCompanyList);
 
   if (dialStatus) dialStatus.textContent = "Checking HubSpot connection…";
   if (dialHelp) dialHelp.textContent = "";
   if (dialAction) {
     dialAction.disabled = true;
     dialAction.textContent = "Loading…";
+  }
+  if (dialContacts) {
+    dialContacts.disabled = true;
+    dialContacts.textContent = "Loading…";
+  }
+  if (dialCompanies) {
+    dialCompanies.disabled = true;
+    dialCompanies.textContent = "Loading…";
   }
 
   let state;
@@ -329,20 +348,44 @@ async function refreshHubSpotUi() {
     if (dialHelp)
       dialHelp.textContent =
         "Launch a dial session from the currently selected records.";
+
+    // Update single button (for contacts/deals)
     if (dialAction) {
       dialAction.disabled = false;
       dialAction.textContent = "Launch HubSpot Dial Session";
       dialAction.dataset.mode = "launch";
+    }
+
+    // Update company buttons
+    if (dialContacts) {
+      dialContacts.disabled = false;
+      dialContacts.textContent = "Launch Dial Session (Contacts)";
+    }
+    if (dialCompanies) {
+      dialCompanies.disabled = false;
+      dialCompanies.textContent = "Launch Dial Session (Companies)";
     }
   } else {
     if (dialStatus) dialStatus.textContent = "Not connected to HubSpot";
     if (dialHelp)
       dialHelp.textContent =
         "Connect HubSpot to enable API-based selection + call logging.";
+
+    // Update single button (for contacts/deals)
     if (dialAction) {
       dialAction.disabled = false;
       dialAction.textContent = "Connect HubSpot";
       dialAction.dataset.mode = "connect";
+    }
+
+    // Update company buttons
+    if (dialContacts) {
+      dialContacts.disabled = false;
+      dialContacts.textContent = "Connect HubSpot";
+    }
+    if (dialCompanies) {
+      dialCompanies.disabled = false;
+      dialCompanies.textContent = "Connect HubSpot";
     }
   }
 
@@ -376,9 +419,13 @@ async function startHubSpotOAuth() {
   window.close();
 }
 
-async function launchHubSpotDialSession() {
+async function launchHubSpotDialSession(callTarget = null) {
   const dialStatus = $("hs-dial-status");
-  const dialAction = $("hs-dial-action");
+  const allButtons = [
+    $("hs-dial-action"),
+    $("hs-dial-contacts"),
+    $("hs-dial-companies")
+  ];
 
   // Best-effort permission request (only at user click)
   try {
@@ -398,22 +445,36 @@ async function launchHubSpotDialSession() {
     // Recover gracefully - continue with dial session
   }
 
-  if (dialAction) dialAction.disabled = true;
+  // Disable all buttons during request
+  allButtons.forEach(btn => { if (btn) btn.disabled = true; });
   if (dialStatus) dialStatus.textContent = "Preparing dial session…";
 
-  const resp = await sendToBackground({ type: "HS_LAUNCH_FROM_SELECTED" });
+  // Build message with optional call_target
+  const message = { type: "HS_LAUNCH_FROM_SELECTED" };
+  if (callTarget) message.call_target = callTarget;
+
+  const resp = await sendToBackground(message);
 
   if (!resp || !resp.ok) {
     if (dialStatus)
       dialStatus.textContent =
         resp?.error || "Could not launch from selection.";
-    if (dialAction) dialAction.disabled = false;
+    allButtons.forEach(btn => { if (btn) btn.disabled = false; });
     await showAlert(resp?.error || "Could not launch HubSpot dial session.");
     return;
   }
 
   if (dialStatus) dialStatus.textContent = "Dial session created ✔";
   window.close();
+}
+
+// Wrapper functions for new buttons
+async function launchHubSpotDialSessionContacts() {
+  await launchHubSpotDialSession('contacts');
+}
+
+async function launchHubSpotDialSessionCompanies() {
+  await launchHubSpotDialSession('companies');
 }
 
 async function disconnectHubSpot() {
@@ -593,6 +654,22 @@ document.addEventListener("DOMContentLoaded", () => {
     if (mode === "launch") return launchHubSpotDialSession();
     return startHubSpotOAuth();
   });
+
+  // HubSpot company buttons
+  $("hs-dial-contacts")?.addEventListener("click", async () => {
+    // If not connected, start OAuth flow
+    const mode = $("hs-dial-contacts")?.textContent;
+    if (mode && mode.includes("Connect")) return startHubSpotOAuth();
+    return launchHubSpotDialSessionContacts();
+  });
+
+  $("hs-dial-companies")?.addEventListener("click", async () => {
+    // If not connected, start OAuth flow
+    const mode = $("hs-dial-companies")?.textContent;
+    if (mode && mode.includes("Connect")) return startHubSpotOAuth();
+    return launchHubSpotDialSessionCompanies();
+  });
+
   $("hs-disconnect")?.addEventListener("click", disconnectHubSpot);
 
   // Tabs

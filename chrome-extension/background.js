@@ -369,8 +369,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (objectType === "deal") mode = "deals";
         if (objectType === "company") mode = "companies";
 
+        // Extract call_target from message (for company dual-mode)
+        const callTarget = msg.call_target || null;
+
         const resp = await api("crm/hubspot/pb_dialsession_selection.php", {
           mode,
+          call_target: callTarget, // NEW: Pass call_target to server
           records: ids.map((id) => ({ id: String(id) })),
           context: {
             objectType,
