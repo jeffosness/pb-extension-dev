@@ -155,7 +155,57 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = []) 
   return $contacts;
 }
 
+/**
+ * Fetch company details by HubSpot company IDs
+ * Mirrors hs_fetch_contacts_by_ids pattern
+ */
+function hs_fetch_companies_by_ids($accessToken, array $companyIds, &$diag = []) {
+  $companies = [];
+  $diag['companies_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
+  foreach ($companyIds as $cid) {
+    $url = 'https://api.hubapi.com/crm/v3/objects/companies/' . rawurlencode($cid) .
+           '?properties=name,phone,domain,city,state';
+
+    list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
+    $diag['companies_fetch']['last_http'] = $code;
+
+    if ($code !== 200 || !is_array($json)) {
+      $diag['companies_fetch']['fail']++;
+      continue;
+    }
+
+    $props = $json['properties'] ?? [];
+    $companies[] = [
+      'hs_id'  => (string)$cid,
+      'name'   => (string)($props['name'] ?? ''),
+      'phone'  => (string)($props['phone'] ?? ''),
+      'domain' => (string)($props['domain'] ?? ''),
+      'city'   => (string)($props['city'] ?? ''),
+      'state'  => (string)($props['state'] ?? ''),
+    ];
+    $diag['companies_fetch']['ok']++;
+  }
+
+  return $companies;
+}
+
+/**
+ * Wrapper with token refresh retry for companies
+ * Mirrors hs_fetch_contacts_with_refresh_retry pattern
+ */
+function hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, array $companyIds, &$diag = []) {
+  $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $diag);
+
+  // Retry with refresh if 401
+  if (empty($companies) && ($diag['companies_fetch']['last_http'] ?? null) === 401) {
+    $hs = hs_refresh_access_token_or_fail($client_id, $hs);
+    $hsAccess = $hs['access_token'];
+    $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $diag);
+  }
+
+  return $companies;
+}
 
 // NEW: Resolve associated contact IDs AND return a map of contactId => [sourceObjectIds...]
 // Used so external_crm_data can include deal/company IDs alongside the contact ID.
@@ -253,9 +303,10 @@ if ($hsAccess === '') {
   api_error('No HubSpot access token saved for this client_id', 'unauthorized', 401);
 }
 
-$mode    = (string)($data['mode'] ?? 'contacts');
-$records = $data['records'] ?? [];
-$context = $data['context'] ?? [];
+$mode       = (string)($data['mode'] ?? 'contacts');
+$callTarget = $data['call_target'] ?? null; // NEW: For company dual-mode
+$records    = $data['records'] ?? [];
+$context    = $data['context'] ?? [];
 
 $ids = extract_ids_from_records($records);
 if (empty($ids)) {
@@ -288,12 +339,30 @@ if ($mode === 'contacts') {
 
 } elseif ($mode === 'companies') {
   $sourceObjectType = 'companies';
-  list($contactIds, $map) = hs_resolve_contact_ids_map_from_objects($hsAccess, 'companies', $ids, $diag);
-  $diag['resolved_contact_ids'] = count($contactIds);
 
-  $sourceObjectIdsByContact = is_array($map) ? $map : [];
+  // NEW: Branch based on call_target
+  if ($callTarget === 'companies') {
+    // **NEW PATH: Dial companies directly**
+    $diag['call_target'] = 'companies';
+    $diag['resolved_company_ids'] = count($ids);
 
-  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
+    // Fetch company details (not contacts)
+    $hsCompanies = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $diag);
+
+    // Store companies in $hsContacts for compatibility with existing error checking
+    // We'll normalize them differently in the normalization section
+    $hsContacts = $hsCompanies;
+
+  } else {
+    // **EXISTING PATH: Dial contacts related to companies (backward compat)**
+    $diag['call_target'] = 'contacts';
+    list($contactIds, $map) = hs_resolve_contact_ids_map_from_objects($hsAccess, 'companies', $ids, $diag);
+    $diag['resolved_contact_ids'] = count($contactIds);
+
+    $sourceObjectIdsByContact = is_array($map) ? $map : [];
+
+    $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
+  }
 
 } else {
   api_error('Invalid mode', 'bad_request', 400);
@@ -320,19 +389,39 @@ $sourceUrl    = (string)($context['url'] ?? '');
 $sourceLabel  = (string)($context['title'] ?? '');
 
 foreach ($hsContacts as $c) {
-  $first = trim((string)($c['first_name'] ?? ''));
-  $last  = trim((string)($c['last_name'] ?? ''));
-  $email = trim((string)($c['email'] ?? ''));
-  $phone = trim((string)($c['phone'] ?? ''));
-  $hsId  = (string)($c['hs_id'] ?? '');
+  // Handle companies vs contacts differently
+  if ($callTarget === 'companies') {
+    // Company normalization
+    $name  = trim((string)($c['name'] ?? ''));
+    $first = $name;
+    $last  = '';
+    $email = ''; // Per user preference: phone-only for companies
+    $phone = trim((string)($c['phone'] ?? ''));
+    $hsId  = (string)($c['hs_id'] ?? '');
 
-  if ($hsId === '') { $skipped++; continue; }
-  if ($phone === '' && $email === '') { $skipped++; continue; }
+    if ($hsId === '') { $skipped++; continue; }
+    if ($phone === '') { $skipped++; continue; } // Companies require phone
 
-  // Record URL for follow-me
-  $recordUrl = ($portalId !== '')
-    ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-1/' . rawurlencode($hsId))
-    : null;
+    // Record URL for follow-me (0-2 = company object type)
+    $recordUrl = ($portalId !== '')
+      ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-2/' . rawurlencode($hsId))
+      : null;
+  } else {
+    // Contact normalization (existing)
+    $first = trim((string)($c['first_name'] ?? ''));
+    $last  = trim((string)($c['last_name'] ?? ''));
+    $email = trim((string)($c['email'] ?? ''));
+    $phone = trim((string)($c['phone'] ?? ''));
+    $hsId  = (string)($c['hs_id'] ?? ''));
+
+    if ($hsId === '') { $skipped++; continue; }
+    if ($phone === '' && $email === '') { $skipped++; continue; }
+
+    // Record URL for follow-me (0-1 = contact object type)
+    $recordUrl = ($portalId !== '')
+      ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-1/' . rawurlencode($hsId))
+      : null;
+  }
 
   // We will use this as our internal key (NOT sent to PB as external_id)
   $externalId = $hsId;
@@ -340,10 +429,10 @@ foreach ($hsContacts as $c) {
   // REQUIRED: external_crm_data must be an ARRAY of objects with crm_id + crm_name
   $externalCrmData = [];
 
-  // Always include the HubSpot contact identity
+  // Include the HubSpot identity (contact or company)
   $externalCrmData[] = [
     'crm_id'   => $hsId,
-    'crm_name' => 'hubspot',
+    'crm_name' => ($callTarget === 'companies') ? 'hubspotcompany' : 'hubspot',
   ];
 
   // OPTIONAL: include originating deal/company IDs as additional external_crm_data entries
@@ -388,11 +477,17 @@ $contacts_map[$externalId] = [
   'source_url'     => $sourceUrl ?: null,
   'source_label'   => $sourceLabel ?: null,
 
-  'crm_name'       => 'hubspot',
+  'crm_name'       => ($callTarget === 'companies') ? 'hubspotcompany' : 'hubspot',
   'crm_identifier' => $externalId,
 
   'record_url'     => $recordUrl ?: null,
 ];
+}
+
+// Add diagnostics for companies mode
+if ($callTarget === 'companies') {
+  $diag['companies_normalized'] = count($pbContacts);
+  $diag['companies_skipped'] = $skipped;
 }
 
 if (empty($pbContacts)) {
@@ -515,7 +610,7 @@ save_session_state($session_token, $state);
 $tempCode = temp_code_store($session_token, 300);  // 5-minute TTL
 
 // Unified-style response (flat keys)
-api_ok_flat([
+$response = [
   'session_token'   => $session_token,
   'temp_code'       => $tempCode,
   'dialsession_url' => $launch_url,
@@ -523,5 +618,13 @@ api_ok_flat([
   'contacts_sent'   => count($pbContacts),
   'skipped'         => $skipped,
   'pb_ms'           => $pb_ms,
-]);
+];
+
+// Add success message for companies mode when some were skipped
+if ($callTarget === 'companies' && $skipped > 0) {
+  $total = count($pbContacts) + $skipped;
+  $response['success_message'] = "Created dial session with " . count($pbContacts) . " of {$total} companies (skipped {$skipped} without phone)";
+}
+
+api_ok_flat($response);
 
