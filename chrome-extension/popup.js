@@ -8,6 +8,29 @@ function setVisible(el, isVisible) {
   if (el) el.classList.toggle("hidden", !isVisible);
 }
 
+/**
+ * Extract error message from API response
+ * Handles both string errors and structured error objects
+ */
+function getErrorMessage(resp, fallback = "An error occurred") {
+  if (!resp?.error) return fallback;
+
+  if (typeof resp.error === 'string') {
+    return resp.error;
+  }
+
+  if (typeof resp.error === 'object') {
+    let msg = resp.error.message || fallback;
+    // Add skip details if present (for dial session errors)
+    if (resp.error.skipped > 0) {
+      msg += ` (${resp.error.skipped} records without phone numbers were skipped)`;
+    }
+    return msg;
+  }
+
+  return fallback;
+}
+
 // ---------------------------
 // Custom modal dialogs (replaces native alert/confirm to prevent Chrome rendering bugs)
 // ---------------------------
@@ -456,11 +479,10 @@ async function launchHubSpotDialSession(callTarget = null) {
   const resp = await sendToBackground(message);
 
   if (!resp || !resp.ok) {
-    if (dialStatus)
-      dialStatus.textContent =
-        resp?.error || "Could not launch from selection.";
+    const errorMsg = getErrorMessage(resp, "Could not launch from selection.");
+    if (dialStatus) dialStatus.textContent = errorMsg;
     allButtons.forEach(btn => { if (btn) btn.disabled = false; });
-    await showAlert(resp?.error || "Could not launch HubSpot dial session.");
+    await showAlert(errorMsg);
     return;
   }
 
@@ -491,9 +513,10 @@ async function disconnectHubSpot() {
   });
 
   if (!resp || resp.ok !== true) {
+    const errorMsg = getErrorMessage(resp, "Failed to disconnect HubSpot.");
     if (settingsStatus) settingsStatus.textContent = "Failed to disconnect.";
     if (btn) btn.disabled = false;
-    await showAlert(resp?.error || "Failed to disconnect HubSpot.");
+    await showAlert(errorMsg);
     return;
   }
 
@@ -544,7 +567,8 @@ async function savePAT() {
     await refreshState();
     activateTab("settings");
   } else {
-    await showAlert("Error saving PAT: " + (resp?.error || "Unknown error"));
+    const errorMsg = getErrorMessage(resp, "Unknown error");
+    await showAlert("Error saving PAT: " + errorMsg);
     if (btn) btn.disabled = false;
   }
 }
@@ -562,7 +586,8 @@ async function disconnectPAT() {
     await refreshState();
     activateTab("dial");
   } else {
-    await showAlert("Error disconnecting: " + (resp?.error || "Unknown error"));
+    const errorMsg = getErrorMessage(resp, "Unknown error");
+    await showAlert("Error disconnecting: " + errorMsg);
     if (btn) btn.disabled = false;
   }
 }
@@ -606,7 +631,8 @@ async function scanAndLaunch() {
     tabId: tab.id,
   });
   if (!resp || !resp.ok) {
-    await showAlert(resp?.error || "Could not scan this page.");
+    const errorMsg = getErrorMessage(resp, "Could not scan this page.");
+    await showAlert(errorMsg);
   }
 }
 
