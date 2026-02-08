@@ -203,21 +203,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try {
         if (tabId == null) return sendResponse({ context: null });
 
-        // Prefer context from injected content.js if we have it
-        if (
-          Object.prototype.hasOwnProperty.call(tabContexts, tabId) &&
-          tabContexts[tabId]
-        ) {
-          return sendResponse({ context: tabContexts[tabId] });
-        }
-
-        // Otherwise infer from the active tab URL
+        // Get tab URL to always detect objectType
         const [tab] = await chrome.tabs.query({
           active: true,
           currentWindow: true,
         });
-        const inferred = detectCrmFromUrl(tab?.url || "");
-        return sendResponse({ context: inferred });
+        const urlContext = detectCrmFromUrl(tab?.url || "");
+
+        // If we have cached context from content script, merge with URL detection
+        if (
+          Object.prototype.hasOwnProperty.call(tabContexts, tabId) &&
+          tabContexts[tabId]
+        ) {
+          // Merge: prefer cached context but always use objectType from URL
+          return sendResponse({
+            context: {
+              ...tabContexts[tabId],
+              objectType: urlContext.objectType  // Always use URL-detected objectType
+            }
+          });
+        }
+
+        // Otherwise use URL-inferred context
+        return sendResponse({ context: urlContext });
       } catch {
         return sendResponse({ context: null });
       }
