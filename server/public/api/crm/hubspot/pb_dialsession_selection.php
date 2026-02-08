@@ -349,6 +349,16 @@ if ($mode === 'contacts') {
     // Fetch company details (not contacts)
     $hsCompanies = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $diag);
 
+    // Diagnostic: Log raw company data (redacted)
+    $diag['companies_raw_sample'] = !empty($hsCompanies) ? array_map(function($c) {
+      return [
+        'has_hs_id' => !empty($c['hs_id']),
+        'has_name' => !empty($c['name']),
+        'has_phone' => !empty($c['phone']),
+        'phone_value' => isset($c['phone']) ? (empty(trim($c['phone'])) ? '(empty)' : '(has value)') : '(not set)',
+      ];
+    }, array_slice($hsCompanies, 0, 2)) : [];
+
     // Store companies in $hsContacts for compatibility with existing error checking
     // We'll normalize them differently in the normalization section
     $hsContacts = $hsCompanies;
