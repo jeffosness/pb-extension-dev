@@ -64,8 +64,15 @@ function detectCrmFromUrl(tabUrl) {
       level: 1,
     };
 
-  if (host.includes("app.hubspot.com"))
-    return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3 };
+  if (host.includes("app.hubspot.com")) {
+    // Detect object type from HubSpot URL pattern: /objects/0-X/
+    let objectType = "contact"; // default
+    if (path.includes("/objects/0-1/")) objectType = "contact";
+    else if (path.includes("/objects/0-2/")) objectType = "company";
+    else if (path.includes("/objects/0-3/")) objectType = "deal";
+
+    return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType };
+  }
   if (host.includes("pipedrive.com"))
     return { host, path, crmId: "pipedrive", crmName: "Pipedrive", level: 2 };
   if (host.includes("lightning.force.com"))
