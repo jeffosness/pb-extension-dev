@@ -15,11 +15,12 @@
 5. [Critical Utilities & Patterns](#critical-utilities--patterns)
 6. [Authentication & Token Management](#authentication--token-management)
 7. [Session Management & Real-Time Streaming](#session-management--real-time-streaming)
-8. [Mandatory "Think-Check-Code" Workflow](#mandatory-think-check-code-workflow)
-9. [Testing & Debugging](#testing--debugging)
-10. ["Do Not Break" List (Stability Contracts)](#do-not-break-list-stability-contracts)
-11. [Adding New CRM Providers](#adding-new-crm-providers)
-12. [Deployment Checklist](#deployment-checklist)
+8. [Chrome Extension Development Patterns](#chrome-extension-development-patterns)
+9. [Mandatory "Think-Check-Code" Workflow](#mandatory-think-check-code-workflow)
+10. [Testing & Debugging](#testing--debugging)
+11. ["Do Not Break" List (Stability Contracts)](#do-not-break-list-stability-contracts)
+12. [Adding New CRM Providers](#adding-new-crm-providers)
+13. [Deployment Checklist](#deployment-checklist)
 
 ---
 
@@ -471,6 +472,338 @@ Browser: content.js receives update → render overlay → navigate CRM
 ```
 
 **Security Note:** Webhooks currently accept session_token in URL (trusted backend). Consider adding HMAC signature validation for defense-in-depth.
+
+---
+
+## Chrome Extension Development Patterns
+
+### Context Management & State Flow
+
+**Purpose:** Understanding how CRM context flows through the extension prevents bugs related to cached state, missing fields, and stale data.
+
+**Context Flow:**
+
+```
+URL Detection (background.js)
+  ↓ detectCrmFromUrl() → { crmId, level, objectType }
+  ↓
+Content Script Scan (content.js)
+  ↓ Scrapes page → { selectedIds, portalId, title }
+  ↓
+Background Script Cache (background.js)
+  ↓ Merges + caches → tabContexts[tabId]
+  ↓
+Popup UI (popup.js)
+  ↓ GET_CONTEXT message → ACTIVE_CTX
+  ↓
+Button Visibility Logic
+  ↓ Shows/hides buttons based on objectType
+```
+
+**Critical Rules:**
+
+1. **URL-based context is authoritative for object type**
+   - Always detect `objectType` from URL patterns (e.g., `/objects/0-2/` = companies)
+   - Content scripts may not have full context, especially on initial page load
+   - When caching context, preserve ALL fields from both URL and content sources
+
+2. **Context caching must merge, not replace**
+   ```javascript
+   // ❌ WRONG: Replaces context, loses objectType
+   tabContexts[tabId] = contentScriptContext;
+
+   // ✅ CORRECT: Merges, preserves objectType from URL
+   const urlContext = detectCrmFromUrl(tab.url);
+   tabContexts[tabId] = {
+     ...contentScriptContext,
+     objectType: urlContext.objectType  // Always use URL-detected type
+   };
+   ```
+
+3. **Adding new context fields? Update all sources**
+   - URL detection in `background.js` → `detectCrmFromUrl()`
+   - Content script in `content.js` → message handlers
+   - Background cache in `background.js` → `tabContexts`
+   - Popup state in `popup.js` → `ACTIVE_CTX`
+
+### HubSpot Object Types & URL Patterns
+
+**URL Pattern Detection:**
+
+| Object Type | URL Pattern | Object Type ID | Record URL Format |
+|-------------|-------------|----------------|-------------------|
+| Contacts | `/objects/0-1/` or `/contact/` | `0-1` | `https://app.hubspot.com/contacts/{portalId}/record/0-1/{contactId}` |
+| Companies | `/objects/0-2/` or `/company/` | `0-2` | `https://app.hubspot.com/contacts/{portalId}/record/0-2/{companyId}` |
+| Deals | `/objects/0-3/` or `/deal/` | `0-3` | `https://app.hubspot.com/contacts/{portalId}/record/0-3/{dealId}` |
+
+**Field Name Differences:**
+
+```javascript
+// Contacts
+{
+  first_name: "John",
+  last_name: "Doe",
+  email: "john@example.com",
+  phone: "555-1234"
+}
+
+// Companies
+{
+  name: "Acme Corp",        // NOT first_name/last_name!
+  domain: "acme.com",
+  phone: "555-5678",
+  city: "San Francisco",
+  state: "CA"
+}
+
+// Deals
+{
+  dealname: "Q1 Enterprise Deal",  // NOT name!
+  amount: "50000",
+  dealstage: "closedwon"
+}
+```
+
+**Implementation Pattern:**
+
+```php
+// In pb_dialsession_selection.php normalization loop
+if ($callTarget === 'companies') {
+  // Company-specific field mapping
+  $name = trim((string)($c['name'] ?? ''));
+  $first = $name;  // Use full name as first_name
+  $last = '';      // Companies have no last name
+  $email = '';     // Optional for companies
+
+  $recordUrl = "https://app.hubspot.com/contacts/{$portalId}/record/0-2/{$companyId}";
+} else {
+  // Contact-specific field mapping
+  $first = trim((string)($c['first_name'] ?? ''));
+  $last = trim((string)($c['last_name'] ?? ''));
+  $email = trim((string)($c['email'] ?? ''));
+
+  $recordUrl = "https://app.hubspot.com/contacts/{$portalId}/record/0-1/{$contactId}";
+}
+```
+
+### Error Response Handling
+
+**Problem:** Server APIs return structured error objects, but JavaScript tries to display them as strings, resulting in `"[object Object]"` messages.
+
+**Server Response Format:**
+
+```javascript
+// Success
+{ ok: true, data: {...} }
+
+// Error
+{
+  ok: false,
+  error: {
+    code: "bad_request",
+    message: "No dialable contacts after normalization",
+    skipped: 2,           // Optional: additional details
+    hs_contacts: 2        // Optional: context
+  }
+}
+```
+
+**Extension Pattern (popup.js):**
+
+```javascript
+/**
+ * Extract error message from API response
+ * Handles both string errors and structured error objects
+ */
+function getErrorMessage(resp, fallback = "An error occurred") {
+  if (!resp?.error) return fallback;
+
+  if (typeof resp.error === 'string') {
+    return resp.error;
+  }
+
+  if (typeof resp.error === 'object') {
+    let msg = resp.error.message || fallback;
+    // Add contextual details if present
+    if (resp.error.skipped > 0) {
+      msg += ` (${resp.error.skipped} records skipped)`;
+    }
+    return msg;
+  }
+
+  return fallback;
+}
+
+// Usage
+const resp = await sendToBackground(message);
+if (!resp || !resp.ok) {
+  const errorMsg = getErrorMessage(resp, "Operation failed");
+  await showAlert(errorMsg);
+  return;
+}
+```
+
+**Rule:** ALWAYS use `getErrorMessage()` when displaying API errors. Never use `resp.error` directly in UI.
+
+### CRM ID Uniqueness Across Object Types
+
+**Problem:** PhoneBurner uses `crm_id` in `external_crm_data` to match and update records. If companies and contacts use the same HubSpot ID format, PhoneBurner will incorrectly merge them.
+
+**Example Issue:**
+
+```javascript
+// Contact record
+{
+  first_name: "John",
+  external_crm_data: [
+    { crm_id: "12345", crm_name: "hubspot" }
+  ]
+}
+
+// Company record (WRONG - same ID!)
+{
+  first_name: "Acme Corp",
+  external_crm_data: [
+    { crm_id: "12345", crm_name: "hubspotcompany" }  // ❌ PhoneBurner merges!
+  ]
+}
+```
+
+**Solution: Prefix CRM IDs by object type**
+
+```php
+// In pb_dialsession_selection.php
+$externalCrmData[] = [
+  'crm_id'   => ($callTarget === 'companies')
+    ? ('HS Company ' . $hsId)  // Prefix for uniqueness
+    : $hsId,                    // Raw ID for contacts
+  'crm_name' => ($callTarget === 'companies')
+    ? 'hubspotcompany'
+    : 'hubspot',
+];
+
+// Also update contacts_map key to match for webhook lookups
+$externalId = ($callTarget === 'companies')
+  ? ('HS Company ' . $hsId)
+  : $hsId;
+
+$contacts_map[$externalId] = [
+  'crm_identifier' => $externalId,  // Matches webhook crm_id
+  'record_url'     => $recordUrl,   // Still uses raw HubSpot ID
+  // ...
+];
+```
+
+**Rule for New Object Types:**
+
+- **Contacts:** Use raw HubSpot ID (`"12345"`)
+- **Companies:** Prefix with `"HS Company "` (`"HS Company 12345"`)
+- **Deals:** Prefix with `"HS Deal "` (`"HS Deal 12345"`)
+- **Custom Objects:** Prefix with `"HS {ObjectType} "` (`"HS Ticket 12345"`)
+
+**Critical:** The `contacts_map` key MUST match the `crm_id` sent to PhoneBurner, otherwise webhook matching will fail.
+
+### Testing with Real CRM Data
+
+**Lesson Learned:** Plans often assume ideal data (e.g., "companies have phone numbers"), but production CRMs have messy, incomplete data.
+
+**Testing Checklist:**
+
+- [ ] **Missing required fields** — Test with records missing phone, email, name
+- [ ] **Empty strings vs null** — Test with `""` vs `null` vs missing keys
+- [ ] **Whitespace** — Test with `"   "` (spaces only)
+- [ ] **Special characters** — Test with Unicode, emojis, HTML entities
+- [ ] **Edge counts** — Test with 0, 1, 100+ records selected
+- [ ] **Mixed validity** — Select 10 records, half valid, half invalid
+- [ ] **API rate limits** — Test with large selections to trigger rate limiting
+
+**Validation Pattern:**
+
+```php
+// Good: Trim before checking
+$phone = trim((string)($c['phone'] ?? ''));
+if ($phone === '') {
+  $skipped++;
+  continue;
+}
+
+// Also good: Allow phone OR email
+if ($phone === '' && $email === '') {
+  $skipped++;
+  continue;
+}
+```
+
+**Error Message Pattern:**
+
+```php
+// Always report what was skipped and why
+if (empty($pbContacts)) {
+  api_error('No dialable contacts after normalization', 'bad_request', 400, [
+    'skipped' => $skipped,
+    'total' => count($hsContacts),
+    'reason' => 'missing phone numbers',
+  ]);
+}
+```
+
+### Debugging Extension Context Issues
+
+**Common Symptoms:**
+
+- Buttons show initially but disappear after navigation
+- Wrong buttons appear for object type (e.g., single button on company pages)
+- Context shows `undefined` or stale values
+
+**Debug Steps:**
+
+1. **Check URL detection:**
+   ```javascript
+   // In background.js console
+   detectCrmFromUrl("https://app.hubspot.com/contacts/123/objects/0-2/456")
+   // Should return: { crmId: "hubspot", level: 3, objectType: "company" }
+   ```
+
+2. **Check cached context:**
+   ```javascript
+   // In background.js console
+   console.log(tabContexts);
+   // Should show current tab's context with objectType
+   ```
+
+3. **Check popup context:**
+   ```javascript
+   // In popup.js console (F12 on popup)
+   console.log(ACTIVE_CTX);
+   // Should match background context
+   ```
+
+4. **Force refresh:**
+   ```javascript
+   // In popup.js console
+   chrome.runtime.sendMessage({ type: "GET_CONTEXT" }, (resp) => {
+     console.log("Fresh context:", resp.context);
+   });
+   ```
+
+**Fix Pattern:**
+
+If context is stale, always re-detect from current URL:
+
+```javascript
+// In background.js GET_CONTEXT handler
+const urlContext = detectCrmFromUrl(tab?.url || "");
+
+// Merge cached context with fresh URL detection
+const mergedContext = {
+  ...tabContexts[tabId],
+  objectType: urlContext.objectType,  // Always fresh from URL
+  crmId: urlContext.crmId,
+  level: urlContext.level
+};
+
+sendResponse({ context: mergedContext });
+```
 
 ---
 
