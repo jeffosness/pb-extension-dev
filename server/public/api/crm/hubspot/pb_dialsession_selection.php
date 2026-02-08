@@ -412,7 +412,7 @@ foreach ($hsContacts as $c) {
     $last  = trim((string)($c['last_name'] ?? ''));
     $email = trim((string)($c['email'] ?? ''));
     $phone = trim((string)($c['phone'] ?? ''));
-    $hsId  = (string)($c['hs_id'] ?? ''));
+    $hsId  = (string)($c['hs_id'] ?? '');
 
     if ($hsId === '') { $skipped++; continue; }
     if ($phone === '' && $email === '') { $skipped++; continue; }
