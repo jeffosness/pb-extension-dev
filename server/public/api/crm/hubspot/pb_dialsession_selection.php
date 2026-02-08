@@ -434,14 +434,16 @@ foreach ($hsContacts as $c) {
   }
 
   // We will use this as our internal key (NOT sent to PB as external_id)
-  $externalId = $hsId;
+  // For companies, use prefixed format to match the crm_id we send to PhoneBurner
+  $externalId = ($callTarget === 'companies') ? ('HS Company ' . $hsId) : $hsId;
 
   // REQUIRED: external_crm_data must be an ARRAY of objects with crm_id + crm_name
   $externalCrmData = [];
 
   // Include the HubSpot identity (contact or company)
+  // For companies, prefix ID with "HS Company " to prevent matching with existing contact records
   $externalCrmData[] = [
-    'crm_id'   => $hsId,
+    'crm_id'   => ($callTarget === 'companies') ? ('HS Company ' . $hsId) : $hsId,
     'crm_name' => ($callTarget === 'companies') ? 'hubspotcompany' : 'hubspot',
   ];
 
