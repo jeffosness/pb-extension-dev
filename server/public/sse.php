@@ -182,10 +182,18 @@ register_shutdown_function(function () use (&$didFinalize, $sessionHash, $connec
 $path       = session_file_path($session_token);
 $last_mtime = 0;
 
+// Resolve member_user_id from session state for unique user tracking
+$sessionState = load_session_state($session_token);
+$memberUserIdHash = null;
+if (is_array($sessionState) && !empty($sessionState['member_user_id'])) {
+    $memberUserIdHash = substr(hash('sha256', (string)$sessionState['member_user_id']), 0, 12);
+}
+
 // Log connect + initial presence
 sse_log_activity('sse.connect', [
-  'session_token_hash' => $sessionHash,
-  'ip_hash'            => $ipHash,
+  'session_token_hash'   => $sessionHash,
+  'ip_hash'              => $ipHash,
+  'member_user_id_hash'  => $memberUserIdHash,
 ]);
 
 sse_presence_write($sessionHash, $connectionStart, $connectionStart);

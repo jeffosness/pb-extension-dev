@@ -282,6 +282,7 @@ function pb_call_dialsession($pat, array $payload) {
 // -----------------------------------------------------------------------------
 $data      = json_input();
 $client_id = get_client_id_or_fail($data);
+$member_user_id = resolve_member_user_id_for_client($client_id);
 
 $pat = load_pb_token($client_id);
 if (!$pat) {
@@ -600,6 +601,7 @@ $state = [
   'dialsession_url' => $launch_url,
 
   'client_id'       => $client_id,
+  'member_user_id'  => $member_user_id,
   'created_at'      => date('c'),
 
   'current'         => null,
