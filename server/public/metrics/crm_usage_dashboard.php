@@ -320,8 +320,12 @@ document.addEventListener("DOMContentLoaded", () => {
         ? sse.active_now.active_now
         : 0;
 
+      const uniqueUsers = (sse.totals && typeof sse.totals.unique_users === "number")
+          ? sse.totals.unique_users : 0;
+
       sseGridEl.innerHTML = "";
       sseGridEl.appendChild(statCard("Active dial sessions now (SSE)", String(activeNow)));
+      sseGridEl.appendChild(statCard("Unique users (" + dateRange.label + ")", String(uniqueUsers)));
       sseGridEl.appendChild(statCard("Sessions started (" + dateRange.label + ")", String(totalConnects)));
       sseGridEl.appendChild(statCard("Sessions ended (" + dateRange.label + ")", String(totalDisconnects)));
       sseGridEl.appendChild(statCard("Avg session duration", secondsToFriendly(totalAvgDur)));

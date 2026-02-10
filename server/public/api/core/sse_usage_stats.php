@@ -100,6 +100,7 @@ function read_daily_sse_log(string $dateYmd): array {
             'connects' => 0,
             'disconnects' => 0,
             'unique_sessions' => 0,
+            'unique_users' => 0,
             'avg_duration_sec' => 0,
             'p95_duration_sec' => 0,
             'max_concurrent_est' => 0,
@@ -112,6 +113,7 @@ function read_daily_sse_log(string $dateYmd): array {
         'connects' => 0,
         'disconnects' => 0,
         'unique_sessions' => 0,
+        'unique_users' => 0,
         'avg_duration_sec' => 0,
         'p95_duration_sec' => 0,
         'max_concurrent_est' => 0,
@@ -136,6 +138,7 @@ function read_daily_sse_log(string $dateYmd): array {
     $connectSeen = [];
     $endedSeen = [];
     $durations = [];
+    $uniqueUsers = [];  // member_user_id_hash => true
 
     // Track currently active unique sessions (not connections)
     // Use set-based approach to deduplicate reconnects and multi-tab connections
@@ -159,6 +162,11 @@ function read_daily_sse_log(string $dateYmd): array {
             if (!isset($connectSeen[$session])) {
                 $connectSeen[$session] = true;
                 $stats['connects']++;
+            }
+            // Track unique users by member_user_id_hash
+            $userHash = $j['member_user_id_hash'] ?? null;
+            if (is_string($userHash) && $userHash !== '') {
+                $uniqueUsers[$userHash] = true;
             }
             // Add to active set (deduplicates by session hash)
             $activeSessions[$session] = true;
@@ -186,6 +194,8 @@ function read_daily_sse_log(string $dateYmd): array {
     fclose($fh);
 
     $stats['unique_sessions'] = count($connectSeen);
+    $stats['unique_users'] = count($uniqueUsers);
+    $stats['_user_hashes'] = array_keys($uniqueUsers);  // for cross-day dedup (stripped before API output)
     $stats['max_concurrent_est'] = $maxConcurrent;
 
     if (count($durations) > 0) {
@@ -233,9 +243,17 @@ $perDay = [];
 $totalConnects = 0;
 $totalDisconnects = 0;
 $totalUnique = 0;
+$allUniqueUsers = [];  // union of member_user_id_hash across all days
 
 foreach ($dates as $d) {
     $day = read_daily_sse_log($d);
+
+    // Collect unique user hashes across all days for cross-day dedup
+    foreach ($day['_user_hashes'] ?? [] as $hash) {
+        $allUniqueUsers[$hash] = true;
+    }
+    unset($day['_user_hashes']);  // strip internal field from API output
+
     $perDay[] = $day;
 
     $totalConnects += (int)$day['connects'];
@@ -297,6 +315,7 @@ api_ok([
         'connects' => $totalConnects,
         'disconnects' => $totalDisconnects,
         'unique_sessions_sum' => $totalUnique,
+        'unique_users' => count($allUniqueUsers),
     ],
     'per_day' => $perDay,
     'overall_p95' => $overallP95,
