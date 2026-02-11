@@ -127,10 +127,20 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
   ];
   $fallback = $fallbacks[$objectType] ?? $fallbacks['contacts'];
 
+  $logCtx = [
+    'hub_id' => $hubId ?: '(empty)',
+    'object_type' => $objectType,
+  ];
+
   // Cache check
   $cacheDir = __DIR__ . '/../../../cache';
   if (!is_dir($cacheDir)) {
-    @mkdir($cacheDir, 0770, true);
+    $mkdirOk = @mkdir($cacheDir, 0770, true);
+    if (!$mkdirOk) {
+      api_log('phone_props.cache_mkdir_fail', array_merge($logCtx, [
+        'cache_dir' => $cacheDir,
+      ]));
+    }
   }
   $safeHubId   = preg_replace('/[^a-zA-Z0-9_-]/', '', $hubId);
   $safeObjType = preg_replace('/[^a-zA-Z0-9_-]/', '', $objectType);
@@ -141,6 +151,11 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
     if ($mtime !== false && (time() - $mtime) < 3600) {
       $cached = @json_decode(@file_get_contents($cacheFile), true);
       if (is_array($cached) && !empty($cached)) {
+        api_log('phone_props.cache_hit', array_merge($logCtx, [
+          'count' => count($cached),
+          'names' => array_column($cached, 'name'),
+          'age_sec' => time() - $mtime,
+        ]));
         return $cached;
       }
     }
@@ -151,6 +166,11 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
   list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
 
   if ($code !== 200 || !is_array($json) || !isset($json['results'])) {
+    api_log('phone_props.api_fail', array_merge($logCtx, [
+      'http_code' => $code,
+      'has_results' => isset($json['results']),
+      'fallback_names' => array_column($fallback, 'name'),
+    ]));
     return $fallback;
   }
 
@@ -166,10 +186,27 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
   }
 
   if (empty($phoneProps)) {
+    api_log('phone_props.none_found', array_merge($logCtx, [
+      'total_properties' => count($json['results']),
+      'fallback_names' => array_column($fallback, 'name'),
+    ]));
     return $fallback;
   }
 
-  @file_put_contents($cacheFile, json_encode($phoneProps, JSON_UNESCAPED_SLASHES), LOCK_EX);
+  api_log('phone_props.discovered', array_merge($logCtx, [
+    'count' => count($phoneProps),
+    'names' => array_column($phoneProps, 'name'),
+    'total_properties' => count($json['results']),
+  ]));
+
+  $written = @file_put_contents($cacheFile, json_encode($phoneProps, JSON_UNESCAPED_SLASHES), LOCK_EX);
+  if ($written === false) {
+    api_log('phone_props.cache_write_fail', array_merge($logCtx, [
+      'cache_file' => $cacheFile,
+      'dir_exists' => is_dir($cacheDir),
+      'dir_writable' => is_writable($cacheDir),
+    ]));
+  }
 
   return $phoneProps;
 }
@@ -200,6 +237,11 @@ function build_phone_fields_from_props(array $hsProps, array $phoneProperties, ?
   }
 
   // Iterate all phone properties
+  $seenValues = []; // Deduplicate by normalized phone value
+  if ($primary !== '') {
+    $seenValues[preg_replace('/[^0-9+]/', '', $primary)] = true;
+  }
+
   foreach ($phoneProperties as $propDef) {
     $propName  = $propDef['name'] ?? '';
     $propLabel = $propDef['label'] ?? $propName;
@@ -207,8 +249,10 @@ function build_phone_fields_from_props(array $hsProps, array $phoneProperties, ?
 
     if ($value === '') continue;
 
-    // Skip if already used as preferred primary
-    if ($value === $primary && $propName === $preferredPrimary) continue;
+    // Deduplicate by digits-only normalization (ignores formatting differences)
+    $normalized = preg_replace('/[^0-9+]/', '', $value);
+    if (isset($seenValues[$normalized])) continue;
+    $seenValues[$normalized] = true;
 
     if ($primary === '') {
       $primary = $value;
@@ -263,6 +307,21 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneP
     $props = $json['properties'] ?? [];
     $phoneData = build_phone_fields_from_props($props, $phoneProperties);
 
+    // Log phone extraction details for debugging (no PII - just property presence)
+    $phonePropPresence = [];
+    foreach ($phoneProperties as $pd) {
+      $pn = $pd['name'] ?? '';
+      $pv = trim((string)($props[$pn] ?? ''));
+      $phonePropPresence[$pn] = $pv !== '' ? '(has value)' : '(empty)';
+    }
+    $diag['contacts_fetch']['phone_extraction'][] = [
+      'contact_idx' => $diag['contacts_fetch']['ok'],
+      'props_requested' => $allProps,
+      'phone_prop_presence' => $phonePropPresence,
+      'primary' => $phoneData['primary'] !== '' ? '(has value)' : '(empty)',
+      'additional_count' => count($phoneData['additional']),
+    ];
+
     $contacts[] = [
       'hs_id'             => (string)$cid,
       'first_name'        => (string)($props['firstname'] ?? ''),
@@ -304,6 +363,21 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
 
     $props = $json['properties'] ?? [];
     $phoneData = build_phone_fields_from_props($props, $phoneProperties);
+
+    // Log phone extraction details for debugging (no PII - just property presence)
+    $phonePropPresence = [];
+    foreach ($phoneProperties as $pd) {
+      $pn = $pd['name'] ?? '';
+      $pv = trim((string)($props[$pn] ?? ''));
+      $phonePropPresence[$pn] = $pv !== '' ? '(has value)' : '(empty)';
+    }
+    $diag['companies_fetch']['phone_extraction'][] = [
+      'company_idx' => $diag['companies_fetch']['ok'],
+      'props_requested' => $allProps,
+      'phone_prop_presence' => $phonePropPresence,
+      'primary' => $phoneData['primary'] !== '' ? '(has value)' : '(empty)',
+      'additional_count' => count($phoneData['additional']),
+    ];
 
     $companies[] = [
       'hs_id'             => (string)$cid,
