@@ -178,12 +178,25 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
   foreach ($json['results'] as $prop) {
     if (!is_array($prop)) continue;
     if (($prop['fieldType'] ?? '') === 'phonenumber') {
+      $name = (string)($prop['name'] ?? '');
+      // Skip HubSpot system calculated properties — they're derived duplicates
+      // with ugly labels like "Calculated Phone Number without country code"
+      if (strpos($name, 'hs_calculated_') === 0) continue;
+
       $phoneProps[] = [
-        'name'  => (string)($prop['name'] ?? ''),
+        'name'  => $name,
         'label' => (string)($prop['label'] ?? $prop['name'] ?? ''),
       ];
     }
   }
+
+  // Sort: standard properties first (phone, mobilephone), then custom, then hs_ system props
+  usort($phoneProps, function($a, $b) {
+    $order = ['phone' => 0, 'mobilephone' => 1];
+    $aOrder = $order[$a['name']] ?? (strpos($a['name'], 'hs_') === 0 ? 100 : 50);
+    $bOrder = $order[$b['name']] ?? (strpos($b['name'], 'hs_') === 0 ? 100 : 50);
+    return $aOrder - $bOrder;
+  });
 
   if (empty($phoneProps)) {
     api_log('phone_props.none_found', array_merge($logCtx, [
@@ -257,9 +270,19 @@ function build_phone_fields_from_props(array $hsProps, array $phoneProperties, ?
     if ($primary === '') {
       $primary = $value;
     } else {
+      // Map phone_type from property name/label: 1=Home, 2=Work, 3=Mobile
+      $hint = strtolower($propName . ' ' . $propLabel);
+      if (strpos($hint, 'mobile') !== false || strpos($hint, 'cell') !== false) {
+        $phoneType = '3'; // Mobile
+      } elseif (strpos($hint, 'home') !== false) {
+        $phoneType = '1'; // Home
+      } else {
+        $phoneType = '2'; // Work (default)
+      }
+
       $additional[] = [
         'number'      => $value,
-        'phone_type'  => '2',
+        'phone_type'  => $phoneType,
         'phone_label' => $propLabel,
       ];
     }
