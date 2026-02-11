@@ -250,9 +250,18 @@ function build_phone_fields_from_props(array $hsProps, array $phoneProperties, ?
   }
 
   // Iterate all phone properties
-  $seenValues = []; // Deduplicate by normalized phone value
+  // Deduplicate by normalized phone value — strip all non-digits, then strip
+  // leading country code "1" for US numbers so +16463627327 matches 6463627327
+  $seenValues = [];
+  $normalizePhone = function(string $v): string {
+    $digits = preg_replace('/[^0-9]/', '', $v);
+    if (strlen($digits) === 11 && $digits[0] === '1') {
+      $digits = substr($digits, 1);
+    }
+    return $digits;
+  };
   if ($primary !== '') {
-    $seenValues[preg_replace('/[^0-9+]/', '', $primary)] = true;
+    $seenValues[$normalizePhone($primary)] = true;
   }
 
   foreach ($phoneProperties as $propDef) {
@@ -262,9 +271,9 @@ function build_phone_fields_from_props(array $hsProps, array $phoneProperties, ?
 
     if ($value === '') continue;
 
-    // Deduplicate by digits-only normalization (ignores formatting differences)
-    $normalized = preg_replace('/[^0-9+]/', '', $value);
-    if (isset($seenValues[$normalized])) continue;
+    // Deduplicate: ignores formatting and US country code differences
+    $normalized = $normalizePhone($value);
+    if ($normalized === '' || isset($seenValues[$normalized])) continue;
     $seenValues[$normalized] = true;
 
     if ($primary === '') {
