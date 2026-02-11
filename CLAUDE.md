@@ -188,6 +188,10 @@ $client_id = get_client_id_or_fail($data); // Validates + sanitizes
 3. No CSP on extension popup
 4. Webhook handlers log full payloads with PII — `log_msg('call_done: ' . $raw)` and `log_msg('contact_displayed: ' . $raw)` in webhook handlers log complete payloads containing names, phone numbers, emails, and CRM IDs. Use selective logging or debug flag.
 
+**DATA INTEGRITY (document for customers):**
+
+1. PhoneBurner ↔ HubSpot Data Sync conflict — If a customer has the PhoneBurner Data Sync app connected to HubSpot, PhoneBurner will sync the primary phone number from dial sessions back to HubSpot's "Phone Number" field. This can overwrite the original value in HubSpot. **Mitigation:** Customers should disable phone number syncing in the PhoneBurner Data Sync app and rely on the extension to feed phone numbers into dial sessions. This is a PhoneBurner platform behavior, not something our code controls.
+
 ---
 
 ## CRM Provider Isolation Model

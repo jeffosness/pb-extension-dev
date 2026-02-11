@@ -2,6 +2,14 @@
 // server/public/api/crm/hubspot/pb_dialsession_selection.php
 //
 // Creates a PhoneBurner dial session from a HubSpot selection (IDs) sent by the extension.
+//
+// IMPORTANT — PhoneBurner ↔ HubSpot Data Sync caveat:
+// If a customer has the PhoneBurner Data Sync app connected to HubSpot, PhoneBurner may
+// sync the primary phone number back to the HubSpot contact's "Phone Number" field. This
+// means whatever we send as the primary `phone` in the PB payload can overwrite the value
+// in HubSpot. To avoid this, customers should disable phone number syncing in the Data Sync
+// app and rely on this extension to feed phone numbers into PhoneBurner dial sessions.
+//
 // Unified parity with /api/crm/generic/dialsession_from_scan.php:
 // - json_input() / get_client_id_or_fail()
 // - load_pb_token($client_id)
