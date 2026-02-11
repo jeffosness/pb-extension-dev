@@ -27,7 +27,7 @@ return [
         // HubSpot OAuth credentials (fill these with your real app values)
   'HS_CLIENT_ID' => 'Client_ID',
   'HS_CLIENT_SECRET' => 'Client_Secret',
-  'HS_SCOPES' => 'crm.objects.contacts.read crm.lists.read crm.objects.deals.read crm.objects.companies.read',
+  'HS_SCOPES' => 'crm.objects.contacts.read crm.lists.read crm.objects.deals.read crm.objects.companies.read crm.schemas.contacts.read crm.schemas.companies.read',
 
 ];
 

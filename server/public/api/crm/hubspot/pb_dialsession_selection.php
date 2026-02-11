@@ -70,15 +70,15 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
 
   return $resp;
 }
-function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array &$diag) {
-  $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $diag);
+function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array $phoneProperties = [], array &$diag = []) {
+  $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $phoneProperties, $diag);
 
   $lastHttp = $diag['contacts_fetch']['last_http'] ?? null;
   if (empty($contacts) && $lastHttp === 401) {
     // refresh + retry once
     $hs = hs_refresh_access_token_or_fail($client_id, $hs);
     $hsAccess = (string)($hs['access_token'] ?? '');
-    $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $diag);
+    $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $phoneProperties, $diag);
   }
 
   return $contacts;
@@ -110,6 +110,120 @@ function hs_api_get_json($accessToken, $url) {
   return [$code, $json, $raw];
 }
 
+/**
+ * Discover all phone-type properties for a HubSpot object type.
+ * Uses file-based caching (1-hour TTL) keyed by portal hub_id + object type.
+ * Falls back to hardcoded defaults on any failure.
+ */
+function hs_discover_phone_properties(string $accessToken, string $objectType, string $hubId): array {
+  $fallbacks = [
+    'contacts'  => [
+      ['name' => 'phone',       'label' => 'Phone Number'],
+      ['name' => 'mobilephone', 'label' => 'Mobile Phone Number'],
+    ],
+    'companies' => [
+      ['name' => 'phone', 'label' => 'Phone Number'],
+    ],
+  ];
+  $fallback = $fallbacks[$objectType] ?? $fallbacks['contacts'];
+
+  // Cache check
+  $cacheDir = __DIR__ . '/../../../cache';
+  if (!is_dir($cacheDir)) {
+    @mkdir($cacheDir, 0770, true);
+  }
+  $safeHubId   = preg_replace('/[^a-zA-Z0-9_-]/', '', $hubId);
+  $safeObjType = preg_replace('/[^a-zA-Z0-9_-]/', '', $objectType);
+  $cacheFile   = $cacheDir . '/hs_phone_props_' . $safeHubId . '_' . $safeObjType . '.json';
+
+  if (is_file($cacheFile)) {
+    $mtime = @filemtime($cacheFile);
+    if ($mtime !== false && (time() - $mtime) < 3600) {
+      $cached = @json_decode(@file_get_contents($cacheFile), true);
+      if (is_array($cached) && !empty($cached)) {
+        return $cached;
+      }
+    }
+  }
+
+  // Fetch from HubSpot Properties API
+  $url = 'https://api.hubapi.com/crm/v3/properties/' . rawurlencode($objectType);
+  list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
+
+  if ($code !== 200 || !is_array($json) || !isset($json['results'])) {
+    return $fallback;
+  }
+
+  $phoneProps = [];
+  foreach ($json['results'] as $prop) {
+    if (!is_array($prop)) continue;
+    if (($prop['type'] ?? '') === 'phonenumber') {
+      $phoneProps[] = [
+        'name'  => (string)($prop['name'] ?? ''),
+        'label' => (string)($prop['label'] ?? $prop['name'] ?? ''),
+      ];
+    }
+  }
+
+  if (empty($phoneProps)) {
+    return $fallback;
+  }
+
+  @file_put_contents($cacheFile, json_encode($phoneProps, JSON_UNESCAPED_SLASHES), LOCK_EX);
+
+  return $phoneProps;
+}
+
+/**
+ * Extract primary phone + additional phones from a HubSpot record's properties.
+ *
+ * @param array       $hsProps           HubSpot record "properties" map (name => value)
+ * @param array       $phoneProperties   Array of ['name' => ..., 'label' => ...] from discovery
+ * @param string|null $preferredPrimary  Optional: property name to prefer as primary (for future user config)
+ * @return array ['primary' => string, 'additional' => array]
+ */
+function build_phone_fields_from_props(array $hsProps, array $phoneProperties, ?string $preferredPrimary = null): array {
+  $primary = '';
+  $additional = [];
+
+  // If a preferred primary is specified, check it first
+  if ($preferredPrimary !== null && $preferredPrimary !== '') {
+    foreach ($phoneProperties as $propDef) {
+      if ($propDef['name'] === $preferredPrimary) {
+        $value = trim((string)($hsProps[$preferredPrimary] ?? ''));
+        if ($value !== '') {
+          $primary = $value;
+        }
+        break;
+      }
+    }
+  }
+
+  // Iterate all phone properties
+  foreach ($phoneProperties as $propDef) {
+    $propName  = $propDef['name'] ?? '';
+    $propLabel = $propDef['label'] ?? $propName;
+    $value = trim((string)($hsProps[$propName] ?? ''));
+
+    if ($value === '') continue;
+
+    // Skip if already used as preferred primary
+    if ($value === $primary && $propName === $preferredPrimary) continue;
+
+    if ($primary === '') {
+      $primary = $value;
+    } else {
+      $additional[] = [
+        'number'      => $value,
+        'phone_type'  => '2',
+        'phone_label' => $propLabel,
+      ];
+    }
+  }
+
+  return ['primary' => $primary, 'additional' => $additional];
+}
+
 function extract_ids_from_records($records) {
   if (!is_array($records)) return [];
   $out = [];
@@ -125,13 +239,18 @@ function extract_ids_from_records($records) {
 }
 
 // Fetch contact objects by ID (HubSpot contacts)
-function hs_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = []) {
+function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneProperties = [], &$diag = []) {
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
+  // Build properties list: base fields + all discovered phone property names
+  $baseProps = ['firstname', 'lastname', 'email'];
+  $phonePropNames = array_column($phoneProperties, 'name');
+  $allProps = array_values(array_unique(array_merge($baseProps, $phonePropNames)));
+
   foreach ($contactIds as $cid) {
     $url = 'https://api.hubapi.com/crm/v3/objects/contacts/' . rawurlencode($cid) .
-           '?properties=firstname,lastname,email,phone,mobilephone';
+           '?properties=' . rawurlencode(implode(',', $allProps));
 
     list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
     $diag['contacts_fetch']['last_http'] = $code;
@@ -142,12 +261,15 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = []) 
     }
 
     $props = $json['properties'] ?? [];
+    $phoneData = build_phone_fields_from_props($props, $phoneProperties);
+
     $contacts[] = [
-      'hs_id'      => (string)$cid,
-      'first_name' => (string)($props['firstname'] ?? ''),
-      'last_name'  => (string)($props['lastname'] ?? ''),
-      'email'      => (string)($props['email'] ?? ''),
-      'phone'      => (string)($props['phone'] ?? ($props['mobilephone'] ?? '')),
+      'hs_id'             => (string)$cid,
+      'first_name'        => (string)($props['firstname'] ?? ''),
+      'last_name'         => (string)($props['lastname'] ?? ''),
+      'email'             => (string)($props['email'] ?? ''),
+      'phone'             => $phoneData['primary'],
+      'additional_phones' => $phoneData['additional'],
     ];
     $diag['contacts_fetch']['ok']++;
   }
@@ -159,13 +281,18 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = []) 
  * Fetch company details by HubSpot company IDs
  * Mirrors hs_fetch_contacts_by_ids pattern
  */
-function hs_fetch_companies_by_ids($accessToken, array $companyIds, &$diag = []) {
+function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phoneProperties = [], &$diag = []) {
   $companies = [];
   $diag['companies_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
+  // Build properties list: base fields + all discovered phone property names
+  $baseProps = ['name', 'domain', 'city', 'state'];
+  $phonePropNames = array_column($phoneProperties, 'name');
+  $allProps = array_values(array_unique(array_merge($baseProps, $phonePropNames)));
+
   foreach ($companyIds as $cid) {
     $url = 'https://api.hubapi.com/crm/v3/objects/companies/' . rawurlencode($cid) .
-           '?properties=name,phone,domain,city,state';
+           '?properties=' . rawurlencode(implode(',', $allProps));
 
     list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
     $diag['companies_fetch']['last_http'] = $code;
@@ -176,13 +303,16 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, &$diag = [])
     }
 
     $props = $json['properties'] ?? [];
+    $phoneData = build_phone_fields_from_props($props, $phoneProperties);
+
     $companies[] = [
-      'hs_id'  => (string)$cid,
-      'name'   => (string)($props['name'] ?? ''),
-      'phone'  => (string)($props['phone'] ?? ''),
-      'domain' => (string)($props['domain'] ?? ''),
-      'city'   => (string)($props['city'] ?? ''),
-      'state'  => (string)($props['state'] ?? ''),
+      'hs_id'             => (string)$cid,
+      'name'              => (string)($props['name'] ?? ''),
+      'phone'             => $phoneData['primary'],
+      'additional_phones' => $phoneData['additional'],
+      'domain'            => (string)($props['domain'] ?? ''),
+      'city'              => (string)($props['city'] ?? ''),
+      'state'             => (string)($props['state'] ?? ''),
     ];
     $diag['companies_fetch']['ok']++;
   }
@@ -194,14 +324,14 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, &$diag = [])
  * Wrapper with token refresh retry for companies
  * Mirrors hs_fetch_contacts_with_refresh_retry pattern
  */
-function hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, array $companyIds, &$diag = []) {
-  $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $diag);
+function hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, array $companyIds, array $phoneProperties = [], &$diag = []) {
+  $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $phoneProperties, $diag);
 
   // Retry with refresh if 401
   if (empty($companies) && ($diag['companies_fetch']['last_http'] ?? null) === 401) {
     $hs = hs_refresh_access_token_or_fail($client_id, $hs);
     $hsAccess = $hs['access_token'];
-    $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $diag);
+    $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $phoneProperties, $diag);
   }
 
   return $companies;
@@ -304,6 +434,8 @@ if ($hsAccess === '') {
   api_error('No HubSpot access token saved for this client_id', 'unauthorized', 401);
 }
 
+$hubId = (string)($hs['hub_id'] ?? '');
+
 $mode       = (string)($data['mode'] ?? 'contacts');
 $callTarget = $data['call_target'] ?? null; // NEW: For company dual-mode
 $records    = $data['records'] ?? [];
@@ -327,7 +459,8 @@ $sourceObjectIdsByContact = []; // NEW: [contactId => [dealIds...] or [companyId
 $sourceObjectType = null;       // NEW: 'deals' | 'companies' | null
 
 if ($mode === 'contacts') {
-  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $diag);
+  $phonePropsContacts = hs_discover_phone_properties($hsAccess, 'contacts', $hubId);
+  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $phonePropsContacts, $diag);
 
 } elseif ($mode === 'deals') {
   $sourceObjectType = 'deals';
@@ -336,7 +469,8 @@ if ($mode === 'contacts') {
 
   $sourceObjectIdsByContact = is_array($map) ? $map : [];
 
-  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
+  $phonePropsContacts = hs_discover_phone_properties($hsAccess, 'contacts', $hubId);
+  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $phonePropsContacts, $diag);
 
 } elseif ($mode === 'companies') {
   $sourceObjectType = 'companies';
@@ -348,7 +482,8 @@ if ($mode === 'contacts') {
     $diag['resolved_company_ids'] = count($ids);
 
     // Fetch company details (not contacts)
-    $hsCompanies = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $diag);
+    $phonePropsCompanies = hs_discover_phone_properties($hsAccess, 'companies', $hubId);
+    $hsCompanies = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $phonePropsCompanies, $diag);
 
     // Diagnostic: Log raw company data (redacted)
     $diag['companies_raw_sample'] = !empty($hsCompanies) ? array_map(function($c) {
@@ -372,14 +507,18 @@ if ($mode === 'contacts') {
 
     $sourceObjectIdsByContact = is_array($map) ? $map : [];
 
-    $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $diag);
+    $phonePropsContacts = hs_discover_phone_properties($hsAccess, 'contacts', $hubId);
+    $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $phonePropsContacts, $diag);
   }
 
 } else {
   api_error('Invalid mode', 'bad_request', 400);
 }
 
-
+// Diagnostic: log discovered phone property names (schema metadata, not PII)
+$diag['phone_props'] = isset($phonePropsContacts)
+  ? array_column($phonePropsContacts, 'name')
+  : (isset($phonePropsCompanies) ? array_column($phonePropsCompanies, 'name') : []);
 
 if (empty($hsContacts)) {
   // Important: return diagnostic HTTP codes for quick troubleshooting (no secrets)
@@ -401,6 +540,8 @@ $sourceLabel  = (string)($context['title'] ?? '');
 
 foreach ($hsContacts as $c) {
   // Handle companies vs contacts differently
+  $additionalPhones = $c['additional_phones'] ?? [];
+
   if ($callTarget === 'companies') {
     // Company normalization
     $name  = trim((string)($c['name'] ?? ''));
@@ -426,7 +567,7 @@ foreach ($hsContacts as $c) {
     $hsId  = (string)($c['hs_id'] ?? '');
 
     if ($hsId === '') { $skipped++; continue; }
-    if ($phone === '' && $email === '') { $skipped++; continue; }
+    if ($phone === '') { $skipped++; continue; } // Phone required; email is optional
 
     // Record URL for follow-me (0-1 = contact object type)
     $recordUrl = ($portalId !== '')
@@ -469,13 +610,17 @@ foreach ($hsContacts as $c) {
   }
 
   // Build PB contact WITHOUT external_id
-  $pbContacts[] = [
+  $pbContact = [
     'first_name'        => $first,
     'last_name'         => $last,
     'phone'             => $phone ?: null,
     'email'             => $email ?: null,
     'external_crm_data' => $externalCrmData,
   ];
+  if (!empty($additionalPhones)) {
+    $pbContact['additional_phone'] = $additionalPhones;
+  }
+  $pbContacts[] = $pbContact;
 
 
   $displayName = trim(($first !== '' || $last !== '') ? ($first . ' ' . $last) : '');
