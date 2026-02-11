@@ -177,7 +177,7 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
   $phoneProps = [];
   foreach ($json['results'] as $prop) {
     if (!is_array($prop)) continue;
-    if (($prop['type'] ?? '') === 'phonenumber') {
+    if (($prop['fieldType'] ?? '') === 'phonenumber') {
       $phoneProps[] = [
         'name'  => (string)($prop['name'] ?? ''),
         'label' => (string)($prop['label'] ?? $prop['name'] ?? ''),
