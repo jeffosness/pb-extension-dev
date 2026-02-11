@@ -179,9 +179,9 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
     if (!is_array($prop)) continue;
     if (($prop['fieldType'] ?? '') === 'phonenumber') {
       $name = (string)($prop['name'] ?? '');
-      // Skip HubSpot system calculated properties — they're derived duplicates
-      // with ugly labels like "Calculated Phone Number without country code"
-      if (strpos($name, 'hs_calculated_') === 0) continue;
+      // Skip HubSpot system calculated/searchable properties — they're derived
+      // duplicates with ugly labels like "Calculated Phone Number without country code"
+      if (strpos($name, 'hs_') === 0 && strpos($name, 'calculated') !== false) continue;
 
       $phoneProps[] = [
         'name'  => $name,
