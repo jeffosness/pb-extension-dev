@@ -431,6 +431,92 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       // -------------------------
+      // HubSpot L3: fetch available lists
+      // -------------------------
+      if (msg.type === "HS_FETCH_LISTS") {
+        const resp = await api("crm/hubspot/hs_lists.php");
+
+        if (!resp || resp.ok !== true) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to fetch HubSpot lists.",
+          });
+        }
+
+        return sendResponse({
+          ok: true,
+          lists: resp.data?.lists || resp.lists || [],
+        });
+      }
+
+      // -------------------------
+      // HubSpot L3: launch from list
+      // -------------------------
+      if (msg.type === "HS_LAUNCH_FROM_LIST") {
+        const listId = msg.list_id;
+        const objectType = msg.object_type || "contacts";
+
+        if (!listId) {
+          return sendResponse({ ok: false, error: "No list selected." });
+        }
+
+        // Find the active HubSpot tab for portal_id and session registration
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const hubTab = (tabs || []).find((t) =>
+          (t.url || "").includes("app.hubspot.com"),
+        );
+
+        // Extract portal_id from URL if on a HubSpot tab
+        let portalId = null;
+        if (hubTab?.url) {
+          const portalMatch = hubTab.url.match(/\/contacts\/(\d+)\//);
+          if (portalMatch) portalId = portalMatch[1];
+        }
+
+        const resp = await api("crm/hubspot/pb_dialsession_from_list.php", {
+          list_id: listId,
+          portal_id: portalId || "",
+          object_type: objectType,
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session from list.",
+            details: resp,
+          });
+        }
+
+        // Register follow session on the HubSpot tab if available
+        const followTabId = hubTab?.id || null;
+        if (followTabId) {
+          await registerSessionForTab(followTabId, sessionToken, BASE_URL);
+        }
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
       // Level 1/2: scanned -> server -> dialsession
       // -------------------------
       if (msg.type === "SCANNED_CONTACTS") {
