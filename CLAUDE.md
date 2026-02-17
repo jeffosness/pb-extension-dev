@@ -720,6 +720,7 @@ $contacts_map[$externalId] = [
 - [ ] **Edge counts** — Test with 0, 1, 100+ records selected
 - [ ] **Mixed validity** — Select 10 records, half valid, half invalid
 - [ ] **API rate limits** — Test with large selections to trigger rate limiting
+- [ ] **API metadata vs reality** — API may return `size: 0` for lists that actually have members (HubSpot lesson)
 
 **Validation Pattern:**
 
@@ -807,6 +808,182 @@ const mergedContext = {
 };
 
 sendResponse({ context: mergedContext });
+```
+
+### HubSpot List-Based Dial Sessions
+
+**Added in v0.4.0** - Allows users to launch dial sessions from saved HubSpot lists (up to 500 contacts/companies).
+
+**Architecture:**
+
+```
+Extension Popup → HS_FETCH_LISTS → hs_lists.php
+                                   ↓
+                          POST /crm/v3/lists/search (contacts + companies)
+                                   ↓
+                          Returns top 10 recent lists
+                                   ↓
+User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
+                                          ↓
+                          GET /crm/v3/lists/{listId}/memberships (paginated)
+                                          ↓
+                          Fetch full records (contacts or companies)
+                                          ↓
+                          Create PhoneBurner dial session
+```
+
+**Key Implementation Details:**
+
+| Endpoint | Purpose | HubSpot API Used |
+|----------|---------|------------------|
+| `hs_lists.php` | Fetch user's lists | `POST /crm/v3/lists/search` |
+| `pb_dialsession_from_list.php` | Create dial session from list | `GET /crm/v3/lists/{listId}/memberships` |
+
+**Important Notes:**
+
+1. **List Size Not Returned**: HubSpot's `/crm/v3/lists/search` endpoint does NOT include member count in the response. The `size` field is typically 0 or missing. Handle this gracefully in the UI:
+   ```javascript
+   // Only show count if we have it
+   if (list.size > 0) {
+     opt.textContent = `${list.name} (${list.size} contacts)`;
+   } else {
+     opt.textContent = `${list.name} (contacts list)`;
+   }
+   ```
+
+2. **500 Contact Limit**: PhoneBurner dial sessions support max 500 contacts. When fetching list memberships, stop at 500 and include `truncated: true` in response.
+
+3. **Pagination Required**: List memberships are paginated (100 per page). Use `after` cursor for pagination:
+   ```php
+   while (count($memberIds) < 500) {
+     $url = "https://api.hubapi.com/crm/v3/lists/{$listId}/memberships?limit=100";
+     if ($after) $url .= "&after=" . rawurlencode($after);
+     // ... fetch, check for paging.next.after
+   }
+   ```
+
+4. **Object Type Matters**: Lists can be for contacts (`0-1`) or companies (`0-2`). Use different normalization:
+   - **Contact lists**: Send `object_type: "contacts"`, use contact fields
+   - **Company lists**: Send `object_type: "companies"`, use company normalization with `"HS Company "` ID prefix
+
+**Files Involved:**
+- `server/public/api/crm/hubspot/hs_lists.php` - Fetches lists
+- `server/public/api/crm/hubspot/pb_dialsession_from_list.php` - Creates dial session from list
+- `server/public/api/crm/hubspot/hs_helpers.php` - Shared HubSpot API functions
+- `chrome-extension/popup.html` - List dropdown UI
+- `chrome-extension/popup.js` - List fetching and selection logic
+- `chrome-extension/background.js` - `HS_FETCH_LISTS` and `HS_LAUNCH_FROM_LIST` handlers
+
+### Chrome Dropdown Styling Limitations
+
+**CRITICAL LESSON**: Chrome has **very limited CSS support** for `<select>` and `<option>` elements.
+
+**What DOESN'T Work:**
+- ❌ CSS gradients on `<option>` elements
+- ❌ `!important` flags (mostly ignored)
+- ❌ Complex background properties
+- ❌ `appearance: none` on select (can break option rendering)
+- ❌ CSS variables in option styling (inconsistent)
+
+**What WORKS:**
+- ✅ Solid `background-color` on options
+- ✅ Direct hex/rgba color values (not CSS variables)
+- ✅ `font-weight` for emphasis
+- ✅ Simple `:checked`, `:hover` pseudo-classes
+- ✅ `title` attribute for tooltips
+
+**Working Pattern (v0.4.0):**
+
+```css
+/* Simple, reliable dropdown styling */
+select option {
+  background-color: #121b2e;  /* Direct hex, not var(--card) */
+  color: rgba(255, 255, 255, 0.92);
+  padding: 8px;
+}
+select option:first-child {
+  color: rgba(255, 255, 255, 0.55);  /* Muted placeholder */
+}
+select option:checked {
+  background-color: #3e6ff0;  /* Solid color, not gradient */
+  color: white;
+  font-weight: 600;
+}
+```
+
+**Truncate Long Names:**
+
+```javascript
+// Prevent dropdown overflow with long list names
+let displayName = list.name;
+if (displayName.length > 35) {
+  displayName = displayName.substring(0, 32) + '...';
+}
+opt.textContent = displayName;
+opt.title = list.name;  // Full name on hover
+```
+
+**Rule**: When styling dropdowns, use the simplest CSS possible with solid colors and direct values. Test in Chrome immediately.
+
+### Code Extraction Pattern: Shared Helpers
+
+**Problem**: When multiple endpoints need the same logic, duplicating code leads to bugs and maintenance issues.
+
+**Solution**: Extract shared functions to a separate helper file.
+
+**Example: HubSpot Helper Functions (v0.4.0)**
+
+Before refactoring, `pb_dialsession_selection.php` contained 500+ lines of inline functions for:
+- HubSpot API calls
+- Token refresh logic
+- Phone property discovery
+- Contact/company fetching
+- PhoneBurner dial session creation
+
+When adding list-based dial sessions, we needed the same logic. Instead of duplicating 500 lines, we:
+
+1. **Created `hs_helpers.php`** with shared functions:
+   ```php
+   // hs_helpers.php
+   function hs_refresh_access_token_or_fail($client_id, $hs) { ... }
+   function hs_api_get_json($access_token, $url) { ... }
+   function hs_api_post_json($access_token, $url, $body) { ... }
+   function hs_discover_phone_properties($access_token, $objectType, $hubId) { ... }
+   function hs_fetch_contacts_by_ids($access_token, $contactIds, $phoneProps) { ... }
+   function hs_fetch_companies_by_ids($access_token, $companyIds, $phoneProps) { ... }
+   function pb_call_dialsession($pat, $payload) { ... }
+   ```
+
+2. **Updated existing endpoint**:
+   ```php
+   // pb_dialsession_selection.php (before: 750 lines, after: 250 lines)
+   require_once __DIR__ . '/hs_helpers.php';
+   // ... now uses extracted functions
+   ```
+
+3. **New endpoint reuses helpers**:
+   ```php
+   // pb_dialsession_from_list.php
+   require_once __DIR__ . '/hs_helpers.php';
+   $hsRecords = hs_fetch_contacts_with_refresh_retry(...);
+   $pbResp = pb_call_dialsession($pat, $payload);
+   ```
+
+**Benefits:**
+- ✅ Zero logic duplication
+- ✅ Single source of truth for HubSpot API interactions
+- ✅ Easier to maintain (bug fixes apply to both endpoints)
+- ✅ Reduced file size (500 lines → shared library)
+
+**Rule**: If you're about to copy/paste more than 50 lines of code, stop and extract to a shared helper file instead.
+
+**Pattern for Future Providers:**
+```
+server/public/api/crm/{provider}/
+  ├── {provider}_helpers.php      # Shared API logic
+  ├── oauth_{provider}_start.php  # Uses helpers
+  ├── oauth_{provider}_finish.php # Uses helpers
+  └── pb_dialsession_*.php        # Uses helpers
 ```
 
 ---
