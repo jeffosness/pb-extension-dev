@@ -412,6 +412,15 @@ async function refreshHubSpotUi() {
     }
   }
 
+  // Show/hide list section based on connection state
+  const listSection = $("hs-list-section");
+  setVisible(listSection, connected);
+
+  // Fetch lists when connected (non-blocking)
+  if (connected) {
+    fetchHubSpotLists();
+  }
+
   setVisible(settingsCard, connected);
   if (connected) {
     if (settingsStatus) settingsStatus.textContent = "Connected ✔";
@@ -497,6 +506,163 @@ async function launchHubSpotDialSessionContacts() {
 
 async function launchHubSpotDialSessionCompanies() {
   await launchHubSpotDialSession('companies');
+}
+
+// ---------------------------
+// HubSpot List-based Dial Session
+// ---------------------------
+
+// Cache of fetched list metadata (keyed by listId) for the current popup session
+let _hsListsCache = [];
+
+async function fetchHubSpotLists() {
+  const listSection = $("hs-list-section");
+  const listSelect = $("hs-list-select");
+  const listInfo = $("hs-list-info");
+  const listBtn = $("hs-dial-from-list");
+
+  if (!listSection || !listSelect) return;
+
+  // Reset
+  listSelect.innerHTML = '<option value="">Loading lists…</option>';
+  listSelect.disabled = true;
+  setVisible(listBtn, false);
+  if (listInfo) listInfo.textContent = "";
+
+  const resp = await sendToBackground({ type: "HS_FETCH_LISTS" });
+
+  if (!resp || !resp.ok || !Array.isArray(resp.lists)) {
+    // Silently hide the list section if endpoint not available (backward compatibility)
+    // This handles old servers that don't have hs_lists.php yet
+    setVisible(listSection, false);
+    return;
+  }
+
+  _hsListsCache = resp.lists;
+
+  if (resp.lists.length === 0) {
+    listSelect.innerHTML = '<option value="">No lists found</option>';
+    if (listInfo) listInfo.textContent = "Create lists in HubSpot to use this feature.";
+    return;
+  }
+
+  // Populate dropdown
+  listSelect.innerHTML = '<option value="">Select a list…</option>';
+  for (const list of resp.lists) {
+    const opt = document.createElement("option");
+    opt.value = list.listId;
+    const typeLabel = list.objectType === "companies" ? "companies" : "contacts";
+
+    // Truncate long list names to prevent dropdown overflow
+    let displayName = list.name;
+    if (displayName.length > 35) {
+      displayName = displayName.substring(0, 32) + '...';
+    }
+
+    // Only show count if we have it (HubSpot API doesn't always return size)
+    if (list.size > 0) {
+      opt.textContent = `${displayName} (${list.size} ${typeLabel})`;
+    } else {
+      opt.textContent = `${displayName} (${typeLabel} list)`;
+    }
+
+    // Store full name in title for tooltip
+    opt.title = list.name;
+    opt.dataset.objectType = list.objectType;
+    opt.dataset.size = list.size;
+    listSelect.appendChild(opt);
+  }
+  listSelect.disabled = false;
+}
+
+function onHsListSelectChange() {
+  const listSelect = $("hs-list-select");
+  const listInfo = $("hs-list-info");
+  const listBtn = $("hs-dial-from-list");
+
+  if (!listSelect) return;
+
+  const selectedOpt = listSelect.selectedOptions[0];
+  const listId = listSelect.value;
+
+  if (!listId) {
+    setVisible(listBtn, false);
+    if (listInfo) listInfo.textContent = "";
+    return;
+  }
+
+  const size = parseInt(selectedOpt?.dataset?.size || "0", 10);
+  const objectType = selectedOpt?.dataset?.objectType || "contacts";
+  const typeLabel = objectType === "companies" ? "companies" : "contacts";
+
+  if (size > 500) {
+    if (listInfo) {
+      listInfo.textContent = `This list has ${size} ${typeLabel}. PhoneBurner limit is 500 — the first 500 will be used.`;
+      listInfo.style.color = "var(--danger)";
+    }
+  } else if (size > 0) {
+    if (listInfo) {
+      listInfo.textContent = `${size} ${typeLabel} will be added to the dial session.`;
+      listInfo.style.color = "var(--muted)";
+    }
+  } else {
+    // Size unknown (HubSpot API doesn't always return member count)
+    if (listInfo) {
+      listInfo.textContent = `All ${typeLabel} from this list will be added (up to 500).`;
+      listInfo.style.color = "var(--muted)";
+    }
+  }
+
+  setVisible(listBtn, true);
+}
+
+async function launchDialSessionFromList() {
+  const listSelect = $("hs-list-select");
+  const listBtn = $("hs-dial-from-list");
+  const listInfo = $("hs-list-info");
+  const dialStatus = $("hs-dial-status");
+
+  if (!listSelect || !listSelect.value) {
+    await showAlert("Please select a list first.");
+    return;
+  }
+
+  const listId = listSelect.value;
+  const selectedOpt = listSelect.selectedOptions[0];
+  const objectType = selectedOpt?.dataset?.objectType || "contacts";
+
+  // Best-effort permission request
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult.timeout) {
+      console.warn("Permission request timed out, continuing anyway");
+    }
+  } catch (err) {
+    console.error("Permission request crashed:", err);
+  }
+
+  // Disable controls during request
+  if (listBtn) listBtn.disabled = true;
+  if (listSelect) listSelect.disabled = true;
+  if (dialStatus) dialStatus.textContent = "Creating dial session from list…";
+
+  const resp = await sendToBackground({
+    type: "HS_LAUNCH_FROM_LIST",
+    list_id: listId,
+    object_type: objectType,
+  });
+
+  if (!resp || !resp.ok) {
+    const errorMsg = getErrorMessage(resp, "Could not launch from list.");
+    if (dialStatus) dialStatus.textContent = errorMsg;
+    if (listBtn) listBtn.disabled = false;
+    if (listSelect) listSelect.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  if (dialStatus) dialStatus.textContent = "Dial session created ✔";
+  window.close();
 }
 
 async function disconnectHubSpot() {
@@ -695,6 +861,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (mode && mode.includes("Connect")) return startHubSpotOAuth();
     return launchHubSpotDialSessionCompanies();
   });
+
+  // HubSpot list-based dial
+  $("hs-list-select")?.addEventListener("change", onHsListSelectChange);
+  $("hs-dial-from-list")?.addEventListener("click", launchDialSessionFromList);
 
   $("hs-disconnect")?.addEventListener("click", disconnectHubSpot);
 

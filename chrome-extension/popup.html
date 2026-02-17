@@ -180,6 +180,29 @@
         cursor: not-allowed;
       }
 
+      /* Select dropdown styling */
+      select {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      select option {
+        background-color: #121b2e;
+        color: rgba(255, 255, 255, 0.92);
+        padding: 8px;
+      }
+      select option:first-child {
+        color: rgba(255, 255, 255, 0.55);
+      }
+      select option:checked,
+      select option[selected] {
+        background-color: #3e6ff0;
+        background: #3e6ff0;
+        color: white;
+        font-weight: 600;
+      }
+
       /* Custom modal overlay */
       .modal-overlay {
         position: fixed;
@@ -311,6 +334,20 @@
           <button id="hs-dial-companies" class="primary hidden" style="margin-top: 8px;">
             Launch Dial Session (Companies)
           </button>
+
+          <!-- HubSpot List Dial -->
+          <div id="hs-list-section" class="hidden" style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px;">
+            <div style="font-weight: 800; font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.2px; margin-bottom: 6px;">
+              Or launch from a HubSpot list
+            </div>
+            <select id="hs-list-select" style="width:100%; padding:9px 10px; border-radius:12px; border:1px solid var(--border); background:rgba(255,255,255,0.04); color:var(--text); font:inherit; outline:none; cursor:pointer;">
+              <option value="">Select a list…</option>
+            </select>
+            <div id="hs-list-info" class="help-text" style="margin-top:4px;"></div>
+            <button id="hs-dial-from-list" class="primary hidden" style="margin-top:8px;">
+              Launch Dial Session from List
+            </button>
+          </div>
         </div>
       </div>
     </div>
