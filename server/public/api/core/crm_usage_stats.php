@@ -44,10 +44,12 @@ if (!file_exists($logFile)) {
     ]);
 }
 
-$byCrm   = [];
-$byHost  = [];
-$byLevel = [];
-$total   = 0;
+$byCrm         = [];
+$byHost        = [];
+$byLevel       = [];
+$byObjectType  = [];
+$byLaunchSource = [];
+$total         = 0;
 
 $fh = fopen($logFile, 'r');
 if ($fh === false) {
@@ -79,6 +81,16 @@ while (($line = fgets($fh)) !== false) {
     $byCrm[$crm]     = ($byCrm[$crm]     ?? 0) + 1;
     $byHost[$host]   = ($byHost[$host]   ?? 0) + 1;
     $byLevel[$level] = ($byLevel[$level] ?? 0) + 1;
+
+    $objectType   = $entry['object_type']   ?? '';
+    $launchSource = $entry['launch_source'] ?? '';
+
+    if ($objectType !== '') {
+        $byObjectType[$objectType] = ($byObjectType[$objectType] ?? 0) + 1;
+    }
+    if ($launchSource !== '') {
+        $byLaunchSource[$launchSource] = ($byLaunchSource[$launchSource] ?? 0) + 1;
+    }
 }
 
 fclose($fh);
@@ -88,8 +100,10 @@ api_log('crm_usage_stats.ok', [
 ]);
 
 api_ok([
-    'total_events' => $total,
-    'by_crm_id'    => $byCrm,
-    'by_host'      => $byHost,
-    'by_level'     => $byLevel,
+    'total_events'     => $total,
+    'by_crm_id'        => $byCrm,
+    'by_host'          => $byHost,
+    'by_level'         => $byLevel,
+    'by_object_type'   => $byObjectType,
+    'by_launch_source' => $byLaunchSource,
 ]);

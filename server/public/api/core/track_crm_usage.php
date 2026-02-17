@@ -18,6 +18,20 @@ $host  = isset($data['host'])   ? (string)$data['host']   : '';
 $path  = isset($data['path'])   ? (string)$data['path']   : '';
 $level = isset($data['level'])  ? (int)$data['level']     : 0;
 
+$objectType    = isset($data['object_type'])    ? (string)$data['object_type']    : '';
+$launchSource  = isset($data['launch_source'])  ? (string)$data['launch_source']  : '';
+$selectedCount = isset($data['selected_count']) ? (int)$data['selected_count']    : 0;
+
+// Normalize object_type to plural form (extension sends singular from URL detection)
+$normalizeMap = ['contact' => 'contacts', 'company' => 'companies', 'deal' => 'deals'];
+$objectType = $normalizeMap[$objectType] ?? $objectType;
+
+// Whitelist launch_source values
+$allowedSources = ['selection', 'list', 'scan', ''];
+if (!in_array($launchSource, $allowedSources, true)) {
+    $launchSource = '';
+}
+
 $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
 
 // ✅ Correct metrics dir: server/public/metrics
@@ -34,6 +48,9 @@ $entry = [
     'host'           => $host,
     'path'           => $path,
     'level'          => $level,
+    'object_type'    => $objectType,
+    'launch_source'  => $launchSource,
+    'selected_count' => $selectedCount,
     'ua'             => $userAgent,
 ];
 
