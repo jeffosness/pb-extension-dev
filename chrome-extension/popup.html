@@ -186,6 +186,9 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
       }
       select option {
         background: var(--card);
@@ -198,7 +201,10 @@
         background: var(--card);
         color: var(--muted2);
       }
-      select option:checked,
+      select option:checked {
+        background: linear-gradient(0deg, rgba(91, 140, 255, 0.3) 0%, rgba(91, 140, 255, 0.25) 100%);
+        color: var(--text);
+      }
       select option:hover {
         background: rgba(91, 140, 255, 0.2);
       }
