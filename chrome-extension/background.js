@@ -377,6 +377,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             portal_id: portalId,
             object_type: objectType,
             selected_count: ids.length,
+            launch_source: "selection",
           });
         } catch (e) {}
 
@@ -476,6 +477,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (portalMatch) portalId = portalMatch[1];
         }
 
+        // Track usage (best effort)
+        try {
+          const hp = deriveHostPathFromTabUrl(hubTab?.url || "");
+          await api("core/track_crm_usage.php", {
+            crm_id: "hubspot",
+            host: hp.host || "app.hubspot.com",
+            path: hp.path || "",
+            level: 3,
+            portal_id: portalId,
+            object_type: objectType,
+            launch_source: "list",
+          });
+        } catch (e) {}
+
         const resp = await api("crm/hubspot/pb_dialsession_from_list.php", {
           list_id: listId,
           portal_id: portalId || "",
@@ -547,6 +562,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             host,
             path,
             level,
+            object_type: "contacts",
+            launch_source: "scan",
           });
         } catch (e) {}
 

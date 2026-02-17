@@ -212,6 +212,20 @@ api_log('crm_usage_dashboard.view', [
       <tbody></tbody>
     </table>
 
+    <h2 class="section-title">Dial Session Sources</h2>
+    <div class="grid" id="launch-grid"></div>
+
+    <table id="by-launch-source-table">
+      <thead><tr><th>Launch Source</th><th>Events</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <h2 class="section-title">By Object Type</h2>
+    <table id="by-object-type-table">
+      <thead><tr><th>Object Type</th><th>Events</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
     <p class="muted">
       Data source: <code>../api/core/crm_usage_stats.php</code>
     </p>
@@ -325,14 +339,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
       sseGridEl.innerHTML = "";
       sseGridEl.appendChild(statCard("Active dial sessions now (SSE)", String(activeNow)));
-      sseGridEl.appendChild(statCard("Unique users (" + dateRange.label + ")", String(uniqueUsers)));
+      sseGridEl.appendChild(statCard("Max concurrent estimate", String(totalMaxConcurrent)));
       sseGridEl.appendChild(statCard("Sessions started (" + dateRange.label + ")", String(totalConnects)));
       sseGridEl.appendChild(statCard("Sessions ended (" + dateRange.label + ")", String(totalDisconnects)));
       sseGridEl.appendChild(statCard("Avg session duration", secondsToFriendly(totalAvgDur)));
       const p95Card = statCard("P95 duration (95th percentile)", secondsToFriendly(totalP95Dur));
       p95Card.setAttribute('title', '95% of sessions lasted this long or less');
       sseGridEl.appendChild(p95Card);
-      sseGridEl.appendChild(statCard("Max concurrent estimate", String(totalMaxConcurrent)));
+      sseGridEl.appendChild(statCard("Unique users (" + dateRange.label + ")", String(uniqueUsers)));
 
       // CRM summary + tables
       if (!crm.total_events || crm.total_events === 0) {
@@ -349,6 +363,30 @@ document.addEventListener("DOMContentLoaded", () => {
       fillTable("by-crm-table", crm.by_crm_id);
       fillTable("by-host-table", crm.by_host);
       fillTable("by-level-table", crm.by_level);
+
+      // Launch source breakdown
+      const launchGridEl = document.getElementById("launch-grid");
+      const src = crm.by_launch_source || {};
+      const objType = crm.by_object_type || {};
+      const hasLaunchData = Object.keys(src).length > 0 || Object.keys(objType).length > 0;
+
+      if (launchGridEl) {
+        launchGridEl.innerHTML = "";
+        if (hasLaunchData) {
+          const totalLaunches = Object.values(src).reduce((a, b) => a + b, 0);
+          launchGridEl.appendChild(statCard("Total launches (" + dateRange.label + ")", String(totalLaunches)));
+
+          let dominant = "None";
+          if (totalLaunches > 0) {
+            dominant = Object.entries(src).sort((a, b) => b[1] - a[1])[0][0];
+            dominant = friendlyLaunchSource(dominant);
+          }
+          launchGridEl.appendChild(statCard("Most common launch method", dominant));
+        }
+      }
+
+      fillTableFriendly("by-launch-source-table", crm.by_launch_source, friendlyLaunchSource);
+      fillTableFriendly("by-object-type-table", crm.by_object_type, friendlyObjectType);
 
     }).catch((err) => {
       console.error("Dashboard load error:", err);
@@ -412,6 +450,43 @@ document.addEventListener("DOMContentLoaded", () => {
         tr.appendChild(tdCount);
         tbody.appendChild(tr);
       });
+  }
+
+  function fillTableFriendly(tableId, obj, labelFn) {
+    const tbody = document.querySelector("#" + tableId + " tbody");
+    tbody.innerHTML = "";
+    if (!obj) return;
+
+    Object.entries(obj)
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([key, count]) => {
+        const tr = document.createElement("tr");
+        const tdKey = document.createElement("td");
+        const tdCount = document.createElement("td");
+        tdKey.textContent = labelFn ? labelFn(key) : key;
+        tdCount.textContent = count;
+        tr.appendChild(tdKey);
+        tr.appendChild(tdCount);
+        tbody.appendChild(tr);
+      });
+  }
+
+  function friendlyLaunchSource(key) {
+    const map = {
+      "selection": "Selection (record list)",
+      "list": "List (HubSpot list)",
+      "scan": "Scan (page scrape)",
+    };
+    return map[key] || key;
+  }
+
+  function friendlyObjectType(key) {
+    const map = {
+      "contacts": "Contacts",
+      "companies": "Companies",
+      "deals": "Deals",
+    };
+    return map[key] || key;
   }
 
   // Filter button listeners
