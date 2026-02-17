@@ -186,34 +186,21 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        -webkit-appearance: none;
-        -moz-appearance: none;
-        appearance: none;
       }
       select option {
-        background: var(--card) !important;
-        background-color: var(--card) !important;
-        color: var(--text);
+        background-color: #121b2e;
+        color: rgba(255, 255, 255, 0.92);
         padding: 8px;
-        overflow: hidden;
-        text-overflow: ellipsis;
       }
       select option:first-child {
-        background: var(--card) !important;
-        color: var(--muted2);
+        color: rgba(255, 255, 255, 0.55);
       }
-      select option:checked {
-        background: linear-gradient(0deg, rgba(91, 140, 255, 0.3) 0%, rgba(91, 140, 255, 0.25) 100%) !important;
-        background-color: rgba(91, 140, 255, 0.28) !important;
-        color: var(--text) !important;
-      }
-      select option:hover {
-        background: rgba(91, 140, 255, 0.2) !important;
-        background-color: rgba(91, 140, 255, 0.2) !important;
-      }
-      select option:checked:hover {
-        background: rgba(91, 140, 255, 0.35) !important;
-        background-color: rgba(91, 140, 255, 0.35) !important;
+      select option:checked,
+      select option[selected] {
+        background-color: #3e6ff0;
+        background: #3e6ff0;
+        color: white;
+        font-weight: 600;
       }
 
       /* Custom modal overlay */
