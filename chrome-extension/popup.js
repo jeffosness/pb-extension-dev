@@ -552,7 +552,14 @@ async function fetchHubSpotLists() {
     const opt = document.createElement("option");
     opt.value = list.listId;
     const typeLabel = list.objectType === "companies" ? "companies" : "contacts";
-    opt.textContent = `${list.name} (${list.size} ${typeLabel})`;
+
+    // Only show count if we have it (HubSpot API doesn't always return size)
+    if (list.size > 0) {
+      opt.textContent = `${list.name} (${list.size} ${typeLabel})`;
+    } else {
+      opt.textContent = `${list.name} (${typeLabel} list)`;
+    }
+
     opt.dataset.objectType = list.objectType;
     opt.dataset.size = list.size;
     listSelect.appendChild(opt);
@@ -585,14 +592,15 @@ function onHsListSelectChange() {
       listInfo.textContent = `This list has ${size} ${typeLabel}. PhoneBurner limit is 500 — the first 500 will be used.`;
       listInfo.style.color = "var(--danger)";
     }
-  } else if (size === 0) {
+  } else if (size > 0) {
     if (listInfo) {
-      listInfo.textContent = `This list appears empty.`;
+      listInfo.textContent = `${size} ${typeLabel} will be added to the dial session.`;
       listInfo.style.color = "var(--muted)";
     }
   } else {
+    // Size unknown (HubSpot API doesn't always return member count)
     if (listInfo) {
-      listInfo.textContent = `${size} ${typeLabel} will be added to the dial session.`;
+      listInfo.textContent = `All ${typeLabel} from this list will be added (up to 500).`;
       listInfo.style.color = "var(--muted)";
     }
   }

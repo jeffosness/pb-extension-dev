@@ -180,6 +180,20 @@
         cursor: not-allowed;
       }
 
+      /* Select dropdown styling */
+      select {
+        max-width: 100%;
+      }
+      select option {
+        background: var(--card);
+        color: var(--text);
+        padding: 8px;
+      }
+      select option:checked,
+      select option:hover {
+        background: rgba(91, 140, 255, 0.2);
+      }
+
       /* Custom modal overlay */
       .modal-overlay {
         position: fixed;
