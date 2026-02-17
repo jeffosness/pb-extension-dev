@@ -183,11 +183,20 @@
       /* Select dropdown styling */
       select {
         max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       select option {
         background: var(--card);
         color: var(--text);
         padding: 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      select option:first-child {
+        background: var(--card);
+        color: var(--muted2);
       }
       select option:checked,
       select option:hover {

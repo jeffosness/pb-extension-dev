@@ -553,13 +553,21 @@ async function fetchHubSpotLists() {
     opt.value = list.listId;
     const typeLabel = list.objectType === "companies" ? "companies" : "contacts";
 
-    // Only show count if we have it (HubSpot API doesn't always return size)
-    if (list.size > 0) {
-      opt.textContent = `${list.name} (${list.size} ${typeLabel})`;
-    } else {
-      opt.textContent = `${list.name} (${typeLabel} list)`;
+    // Truncate long list names to prevent dropdown overflow
+    let displayName = list.name;
+    if (displayName.length > 35) {
+      displayName = displayName.substring(0, 32) + '...';
     }
 
+    // Only show count if we have it (HubSpot API doesn't always return size)
+    if (list.size > 0) {
+      opt.textContent = `${displayName} (${list.size} ${typeLabel})`;
+    } else {
+      opt.textContent = `${displayName} (${typeLabel} list)`;
+    }
+
+    // Store full name in title for tooltip
+    opt.title = list.name;
     opt.dataset.objectType = list.objectType;
     opt.dataset.size = list.size;
     listSelect.appendChild(opt);
