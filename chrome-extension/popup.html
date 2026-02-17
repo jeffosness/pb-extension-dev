@@ -191,22 +191,29 @@
         appearance: none;
       }
       select option {
-        background: var(--card);
+        background: var(--card) !important;
+        background-color: var(--card) !important;
         color: var(--text);
         padding: 8px;
         overflow: hidden;
         text-overflow: ellipsis;
       }
       select option:first-child {
-        background: var(--card);
+        background: var(--card) !important;
         color: var(--muted2);
       }
       select option:checked {
-        background: linear-gradient(0deg, rgba(91, 140, 255, 0.3) 0%, rgba(91, 140, 255, 0.25) 100%);
-        color: var(--text);
+        background: linear-gradient(0deg, rgba(91, 140, 255, 0.3) 0%, rgba(91, 140, 255, 0.25) 100%) !important;
+        background-color: rgba(91, 140, 255, 0.28) !important;
+        color: var(--text) !important;
       }
       select option:hover {
-        background: rgba(91, 140, 255, 0.2);
+        background: rgba(91, 140, 255, 0.2) !important;
+        background-color: rgba(91, 140, 255, 0.2) !important;
+      }
+      select option:checked:hover {
+        background: rgba(91, 140, 255, 0.35) !important;
+        background-color: rgba(91, 140, 255, 0.35) !important;
       }
 
       /* Custom modal overlay */
