@@ -1,6 +1,5 @@
-<!-- popup.html (DROP-IN REPLACEMENT) -->
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <title>PhoneBurner Companion</title>
@@ -22,6 +21,8 @@
       }
       body {
         width: 350px;
+        max-height: 600px;
+        overflow-y: auto;
         margin: 0;
         padding: 0;
         background: var(--bg);
@@ -53,9 +54,20 @@
         justify-content: space-between;
         gap: 10px;
       }
+      #crm-name {
+        font-weight: 900;
+      }
       .subtle {
         color: var(--muted2);
         font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .version-tag {
+        margin-left: auto;
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.3);
       }
       .pill {
         font-size: 11px;
@@ -165,6 +177,7 @@
         font-weight: 900;
         cursor: pointer;
         margin-top: 8px;
+        transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
       }
       button.primary {
         background: linear-gradient(180deg, var(--primary), var(--primary2));
@@ -179,9 +192,27 @@
         opacity: 0.55;
         cursor: not-allowed;
       }
+      button:focus-visible,
+      .tab-btn:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+      }
+      select:focus-visible {
+        border-color: rgba(91, 140, 255, 0.7);
+        box-shadow: 0 0 0 3px rgba(91, 140, 255, 0.18);
+      }
 
       /* Select dropdown styling */
       select {
+        width: 100%;
+        padding: 9px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        font: inherit;
+        outline: none;
+        cursor: pointer;
         max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -197,10 +228,35 @@
       }
       select option:checked,
       select option[selected] {
+        /* Both needed: background-color for Chrome, background shorthand as fallback */
         background-color: #3e6ff0;
         background: #3e6ff0;
         color: white;
         font-weight: 600;
+      }
+
+      /* Spacing utilities */
+      .mt-4 { margin-top: 4px; }
+      .mt-6 { margin-top: 6px; }
+      .mt-8 { margin-top: 8px; }
+      .mt-10 { margin-top: 10px; }
+
+      /* List section separator */
+      .list-section {
+        margin-top: 12px;
+        border-top: 1px solid var(--border);
+        padding-top: 12px;
+      }
+
+      /* Inline label (checkbox rows) */
+      .label-inline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        font-size: 12px;
+        text-transform: none;
+        letter-spacing: 0;
       }
 
       /* Custom modal overlay */
@@ -253,7 +309,7 @@
 
   <body>
     <!-- Custom modal dialog (replaces native alert/confirm) -->
-    <div id="modal-overlay" class="modal-overlay">
+    <div id="modal-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-message">
       <div class="modal-dialog">
         <div id="modal-title" class="modal-title"></div>
         <div id="modal-message" class="modal-message"></div>
@@ -264,28 +320,29 @@
       <div class="title">
         <div>
           Detected CRM:
-          <span id="crm-name" style="font-weight: 900">Loading…</span>
+          <span id="crm-name">Loading…</span>
         </div>
         <span id="crm-level" class="pill"></span>
       </div>
 
       <div class="subtle">
         <strong>PhoneBurner:</strong> <span id="pb-status">Checking...</span>
+        <span id="ext-version" class="version-tag"></span>
       </div>
     </div>
 
-    <div class="tabs">
-      <button id="tab-dial" class="tab-btn active">Dial</button>
-      <button id="tab-settings" class="tab-btn">Settings</button>
+    <div class="tabs" role="tablist">
+      <button id="tab-dial" class="tab-btn active" role="tab" aria-selected="true" aria-controls="panel-dial">Dial</button>
+      <button id="tab-settings" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-settings">Settings</button>
     </div>
 
     <!-- Dial -->
-    <div id="panel-dial" class="panel active">
+    <div id="panel-dial" class="panel active" role="tabpanel" aria-labelledby="tab-dial">
       <div class="panel-wrap">
         <!-- PAT CONNECT (Dial only when NOT connected) -->
         <div id="pat-card-dial" class="card">
           <div class="card-title">PhoneBurner Access Token</div>
-          <input type="password" id="pat" placeholder="Paste PAT here" />
+          <input type="password" id="pat" placeholder="Paste PAT here" aria-label="PhoneBurner Access Token" />
           <button id="save-pat" class="primary">Save PAT</button>
           <div class="help-text">
             Paste your Personal Access Token to connect. Once connected, you can
@@ -299,7 +356,7 @@
           <div class="help-text">
             This extension requires an active PhoneBurner account.
           </div>
-          <button id="get-pb-btn" class="primary" style="margin-top: 10px">
+          <button id="get-pb-btn" class="primary mt-10">
             Get PhoneBurner
           </button>
         </div>
@@ -328,23 +385,21 @@
           <button id="hs-dial-action" class="primary hidden">Loading…</button>
 
           <!-- Two buttons for companies (new modes) -->
-          <button id="hs-dial-contacts" class="primary hidden">
+          <button id="hs-dial-contacts" class="primary hidden" data-mode="">
             Launch Dial Session (Contacts)
           </button>
-          <button id="hs-dial-companies" class="primary hidden" style="margin-top: 8px;">
+          <button id="hs-dial-companies" class="primary hidden mt-8" data-mode="">
             Launch Dial Session (Companies)
           </button>
 
           <!-- HubSpot List Dial -->
-          <div id="hs-list-section" class="hidden" style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px;">
-            <div style="font-weight: 800; font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.2px; margin-bottom: 6px;">
-              Or launch from a HubSpot list
-            </div>
-            <select id="hs-list-select" style="width:100%; padding:9px 10px; border-radius:12px; border:1px solid var(--border); background:rgba(255,255,255,0.04); color:var(--text); font:inherit; outline:none; cursor:pointer;">
+          <div id="hs-list-section" class="hidden list-section">
+            <label for="hs-list-select">Or launch from a HubSpot list</label>
+            <select id="hs-list-select">
               <option value="">Select a list…</option>
             </select>
-            <div id="hs-list-info" class="help-text" style="margin-top:4px;"></div>
-            <button id="hs-dial-from-list" class="primary hidden" style="margin-top:8px;">
+            <div id="hs-list-info" class="help-text mt-4"></div>
+            <button id="hs-dial-from-list" class="primary hidden mt-8">
               Launch Dial Session from List
             </button>
           </div>
@@ -353,7 +408,7 @@
     </div>
 
     <!-- Settings -->
-    <div id="panel-settings" class="panel">
+    <div id="panel-settings" class="panel" role="tabpanel" aria-labelledby="tab-settings">
       <div class="panel-wrap">
         <!-- PAT MANAGEMENT (Settings only when connected) -->
         <div id="pat-card-settings" class="card hidden">
@@ -395,27 +450,17 @@
 
         <div class="card">
           <div class="card-title">Follow Widget</div>
-          <div class="help-text" style="margin-top: 4px">
-            Control how the on-screen “Follow” widget behaves after a dial
+          <div class="help-text mt-4">
+            Control how the on-screen "Follow" widget behaves after a dial
             session starts.
           </div>
 
-          <label
-            style="
-              display: flex;
-              align-items: center;
-              gap: 8px;
-              margin-top: 8px;
-              font-size: 12px;
-              text-transform: none;
-              letter-spacing: 0;
-            "
-          >
+          <label class="label-inline" for="follow-auto-collapse">
             <input type="checkbox" id="follow-auto-collapse" />
             Auto-collapse after session starts
           </label>
 
-          <div class="help-text" style="margin-top: 6px">
+          <div class="help-text mt-6">
             Default: On. The widget will briefly expand, then collapse to a
             small view.
           </div>

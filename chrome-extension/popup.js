@@ -51,27 +51,26 @@ function showAlert(message, title = "PhoneBurner Extension") {
 
     titleEl.textContent = title;
     messageEl.textContent = message;
-    buttonsEl.innerHTML = "";
+    buttonsEl.replaceChildren();
+
+    // Shared cleanup + resolve
+    const escHandler = (e) => {
+      if (e.key === "Escape") closeModal();
+    };
+    function closeModal() {
+      overlay.classList.remove("show");
+      document.removeEventListener("keydown", escHandler);
+      resolve();
+    }
 
     const okBtn = document.createElement("button");
     okBtn.textContent = "OK";
     okBtn.className = "primary";
-    okBtn.addEventListener("click", () => {
-      overlay.classList.remove("show");
-      resolve();
-    });
+    okBtn.addEventListener("click", closeModal);
 
     buttonsEl.appendChild(okBtn);
     overlay.classList.add("show");
 
-    // Allow Esc key to dismiss
-    const escHandler = (e) => {
-      if (e.key === "Escape") {
-        overlay.classList.remove("show");
-        document.removeEventListener("keydown", escHandler);
-        resolve();
-      }
-    };
     document.addEventListener("keydown", escHandler);
 
     // Focus OK button for accessibility
@@ -95,35 +94,31 @@ function showConfirm(message, title = "Confirm") {
 
     titleEl.textContent = title;
     messageEl.textContent = message;
-    buttonsEl.innerHTML = "";
+    buttonsEl.replaceChildren();
+
+    // Shared cleanup
+    const escHandler = (e) => {
+      if (e.key === "Escape") closeModal(false);
+    };
+    function closeModal(result) {
+      overlay.classList.remove("show");
+      document.removeEventListener("keydown", escHandler);
+      resolve(result);
+    }
 
     const cancelBtn = document.createElement("button");
     cancelBtn.textContent = "Cancel";
-    cancelBtn.addEventListener("click", () => {
-      overlay.classList.remove("show");
-      resolve(false);
-    });
+    cancelBtn.addEventListener("click", () => closeModal(false));
 
     const confirmBtn = document.createElement("button");
     confirmBtn.textContent = "OK";
     confirmBtn.className = "primary";
-    confirmBtn.addEventListener("click", () => {
-      overlay.classList.remove("show");
-      resolve(true);
-    });
+    confirmBtn.addEventListener("click", () => closeModal(true));
 
     buttonsEl.appendChild(cancelBtn);
     buttonsEl.appendChild(confirmBtn);
     overlay.classList.add("show");
 
-    // Allow Esc key to cancel
-    const escHandler = (e) => {
-      if (e.key === "Escape") {
-        overlay.classList.remove("show");
-        document.removeEventListener("keydown", escHandler);
-        resolve(false);
-      }
-    };
     document.addEventListener("keydown", escHandler);
 
     // Focus confirm button for accessibility
@@ -383,10 +378,12 @@ async function refreshHubSpotUi() {
     if (dialContacts) {
       dialContacts.disabled = false;
       dialContacts.textContent = "Launch Dial Session (Contacts)";
+      dialContacts.dataset.mode = "launch";
     }
     if (dialCompanies) {
       dialCompanies.disabled = false;
       dialCompanies.textContent = "Launch Dial Session (Companies)";
+      dialCompanies.dataset.mode = "launch";
     }
   } else {
     if (dialStatus) dialStatus.textContent = "Not connected to HubSpot";
@@ -405,10 +402,12 @@ async function refreshHubSpotUi() {
     if (dialContacts) {
       dialContacts.disabled = false;
       dialContacts.textContent = "Connect HubSpot";
+      dialContacts.dataset.mode = "connect";
     }
     if (dialCompanies) {
       dialCompanies.disabled = false;
       dialCompanies.textContent = "Connect HubSpot";
+      dialCompanies.dataset.mode = "connect";
     }
   }
 
@@ -816,6 +815,8 @@ function activateTab(tabName) {
   const isSettings = tabName === "settings";
   dialBtn.classList.toggle("active", !isSettings);
   settingsBtn.classList.toggle("active", isSettings);
+  dialBtn.setAttribute("aria-selected", String(!isSettings));
+  settingsBtn.setAttribute("aria-selected", String(isSettings));
   dialPanel.classList.toggle("active", !isSettings);
   settingsPanel.classList.toggle("active", isSettings);
 }
@@ -849,16 +850,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // HubSpot company buttons
   $("hs-dial-contacts")?.addEventListener("click", async () => {
-    // If not connected, start OAuth flow
-    const mode = $("hs-dial-contacts")?.textContent;
-    if (mode && mode.includes("Connect")) return startHubSpotOAuth();
+    if ($("hs-dial-contacts")?.dataset?.mode === "connect") return startHubSpotOAuth();
     return launchHubSpotDialSessionContacts();
   });
 
   $("hs-dial-companies")?.addEventListener("click", async () => {
-    // If not connected, start OAuth flow
-    const mode = $("hs-dial-companies")?.textContent;
-    if (mode && mode.includes("Connect")) return startHubSpotOAuth();
+    if ($("hs-dial-companies")?.dataset?.mode === "connect") return startHubSpotOAuth();
     return launchHubSpotDialSessionCompanies();
   });
 
@@ -886,6 +883,13 @@ document.addEventListener("DOMContentLoaded", () => {
       },
     );
   });
+
+  // Version indicator
+  const versionEl = $("ext-version");
+  if (versionEl) {
+    const manifest = chrome.runtime.getManifest();
+    versionEl.textContent = `v${manifest.version}`;
+  }
 
   refreshState();
 });
