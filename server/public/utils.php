@@ -478,9 +478,11 @@ function save_session_state($session_token, array $state)
 {
     $path = session_file_path($session_token);
     if (!is_dir(dirname($path))) {
-        mkdir(dirname($path), 0700, true);
+        mkdir(dirname($path), 0770, true);
     }
-    atomic_write_json($path, $state);
+    $json = json_encode($state, JSON_UNESCAPED_SLASHES);
+    file_put_contents($path, $json, LOCK_EX);
+    @chmod($path, 0660);
 }
 
 function load_session_state($session_token)
