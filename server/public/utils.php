@@ -217,83 +217,33 @@ function tokens_base_dir(): string
 }
 
 /**
- * Legacy token dirs (old web-root location). Used only for migration fallback.
+ * PB token file path.
  */
-function legacy_tokens_dir(): string
-{
-    // Apache DocumentRoot is /opt/pb-extension-dev/public, and legacy tokens lived under /public/tokens
-    return '/opt/pb-extension-dev/public/tokens';
-}
-
-/**
- * PB token file paths (new + legacy).
- */
-function pb_token_path_new(string $client_id): string
+function pb_token_path(string $client_id): string
 {
     $dir = tokens_base_dir() . '/pb';
     ensure_dir_secure($dir);
     return $dir . '/' . $client_id . '.json';
 }
 
-function pb_token_path_legacy(string $client_id): string
-{
-    return rtrim(legacy_tokens_dir(), '/\\') . '/' . $client_id . '.json';
-}
-
 /**
- * HubSpot token file paths (new + legacy).
+ * HubSpot token file path.
  */
-function hs_token_path_new(string $client_id): string
+function hs_token_path(string $client_id): string
 {
     $dir = tokens_base_dir() . '/hubspot';
     ensure_dir_secure($dir);
     return $dir . '/' . $client_id . '.json';
 }
 
-function hs_token_path_legacy(string $client_id): string
-{
-    return rtrim(legacy_tokens_dir(), '/\\') . '/hubspot/' . $client_id . '.json';
-}
-
-/**
- * Migrate a token file from legacy -> new location if present.
- */
-function migrate_token_file_if_needed(string $legacyPath, string $newPath): void
-{
-    if (is_file($newPath)) {
-        return; // already migrated
-    }
-    if (!is_file($legacyPath)) {
-        return; // nothing to migrate
-    }
-
-    // Read legacy
-    $raw = @file_get_contents($legacyPath);
-    $data = $raw ? json_decode($raw, true) : null;
-    if (!is_array($data)) {
-        return; // don't migrate garbage
-    }
-
-    // Write to new securely, then delete legacy
-    atomic_write_json($newPath, $data);
-    @unlink($legacyPath);
-}
-
 // -------------------------
 // PhoneBurner PAT helpers
 // -------------------------
 
-function token_file_path($client_id)
-{
-    // Kept for compatibility with existing code that calls token_file_path(),
-    // but now points to the NEW PB subdir.
-    return pb_token_path_new((string)$client_id);
-}
-
 function save_pb_token($client_id, $pat)
 {
     $client_id = (string)$client_id;
-    $path = pb_token_path_new($client_id);
+    $path = pb_token_path($client_id);
 
     $data = [
         'pat'      => $pat,
@@ -306,32 +256,23 @@ function save_pb_token($client_id, $pat)
 function load_pb_token($client_id)
 {
     $client_id = (string)$client_id;
+    $path = pb_token_path($client_id);
 
-    $newPath = pb_token_path_new($client_id);
-    $legacy  = pb_token_path_legacy($client_id);
-
-    // Migrate on first use if needed
-    migrate_token_file_if_needed($legacy, $newPath);
-
-    if (!is_file($newPath)) {
+    if (!is_file($path)) {
         return null;
     }
 
-    $data = json_decode(@file_get_contents($newPath), true);
+    $data = json_decode(@file_get_contents($path), true);
     return is_array($data) ? ($data['pat'] ?? null) : null;
 }
 
 function clear_pb_token($client_id)
 {
     $client_id = (string)$client_id;
-    $newPath = pb_token_path_new($client_id);
-    $legacy  = pb_token_path_legacy($client_id);
+    $path = pb_token_path($client_id);
 
-    if (is_file($newPath)) {
-        @unlink($newPath);
-    }
-    if (is_file($legacy)) {
-        @unlink($legacy);
+    if (is_file($path)) {
+        @unlink($path);
     }
 }
 
@@ -339,17 +280,10 @@ function clear_pb_token($client_id)
 // HubSpot token helpers (per client_id)
 // -------------------------------------------------------------------------
 
-function hs_token_file_path($client_id)
-{
-    // Kept for compatibility with existing code that calls hs_token_file_path(),
-    // but now points to the NEW hubspot subdir.
-    return hs_token_path_new((string)$client_id);
-}
-
 function save_hs_tokens($client_id, array $tokens)
 {
     $client_id = (string)$client_id;
-    $path = hs_token_path_new($client_id);
+    $path = hs_token_path($client_id);
 
     $tokens['saved_at'] = date('c');
     atomic_write_json($path, $tokens);
@@ -358,31 +292,23 @@ function save_hs_tokens($client_id, array $tokens)
 function load_hs_tokens($client_id)
 {
     $client_id = (string)$client_id;
+    $path = hs_token_path($client_id);
 
-    $newPath = hs_token_path_new($client_id);
-    $legacy  = hs_token_path_legacy($client_id);
-
-    migrate_token_file_if_needed($legacy, $newPath);
-
-    if (!is_file($newPath)) {
+    if (!is_file($path)) {
         return null;
     }
 
-    $data = json_decode(@file_get_contents($newPath), true);
+    $data = json_decode(@file_get_contents($path), true);
     return is_array($data) ? $data : null;
 }
 
 function clear_hs_tokens($client_id)
 {
     $client_id = (string)$client_id;
-    $newPath = hs_token_path_new($client_id);
-    $legacy  = hs_token_path_legacy($client_id);
+    $path = hs_token_path($client_id);
 
-    if (is_file($newPath)) {
-        @unlink($newPath);
-    }
-    if (is_file($legacy)) {
-        @unlink($legacy);
+    if (is_file($path)) {
+        @unlink($path);
     }
 }
 
@@ -568,28 +494,6 @@ function load_session_state($session_token)
     return is_array($data) ? $data : null;
 }
 
-
-// -----------------------------------------------------------------------------
-// Compatibility wrappers for older HubSpot helpers
-// -----------------------------------------------------------------------------
-
-/**
- * Backwards-compatible alias for json_response().
- * NOTE: Some HubSpot scripts expect `json_out($payload, $statusCode)`.
- */
-function json_out($data, $status = 200)
-{
-    return json_response($data, $status);
-}
-
-/**
- * Backwards-compatible alias for json_input().
- * Older HubSpot code calls this read_json().
- */
-function read_json()
-{
-    return json_input();
-}
 
 
 /**
