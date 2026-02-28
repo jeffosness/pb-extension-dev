@@ -14,9 +14,15 @@ if (!$session_token) {
 }
 
 $raw = file_get_contents('php://input');
-log_msg('call_done: ' . $raw);
-
 $payload = json_decode($raw, true);
+
+log_msg('call_done: ' . json_encode([
+    'has_payload'  => is_array($payload),
+    'status'       => $payload['status'] ?? null,
+    'connected'    => $payload['connected'] ?? null,
+    'duration'     => $payload['duration'] ?? null,
+    'has_agent'    => isset($payload['agent']),
+]));
 if (!is_array($payload)) {
     http_response_code(400);
     echo 'Invalid JSON';

@@ -14,9 +14,14 @@ if (!$session_token) {
 }
 
 $raw = file_get_contents('php://input');
-log_msg('contact_displayed: ' . $raw);
-
 $payload = json_decode($raw, true);
+
+log_msg('contact_displayed: ' . json_encode([
+    'has_payload'        => is_array($payload),
+    'has_external_crm'   => isset($payload['external_crm']) || isset($payload['external_crm_data']),
+    'has_contact'        => isset($payload['contact']),
+    'payload_keys'       => is_array($payload) ? array_keys($payload) : [],
+]));
 if (!is_array($payload)) {
     http_response_code(400);
     echo 'Invalid JSON';
