@@ -235,6 +235,15 @@
         font-weight: 600;
       }
 
+      /* Loading animation for status text */
+      .status.loading {
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
       /* Spacing utilities */
       .mt-4 { margin-top: 4px; }
       .mt-6 { margin-top: 6px; }
@@ -370,39 +379,65 @@
           <button id="scan-launch" class="primary">
             Scan &amp; Launch Dial Session
           </button>
+          <div id="scan-status" class="status"></div>
         </div>
 
-        <!-- HubSpot Dial (Level 3 only) -->
+        <!-- HubSpot Selection (Level 3, list pages only) -->
         <div id="hubspot-dial-card" class="card hidden">
           <div class="card-title">
-            HubSpot advanced mode <span class="pill">Level 3</span>
+            HubSpot Selection <span class="pill">Level 3</span>
           </div>
 
           <div id="hs-dial-status" class="status"></div>
           <div id="hs-dial-help" class="help-text"></div>
 
-          <!-- Single button for contacts/deals (existing behavior) -->
-          <button id="hs-dial-action" class="primary hidden">Loading…</button>
+          <!-- Single button for contacts/deals -->
+          <button id="hs-dial-action" class="primary hidden" data-mode="">Loading…</button>
 
-          <!-- Two buttons for companies (new modes) -->
+          <!-- Two buttons for companies -->
           <button id="hs-dial-contacts" class="primary hidden" data-mode="">
             Launch Dial Session (Contacts)
           </button>
           <button id="hs-dial-companies" class="primary hidden mt-8" data-mode="">
             Launch Dial Session (Companies)
           </button>
+        </div>
 
-          <!-- HubSpot List Dial -->
-          <div id="hs-list-section" class="hidden list-section">
-            <label for="hs-list-select">Or launch from a HubSpot list</label>
-            <select id="hs-list-select">
-              <option value="">Select a list…</option>
-            </select>
-            <div id="hs-list-info" class="help-text mt-4"></div>
-            <button id="hs-dial-from-list" class="primary hidden mt-8">
-              Launch Dial Session from List
-            </button>
+        <!-- HubSpot Record (Level 3, record pages only) -->
+        <div id="hubspot-record-card" class="card hidden">
+          <div class="card-title">
+            This Record <span class="pill">Level 3</span>
           </div>
+
+          <div id="hs-record-status" class="status"></div>
+          <div id="hs-record-help" class="help-text"></div>
+
+          <!-- Single button for contacts/deals -->
+          <button id="hs-record-action" class="primary hidden" data-mode="">
+            Dial This Contact
+          </button>
+
+          <!-- Two buttons for companies -->
+          <button id="hs-record-contacts" class="primary hidden" data-mode="">
+            Dial Contacts at This Company
+          </button>
+          <button id="hs-record-companies" class="primary hidden mt-8" data-mode="">
+            Dial This Company
+          </button>
+        </div>
+
+        <!-- HubSpot Lists (any page when both PB + HS connected) -->
+        <div id="hs-list-card" class="card hidden">
+          <div class="card-title">HubSpot Lists</div>
+          <label for="hs-list-select">Launch a dial session from a saved list</label>
+          <select id="hs-list-select">
+            <option value="">Select a list…</option>
+          </select>
+          <div id="hs-list-info" class="help-text mt-4"></div>
+          <div id="hs-list-status" class="status"></div>
+          <button id="hs-dial-from-list" class="primary hidden mt-8">
+            Launch Dial Session from List
+          </button>
         </div>
       </div>
     </div>

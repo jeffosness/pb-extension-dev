@@ -249,6 +249,8 @@ async function requestOptionalPermissionForActiveSiteBestEffort() {
 // ---------------------------
 
 let ACTIVE_CTX = null;
+let PB_CONNECTED = false;
+let HS_STATE = { connected: false, portalId: null };
 
 function setCrmHeader(context) {
   ACTIVE_CTX = context || null;
@@ -270,23 +272,67 @@ function setCrmHeader(context) {
             ? "Level 1 – Generic mode"
             : "Unknown level";
   }
-
-  applyLevelUi(context);
 }
 
 function isHubSpotL3(ctx) {
   return !!(ctx && ctx.crmId === "hubspot" && ctx.level === 3);
 }
 
-function applyLevelUi(context) {
+function applyContextVisibility(ctx, pbConnected) {
   const currentPageCard = $("card-current-page");
   const hsDialCard = $("hubspot-dial-card");
+  const hsRecordCard = $("hubspot-record-card");
+  const hsListCard = $("hs-list-card");
 
-  const level = context?.level || 0;
-  const showLevel3 = level === 3;
+  const isHS = isHubSpotL3(ctx);
+  const pageType = ctx?.pageType || "other";
+  const bothAuth = pbConnected && HS_STATE.connected;
 
-  setVisible(currentPageCard, !showLevel3);
-  setVisible(hsDialCard, isHubSpotL3(context));
+  // Scan & Launch: any non-HubSpot page (generic scanner may work on obscure CRMs)
+  setVisible(currentPageCard, !isHS);
+
+  // Selection card: HS list pages only
+  setVisible(hsDialCard, isHS && pageType === "list");
+
+  // Record card: HS record pages only
+  setVisible(hsRecordCard, isHS && pageType === "record");
+
+  // List card: any page when both PB + HS connected
+  setVisible(hsListCard, bothAuth);
+
+  // Settings card visibility
+  const settingsCard = $("hubspot-settings-card");
+  const settingsStatus = $("hs-settings-status");
+  const disconnectBtn = $("hs-disconnect");
+  setVisible(settingsCard, HS_STATE.connected);
+  if (HS_STATE.connected) {
+    if (settingsStatus) settingsStatus.textContent = "Connected ✔";
+    if (disconnectBtn) disconnectBtn.disabled = false;
+  }
+
+  // Populate active cards
+  if (isHS && pageType === "list") {
+    refreshHubSpotSelectionUi(ctx?.objectType || "contact");
+  }
+  if (isHS && pageType === "record") {
+    refreshHubSpotRecordUi(ctx?.objectType || "contact");
+  }
+  if (bothAuth) {
+    fetchHubSpotLists();
+  }
+}
+
+async function checkHubSpotConnectionState() {
+  try {
+    const state = await hsPost("crm/hubspot/state.php");
+    HS_STATE.connected = !!state?.hs_ready;
+    // portal_id is nested under hubspot object in state response
+    const hsPortalId = state?.hubspot?.portal_id || null;
+    if (hsPortalId) HS_STATE.portalId = hsPortalId;
+  } catch (e) {
+    HS_STATE.connected = false;
+  }
+  return HS_STATE.connected;
 }
 
 // ---------------------------
@@ -308,73 +354,28 @@ async function hsPost(path, body = {}) {
   return await res.json().catch(() => ({}));
 }
 
-async function refreshHubSpotUi() {
-  if (!isHubSpotL3(ACTIVE_CTX)) return;
-
+function refreshHubSpotSelectionUi(objectType) {
   const dialStatus = $("hs-dial-status");
   const dialHelp = $("hs-dial-help");
-  const dialAction = $("hs-dial-action");      // Single button (contacts/deals)
-  const dialContacts = $("hs-dial-contacts");  // Company → contacts
-  const dialCompanies = $("hs-dial-companies");// Company → companies
+  const dialAction = $("hs-dial-action");
+  const dialContacts = $("hs-dial-contacts");
+  const dialCompanies = $("hs-dial-companies");
 
-  const settingsCard = $("hubspot-settings-card");
-  const settingsStatus = $("hs-settings-status");
-  const disconnectBtn = $("hs-disconnect");
+  const isCompanyList = objectType === "company";
 
-  // Determine which buttons to show based on object type
-  const objectType = ACTIVE_CTX?.objectType || 'contact';
-  const isCompanyList = objectType === 'company';
+  setVisible(dialAction, !isCompanyList);
+  setVisible(dialContacts, isCompanyList);
+  setVisible(dialCompanies, isCompanyList);
 
-  // Show appropriate buttons based on object type
-  if (dialAction) setVisible(dialAction, !isCompanyList);
-  if (dialContacts) setVisible(dialContacts, isCompanyList);
-  if (dialCompanies) setVisible(dialCompanies, isCompanyList);
-
-  if (dialStatus) dialStatus.textContent = "Checking HubSpot connection…";
-  if (dialHelp) dialHelp.textContent = "";
-  if (dialAction) {
-    dialAction.disabled = true;
-    dialAction.textContent = "Loading…";
-  }
-  if (dialContacts) {
-    dialContacts.disabled = true;
-    dialContacts.textContent = "Loading…";
-  }
-  if (dialCompanies) {
-    dialCompanies.disabled = true;
-    dialCompanies.textContent = "Loading…";
-  }
-
-  let state;
-  try {
-    state = await hsPost("crm/hubspot/state.php");
-  } catch (e) {
-    if (dialStatus)
-      dialStatus.textContent = "Error checking HubSpot connection.";
-    if (dialAction) {
-      dialAction.disabled = false;
-      dialAction.textContent = "Retry";
-    }
-    setVisible(settingsCard, false);
-    return;
-  }
-
-  const connected = !!state?.hs_ready;
-
-  if (connected) {
+  if (HS_STATE.connected) {
     if (dialStatus) dialStatus.textContent = "Connected to HubSpot ✔";
-    if (dialHelp)
-      dialHelp.textContent =
-        "Launch a dial session from the currently selected records.";
+    if (dialHelp) dialHelp.textContent = "Launch a dial session from the currently selected records.";
 
-    // Update single button (for contacts/deals)
     if (dialAction) {
       dialAction.disabled = false;
       dialAction.textContent = "Launch HubSpot Dial Session";
       dialAction.dataset.mode = "launch";
     }
-
-    // Update company buttons
     if (dialContacts) {
       dialContacts.disabled = false;
       dialContacts.textContent = "Launch Dial Session (Contacts)";
@@ -387,18 +388,13 @@ async function refreshHubSpotUi() {
     }
   } else {
     if (dialStatus) dialStatus.textContent = "Not connected to HubSpot";
-    if (dialHelp)
-      dialHelp.textContent =
-        "Connect HubSpot to enable API-based selection + call logging.";
+    if (dialHelp) dialHelp.textContent = "Connect HubSpot to enable API-based selection + call logging.";
 
-    // Update single button (for contacts/deals)
     if (dialAction) {
       dialAction.disabled = false;
       dialAction.textContent = "Connect HubSpot";
       dialAction.dataset.mode = "connect";
     }
-
-    // Update company buttons
     if (dialContacts) {
       dialContacts.disabled = false;
       dialContacts.textContent = "Connect HubSpot";
@@ -410,38 +406,86 @@ async function refreshHubSpotUi() {
       dialCompanies.dataset.mode = "connect";
     }
   }
+}
 
-  // Show/hide list section based on connection state
-  const listSection = $("hs-list-section");
-  setVisible(listSection, connected);
+function refreshHubSpotRecordUi(objectType) {
+  const recordStatus = $("hs-record-status");
+  const recordHelp = $("hs-record-help");
+  const recordAction = $("hs-record-action");
+  const recordContacts = $("hs-record-contacts");
+  const recordCompanies = $("hs-record-companies");
 
-  // Fetch lists when connected (non-blocking)
-  if (connected) {
-    fetchHubSpotLists();
-  }
+  const isCompany = objectType === "company";
 
-  setVisible(settingsCard, connected);
-  if (connected) {
-    if (settingsStatus) settingsStatus.textContent = "Connected ✔";
-    if (disconnectBtn) disconnectBtn.disabled = false;
+  setVisible(recordAction, !isCompany);
+  setVisible(recordContacts, isCompany);
+  setVisible(recordCompanies, isCompany);
+
+  if (HS_STATE.connected) {
+    if (recordStatus) recordStatus.textContent = "Connected to HubSpot ✔";
+
+    if (objectType === "contact") {
+      if (recordHelp) recordHelp.textContent = "Dial this contact directly.";
+      if (recordAction) {
+        recordAction.disabled = false;
+        recordAction.textContent = "Dial This Contact";
+        recordAction.dataset.mode = "launch";
+      }
+    } else if (objectType === "company") {
+      if (recordHelp) recordHelp.textContent = "Dial contacts or this company directly.";
+      if (recordContacts) {
+        recordContacts.disabled = false;
+        recordContacts.textContent = "Dial Contacts at This Company";
+        recordContacts.dataset.mode = "launch";
+      }
+      if (recordCompanies) {
+        recordCompanies.disabled = false;
+        recordCompanies.textContent = "Dial This Company";
+        recordCompanies.dataset.mode = "launch";
+      }
+    } else if (objectType === "deal") {
+      if (recordHelp) recordHelp.textContent = "Dial contacts on this deal.";
+      if (recordAction) {
+        recordAction.disabled = false;
+        recordAction.textContent = "Dial Contacts on This Deal";
+        recordAction.dataset.mode = "launch";
+      }
+    }
+  } else {
+    if (recordStatus) recordStatus.textContent = "Not connected to HubSpot";
+    if (recordHelp) recordHelp.textContent = "Connect HubSpot to dial from this record.";
+
+    if (recordAction) {
+      recordAction.disabled = false;
+      recordAction.textContent = "Connect HubSpot";
+      recordAction.dataset.mode = "connect";
+    }
+    if (recordContacts) {
+      recordContacts.disabled = false;
+      recordContacts.textContent = "Connect HubSpot";
+      recordContacts.dataset.mode = "connect";
+    }
+    if (recordCompanies) {
+      recordCompanies.disabled = false;
+      recordCompanies.textContent = "Connect HubSpot";
+      recordCompanies.dataset.mode = "connect";
+    }
   }
 }
 
 async function startHubSpotOAuth() {
+  // Update status on whichever card is visible
   const dialStatus = $("hs-dial-status");
-  const dialAction = $("hs-dial-action");
-
+  const recordStatus = $("hs-record-status");
   if (dialStatus) dialStatus.textContent = "Starting HubSpot connection…";
-  if (dialAction) dialAction.disabled = true;
+  if (recordStatus) recordStatus.textContent = "Starting HubSpot connection…";
 
   const resp = await hsPost("crm/hubspot/oauth_hs_start.php");
   const authUrl = resp?.auth_url;
 
   if (!authUrl) {
-    if (dialStatus)
-      dialStatus.textContent =
-        "Could not start HubSpot OAuth (missing auth_url).";
-    if (dialAction) dialAction.disabled = false;
+    if (dialStatus) dialStatus.textContent = "Could not start HubSpot OAuth.";
+    if (recordStatus) recordStatus.textContent = "Could not start HubSpot OAuth.";
     await showAlert("Server did not return auth_url. Check server logs.");
     return;
   }
@@ -478,13 +522,18 @@ async function launchHubSpotDialSession(callTarget = null) {
 
   // Disable all buttons during request
   allButtons.forEach(btn => { if (btn) btn.disabled = true; });
-  if (dialStatus) dialStatus.textContent = "Preparing dial session…";
+  if (dialStatus) {
+    dialStatus.textContent = "Building dial session from selected records…";
+    dialStatus.classList.add("loading");
+  }
 
   // Build message with optional call_target
   const message = { type: "HS_LAUNCH_FROM_SELECTED" };
   if (callTarget) message.call_target = callTarget;
 
   const resp = await sendToBackground(message);
+
+  if (dialStatus) dialStatus.classList.remove("loading");
 
   if (!resp || !resp.ok) {
     const errorMsg = getErrorMessage(resp, "Could not launch from selection.");
@@ -508,6 +557,63 @@ async function launchHubSpotDialSessionCompanies() {
 }
 
 // ---------------------------
+// HubSpot Record-based Dial Session (single record pages)
+// ---------------------------
+
+async function launchHubSpotRecordDial(callTarget = null) {
+  const recordStatus = $("hs-record-status");
+  const allButtons = [
+    $("hs-record-action"),
+    $("hs-record-contacts"),
+    $("hs-record-companies")
+  ];
+
+  // Best-effort permission request
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult.timeout) {
+      console.warn("Permission request timed out, continuing anyway");
+      if (recordStatus) {
+        recordStatus.textContent = "Permission timeout - extension may not persist after navigation";
+      }
+    } else if (!permResult.ok) {
+      console.warn("Permission request failed:", permResult.error);
+    }
+  } catch (err) {
+    console.error("Permission request crashed:", err);
+  }
+
+  allButtons.forEach(btn => { if (btn) btn.disabled = true; });
+  if (recordStatus) {
+    recordStatus.textContent = "Building dial session…";
+    recordStatus.classList.add("loading");
+  }
+
+  const message = {
+    type: "HS_LAUNCH_FROM_RECORD",
+    recordId: ACTIVE_CTX?.recordId,
+    objectType: ACTIVE_CTX?.objectType || "contact",
+    portalId: ACTIVE_CTX?.portalId || HS_STATE.portalId,
+  };
+  if (callTarget) message.call_target = callTarget;
+
+  const resp = await sendToBackground(message);
+
+  if (recordStatus) recordStatus.classList.remove("loading");
+
+  if (!resp || !resp.ok) {
+    const errorMsg = getErrorMessage(resp, "Could not launch from record.");
+    if (recordStatus) recordStatus.textContent = errorMsg;
+    allButtons.forEach(btn => { if (btn) btn.disabled = false; });
+    await showAlert(errorMsg);
+    return;
+  }
+
+  if (recordStatus) recordStatus.textContent = "Dial session created ✔";
+  window.close();
+}
+
+// ---------------------------
 // HubSpot List-based Dial Session
 // ---------------------------
 
@@ -515,12 +621,12 @@ async function launchHubSpotDialSessionCompanies() {
 let _hsListsCache = [];
 
 async function fetchHubSpotLists() {
-  const listSection = $("hs-list-section");
+  const listCard = $("hs-list-card");
   const listSelect = $("hs-list-select");
   const listInfo = $("hs-list-info");
   const listBtn = $("hs-dial-from-list");
 
-  if (!listSection || !listSelect) return;
+  if (!listCard || !listSelect) return;
 
   // Reset
   listSelect.innerHTML = '<option value="">Loading lists…</option>';
@@ -531,9 +637,8 @@ async function fetchHubSpotLists() {
   const resp = await sendToBackground({ type: "HS_FETCH_LISTS" });
 
   if (!resp || !resp.ok || !Array.isArray(resp.lists)) {
-    // Silently hide the list section if endpoint not available (backward compatibility)
-    // This handles old servers that don't have hs_lists.php yet
-    setVisible(listSection, false);
+    // Silently hide the list card if endpoint not available (backward compatibility)
+    setVisible(listCard, false);
     return;
   }
 
@@ -619,7 +724,7 @@ async function launchDialSessionFromList() {
   const listSelect = $("hs-list-select");
   const listBtn = $("hs-dial-from-list");
   const listInfo = $("hs-list-info");
-  const dialStatus = $("hs-dial-status");
+  const listStatus = $("hs-list-status");
 
   if (!listSelect || !listSelect.value) {
     await showAlert("Please select a list first.");
@@ -640,27 +745,52 @@ async function launchDialSessionFromList() {
     console.error("Permission request crashed:", err);
   }
 
+  // Build contextual loading message
+  const size = parseInt(selectedOpt?.dataset?.size || "0", 10);
+  const typeLabel = objectType === "companies" ? "companies" : "contacts";
+  let loadingMsg = "Building dial session";
+  if (size > 0) {
+    loadingMsg += ` from ${Math.min(size, 500)} ${typeLabel}`;
+  }
+  loadingMsg += "…";
+  if (size > 50) {
+    loadingMsg += " This may take a moment.";
+  }
+
   // Disable controls during request
-  if (listBtn) listBtn.disabled = true;
+  if (listBtn) {
+    listBtn.disabled = true;
+    listBtn.textContent = "Building Session…";
+  }
   if (listSelect) listSelect.disabled = true;
-  if (dialStatus) dialStatus.textContent = "Creating dial session from list…";
+  if (listStatus) {
+    listStatus.textContent = loadingMsg;
+    listStatus.classList.add("loading");
+  }
 
   const resp = await sendToBackground({
     type: "HS_LAUNCH_FROM_LIST",
     list_id: listId,
     object_type: objectType,
+    portal_id: ACTIVE_CTX?.portalId || HS_STATE.portalId,
   });
+
+  // Remove loading animation
+  if (listStatus) listStatus.classList.remove("loading");
 
   if (!resp || !resp.ok) {
     const errorMsg = getErrorMessage(resp, "Could not launch from list.");
-    if (dialStatus) dialStatus.textContent = errorMsg;
-    if (listBtn) listBtn.disabled = false;
+    if (listStatus) listStatus.textContent = errorMsg;
+    if (listBtn) {
+      listBtn.disabled = false;
+      listBtn.textContent = "Launch Dial Session from List";
+    }
     if (listSelect) listSelect.disabled = false;
     await showAlert(errorMsg);
     return;
   }
 
-  if (dialStatus) dialStatus.textContent = "Dial session created ✔";
+  if (listStatus) listStatus.textContent = "Dial session created ✔";
   window.close();
 }
 
@@ -685,7 +815,9 @@ async function disconnectHubSpot() {
     return;
   }
 
-  await refreshHubSpotUi();
+  HS_STATE.connected = false;
+  HS_STATE.portalId = null;
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
   activateTab("dial");
 }
 
@@ -711,8 +843,12 @@ function applyPatUi(isConnected) {
 
 async function refreshState() {
   const resp = await sendToBackground({ type: "GET_STATE" });
-  if (!resp || resp.ok !== true) return applyPatUi(false);
-  applyPatUi(!!resp?.phoneburner?.connected);
+  if (!resp || resp.ok !== true) {
+    PB_CONNECTED = false;
+    return applyPatUi(false);
+  }
+  PB_CONNECTED = !!resp?.phoneburner?.connected;
+  applyPatUi(PB_CONNECTED);
 }
 
 async function savePAT() {
@@ -769,35 +905,60 @@ async function scanAndLaunch() {
     return;
   }
 
+  const btn = $("scan-launch");
+  const statusEl = $("scan-status");
+  const originalText = btn ? btn.textContent : "";
+
+  // Show loading state
+  if (btn) { btn.disabled = true; btn.textContent = "Scanning…"; }
+  if (statusEl) {
+    statusEl.textContent = "Scanning page for contacts…";
+    statusEl.classList.add("loading");
+  }
+
   // Best-effort permission request (only at user click)
   try {
     const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
     if (permResult.timeout) {
       console.warn("Permission request timed out, continuing anyway");
-      // Show warning but continue
       const continueAnyway = await showConfirm(
         "Permission request timed out. Continue anyway?\n\n" +
         "Note: Extension may not persist after page navigation.\n" +
         "Press ESC if a permission dialog is stuck.",
         "Permission Timeout"
       );
-      if (!continueAnyway) return;
+      if (!continueAnyway) {
+        if (btn) { btn.disabled = false; btn.textContent = originalText; }
+        if (statusEl) { statusEl.textContent = ""; statusEl.classList.remove("loading"); }
+        return;
+      }
     } else if (!permResult.ok) {
       console.warn("Permission request failed:", permResult.error);
-      // Continue anyway - extension will work
     }
   } catch (err) {
     console.error("Permission request crashed:", err);
-    // Recover gracefully - continue with scan
   }
+
+  if (statusEl) statusEl.textContent = "Building dial session…";
 
   const resp = await sendToBackground({
     type: "SCAN_AND_LAUNCH",
     tabId: tab.id,
   });
+
   if (!resp || !resp.ok) {
+    if (statusEl) statusEl.classList.remove("loading");
     const errorMsg = getErrorMessage(resp, "Could not scan this page.");
+    if (statusEl) statusEl.textContent = "";
+    if (btn) { btn.disabled = false; btn.textContent = originalText; }
     await showAlert(errorMsg);
+  } else {
+    // The scan response returns before the dial session window opens
+    // (content script fires SCANNED_CONTACTS asynchronously), so show
+    // brief feedback then auto-close to give the window time to open.
+    if (statusEl) statusEl.textContent = "Launching dial session…";
+    if (btn) btn.textContent = "Launching…";
+    setTimeout(() => window.close(), 2000);
   }
 }
 
@@ -825,7 +986,7 @@ function activateTab(tabName) {
 // Init
 // ---------------------------
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   $("save-pat")?.addEventListener("click", savePAT);
   $("disconnect-pat")?.addEventListener("click", disconnectPAT);
 
@@ -841,14 +1002,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // Scan
   $("scan-launch")?.addEventListener("click", scanAndLaunch);
 
-  // HubSpot
+  // HubSpot selection buttons (list pages)
   $("hs-dial-action")?.addEventListener("click", async () => {
     const mode = $("hs-dial-action")?.dataset?.mode;
     if (mode === "launch") return launchHubSpotDialSession();
     return startHubSpotOAuth();
   });
 
-  // HubSpot company buttons
   $("hs-dial-contacts")?.addEventListener("click", async () => {
     if ($("hs-dial-contacts")?.dataset?.mode === "connect") return startHubSpotOAuth();
     return launchHubSpotDialSessionContacts();
@@ -857,6 +1017,22 @@ document.addEventListener("DOMContentLoaded", () => {
   $("hs-dial-companies")?.addEventListener("click", async () => {
     if ($("hs-dial-companies")?.dataset?.mode === "connect") return startHubSpotOAuth();
     return launchHubSpotDialSessionCompanies();
+  });
+
+  // HubSpot record buttons (record pages)
+  $("hs-record-action")?.addEventListener("click", async () => {
+    if ($("hs-record-action")?.dataset?.mode === "connect") return startHubSpotOAuth();
+    return launchHubSpotRecordDial();
+  });
+
+  $("hs-record-contacts")?.addEventListener("click", async () => {
+    if ($("hs-record-contacts")?.dataset?.mode === "connect") return startHubSpotOAuth();
+    return launchHubSpotRecordDial("contacts");
+  });
+
+  $("hs-record-companies")?.addEventListener("click", async () => {
+    if ($("hs-record-companies")?.dataset?.mode === "connect") return startHubSpotOAuth();
+    return launchHubSpotRecordDial("companies");
   });
 
   // HubSpot list-based dial
@@ -869,21 +1045,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("tab-dial")?.addEventListener("click", () => activateTab("dial"));
   $("tab-settings")?.addEventListener("click", () => activateTab("settings"));
 
-  // CRM context (no injection required; background can infer from URL)
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const activeTab = tabs?.[0];
-    if (!activeTab) return setCrmHeader(null);
-
-    chrome.runtime.sendMessage(
-      { type: "GET_CONTEXT", tabId: activeTab.id },
-      async (resp) => {
-        const ctx = resp?.context || null;
-        setCrmHeader(ctx);
-        if (isHubSpotL3(ctx)) await refreshHubSpotUi();
-      },
-    );
-  });
-
   // Version indicator
   const versionEl = $("ext-version");
   if (versionEl) {
@@ -891,5 +1052,21 @@ document.addEventListener("DOMContentLoaded", () => {
     versionEl.textContent = `v${manifest.version}`;
   }
 
-  refreshState();
+  // 1. Get CRM context from background (includes pageType, recordId, portalId)
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (activeTab) {
+    const resp = await sendToBackground({ type: "GET_CONTEXT", tabId: activeTab.id });
+    setCrmHeader(resp?.context || null);
+  } else {
+    setCrmHeader(null);
+  }
+
+  // 2. Check PB connection
+  await refreshState();
+
+  // 3. Check HS connection (always, even on non-HS pages — needed for list card)
+  await checkHubSpotConnectionState();
+
+  // 4. Apply context-aware visibility
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
 });
