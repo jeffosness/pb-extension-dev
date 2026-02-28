@@ -26,6 +26,7 @@ require_once __DIR__ . '/hs_helpers.php';
 // -----------------------------------------------------------------------------
 $data      = json_input();
 $client_id = get_client_id_or_fail($data);
+rate_limit_or_fail($client_id, 30);
 $member_user_id = resolve_member_user_id_for_client($client_id);
 
 $pat = load_pb_token($client_id);
@@ -51,7 +52,13 @@ if ($hsAccess === '') {
 $hubId = (string)($hs['hub_id'] ?? '');
 
 $mode       = (string)($data['mode'] ?? 'contacts');
-$callTarget = $data['call_target'] ?? null; // NEW: For company dual-mode
+if (!in_array($mode, ['contacts', 'companies', 'deals'], true)) {
+  api_error('Invalid mode', 'bad_request', 400);
+}
+$callTarget = $data['call_target'] ?? null;
+if ($callTarget !== null && !in_array($callTarget, ['contacts', 'companies'], true)) {
+  api_error('Invalid call_target', 'bad_request', 400);
+}
 $records    = $data['records'] ?? [];
 $context    = $data['context'] ?? [];
 

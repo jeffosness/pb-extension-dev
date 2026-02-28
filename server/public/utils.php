@@ -141,15 +141,15 @@ function safe_file_path(string $baseDir, string $relativePath): ?string {
     // Construct and canonicalize the full path
     $full = @realpath($base . DIRECTORY_SEPARATOR . $relativePath);
     if ($full === false) {
-        // File might not exist yet; try without realpath
-        $full = $base . DIRECTORY_SEPARATOR . $relativePath;
-        $full = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $full);
-        
-        // Verify it doesn't escape the base after simple normalization
-        $full = realpath(dirname($full)) . DIRECTORY_SEPARATOR . basename($full);
-        if ($full === false) {
-            return null;
+        // File might not exist yet; resolve the parent directory instead
+        $candidate = $base . DIRECTORY_SEPARATOR . $relativePath;
+        $candidate = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $candidate);
+
+        $parentDir = @realpath(dirname($candidate));
+        if ($parentDir === false) {
+            return null;  // Parent directory doesn't exist
         }
+        $full = $parentDir . DIRECTORY_SEPARATOR . basename($candidate);
     }
     
     // Verify the resolved path is within base directory
@@ -372,7 +372,10 @@ function resolve_member_user_id_for_client($client_id)
 function save_user_settings($memberUserId, array $settings)
 {
     $path = user_settings_file_path($memberUserId);
-    file_put_contents($path, json_encode($settings, JSON_PRETTY_PRINT));
+    $result = file_put_contents($path, json_encode($settings, JSON_PRETTY_PRINT), LOCK_EX);
+    if ($result === false) {
+        log_msg("save_user_settings: failed to write $path");
+    }
 }
 
 
@@ -475,9 +478,9 @@ function save_session_state($session_token, array $state)
 {
     $path = session_file_path($session_token);
     if (!is_dir(dirname($path))) {
-        mkdir(dirname($path), 0777, true);
+        mkdir(dirname($path), 0700, true);
     }
-    file_put_contents($path, json_encode($state));
+    atomic_write_json($path, $state);
 }
 
 function load_session_state($session_token)
@@ -506,6 +509,8 @@ function http_post_form($url, array $fields)
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($fields));
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
 
     $resp = curl_exec($ch);
     $err  = curl_error($ch);
@@ -544,6 +549,8 @@ function pb_api_call($pat, $method, $path, $body = null)
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
     curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
 
     if (!is_null($body)) {
         $payload = json_encode($body);

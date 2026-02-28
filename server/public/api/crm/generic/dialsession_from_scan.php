@@ -19,6 +19,7 @@ require_once __DIR__ . '/../../../utils.php';
 // -------------------------
 $data      = json_input();
 $client_id = get_client_id_or_fail($data);
+rate_limit_or_fail($client_id, 30);
 $member_user_id = resolve_member_user_id_for_client($client_id);
 
 $pat = load_pb_token($client_id);
