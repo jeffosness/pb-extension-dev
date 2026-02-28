@@ -64,14 +64,38 @@ function detectCrmFromUrl(tabUrl) {
       level: 1,
     };
 
-  if (host.includes("app.hubspot.com")) {
-    // Detect object type from HubSpot URL pattern: /objects/0-X/
-    let objectType = "contact"; // default
-    if (path.includes("/objects/0-1/")) objectType = "contact";
-    else if (path.includes("/objects/0-2/")) objectType = "company";
-    else if (path.includes("/objects/0-3/")) objectType = "deal";
+  if (host.includes("hubspot.com")) {
+    // Extract portalId from /contacts/{portalId}/
+    let portalId = null;
+    const portalMatch = path.match(/\/contacts\/(\d+)\//);
+    if (portalMatch) portalId = portalMatch[1];
 
-    return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType };
+    // Detect page type and object context from URL
+    let pageType = "other";
+    let objectType = null;
+    let recordId = null;
+
+    // Record pages: /record/0-X/{recordId}
+    const recordMatch = path.match(/\/record\/(0-[0-9]+)\/(\d+)/);
+    if (recordMatch) {
+      pageType = "record";
+      recordId = recordMatch[2];
+      const typeId = recordMatch[1];
+      if (typeId === "0-1") objectType = "contact";
+      else if (typeId === "0-2") objectType = "company";
+      else if (typeId === "0-3") objectType = "deal";
+    }
+    // List pages: /objects/0-X/
+    else if (path.match(/\/objects\/(0-[0-9]+)\//)) {
+      pageType = "list";
+      const listMatch = path.match(/\/objects\/(0-[0-9]+)\//);
+      const typeId = listMatch[1];
+      if (typeId === "0-1") objectType = "contact";
+      else if (typeId === "0-2") objectType = "company";
+      else if (typeId === "0-3") objectType = "deal";
+    }
+
+    return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType, pageType, recordId, portalId };
   }
   if (host.includes("pipedrive.com"))
     return { host, path, crmId: "pipedrive", crmName: "Pipedrive", level: 2 };
@@ -215,11 +239,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           Object.prototype.hasOwnProperty.call(tabContexts, tabId) &&
           tabContexts[tabId]
         ) {
-          // Merge: prefer cached context but always use objectType from URL
+          // Merge: prefer cached context but always use URL-detected fields
           return sendResponse({
             context: {
               ...tabContexts[tabId],
-              objectType: urlContext.objectType  // Always use URL-detected objectType
+              objectType: urlContext.objectType,  // Always use URL-detected objectType
+              pageType: urlContext.pageType,
+              recordId: urlContext.recordId,
+              portalId: urlContext.portalId || tabContexts[tabId].portalId,
             }
           });
         }
@@ -325,7 +352,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           currentWindow: true,
         });
         const hubTab = (tabs || []).find((t) =>
-          (t.url || "").includes("app.hubspot.com"),
+          (t.url || "").includes("hubspot.com"),
         );
         if (!hubTab || !hubTab.id) {
           return sendResponse({
@@ -432,6 +459,84 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       // -------------------------
+      // HubSpot L3: launch from single record
+      // -------------------------
+      if (msg.type === "HS_LAUNCH_FROM_RECORD") {
+        const recordId = msg.recordId;
+        const objectType = msg.objectType || "contact";
+        const portalId = msg.portalId || null;
+        const callTarget = msg.call_target || null;
+
+        if (!recordId) {
+          return sendResponse({ ok: false, error: "No record ID available." });
+        }
+
+        let mode = "contacts";
+        if (objectType === "deal") mode = "deals";
+        if (objectType === "company") mode = "companies";
+
+        // Track usage (best effort)
+        try {
+          await api("core/track_crm_usage.php", {
+            crm_id: "hubspot",
+            host: "app.hubspot.com",
+            level: 3,
+            portal_id: portalId,
+            object_type: objectType,
+            launch_source: "record",
+          });
+        } catch (e) {}
+
+        const resp = await api("crm/hubspot/pb_dialsession_selection.php", {
+          mode,
+          call_target: callTarget,
+          records: [{ id: String(recordId) }],
+          context: {
+            objectType,
+            portalId,
+            selectedCount: 1,
+          },
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session.",
+            details: resp,
+          });
+        }
+
+        // Register follow on current tab (already on the record page)
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const followTabId = tabs?.[0]?.id || null;
+        if (followTabId) {
+          await registerSessionForTab(followTabId, sessionToken, BASE_URL);
+        }
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
       // HubSpot L3: fetch available lists
       // -------------------------
       if (msg.type === "HS_FETCH_LISTS") {
@@ -467,11 +572,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           currentWindow: true,
         });
         const hubTab = (tabs || []).find((t) =>
-          (t.url || "").includes("app.hubspot.com"),
+          (t.url || "").includes("hubspot.com"),
         );
 
-        // Extract portal_id from URL if on a HubSpot tab
-        let portalId = null;
+        // Extract portal_id from URL if on a HubSpot tab, fallback to message
+        let portalId = msg.portal_id || null;
         if (hubTab?.url) {
           const portalMatch = hubTab.url.match(/\/contacts\/(\d+)\//);
           if (portalMatch) portalId = portalMatch[1];
@@ -514,8 +619,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
         }
 
-        // Register follow session on the HubSpot tab if available
-        const followTabId = hubTab?.id || null;
+        // Register follow session — prefer HubSpot tab, fallback to any active tab
+        // (on non-HS pages, the first SSE navigation will take them to HubSpot)
+        const followTabId = hubTab?.id || tabs?.[0]?.id || null;
         if (followTabId) {
           await registerSessionForTab(followTabId, sessionToken, BASE_URL);
         }

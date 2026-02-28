@@ -10,7 +10,7 @@ const CRM_REGISTRY = [
     id: "hubspot",
     displayName: "HubSpot",
     level: 3,
-    match: (host) => host.includes("app.hubspot.com"),
+    match: (host) => host.includes("hubspot.com"),
   },
   {
     id: "salesforce",
