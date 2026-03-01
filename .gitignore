@@ -28,12 +28,21 @@ dist/
 server/public/config.php
 
 # Runtime state (Apache writes here) - NEVER COMMIT
-server/public/tokens/
-server/public/sessions/
-server/public/daily_stats/
-server/public/user_settings/
-server/public/metrics/
-server/public/metrics/*.log
+# Use /* pattern so .htaccess protection files can be tracked
+server/public/tokens/*
+server/public/sessions/*
+server/public/daily_stats/*
+server/public/user_settings/*
+server/public/metrics/*
+server/public/cache/*
+
+# Track .htaccess files that block HTTP access to sensitive dirs
+!server/public/tokens/.htaccess
+!server/public/sessions/.htaccess
+!server/public/daily_stats/.htaccess
+!server/public/user_settings/.htaccess
+!server/public/metrics/.htaccess
+!server/public/cache/.htaccess
 
 # Server-only logs outside webroot
 var/log/
