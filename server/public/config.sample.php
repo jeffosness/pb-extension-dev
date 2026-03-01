@@ -24,6 +24,10 @@ return [
     // Simple logging toggle
     'LOG_FILE' => '/opt/pb-extension-dev/var/log/app.log',
 
+    // Set to true to enable debug endpoints (scan_debug.php, _debug_get.php)
+    // Leave false or omit in production
+    'DEBUG_MODE' => false,
+
         // HubSpot OAuth credentials (fill these with your real app values)
   'HS_CLIENT_ID' => 'Client_ID',
   'HS_CLIENT_SECRET' => 'Client_Secret',

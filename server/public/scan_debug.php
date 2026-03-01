@@ -3,6 +3,12 @@
 
 require __DIR__ . '/utils.php';
 
+$cfg = cfg();
+if (empty($cfg['DEBUG_MODE'])) {
+    http_response_code(404);
+    exit;
+}
+
 // --- CORS headers so content scripts on docs.google.com (and others) can POST here ---
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
