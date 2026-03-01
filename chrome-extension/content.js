@@ -918,7 +918,7 @@ function isSameCrmRecord(currentUrl, targetUrl) {
 //  📡 SSE FOLLOW-ME HANDLING
 // ============================================================================
 
-function startFollowingSession(sessionToken) {
+function startFollowingSession(sessionToken, tempCode) {
   if (!sessionToken) return;
 
   currentSessionToken = sessionToken;
@@ -937,11 +937,12 @@ function startFollowingSession(sessionToken) {
   overlaySetMinimized(false, false);
   overlayScheduleAutoCollapse("session_start");
 
-  openSseConnection(sessionToken);
+  // Use temp code for initial connection; fall back to raw token if unavailable
+  openSseConnection(tempCode || sessionToken);
 }
 
-function openSseConnection(sessionToken) {
-  const url = `${BASE_URL}/sse.php?s=${encodeURIComponent(sessionToken)}`;
+function openSseConnection(code) {
+  const url = `${BASE_URL}/sse.php?code=${encodeURIComponent(code)}`;
   const es = new EventSource(url);
   sse = es;
 
@@ -956,25 +957,71 @@ function openSseConnection(sessionToken) {
 
   es.onerror = (err) => {
     console.error("SSE error", err);
-
-    try {
-      es.close();
-    } catch (e) {}
-
+    try { es.close(); } catch (e) {}
     if (sse === es) sse = null;
-
-    if (!currentSessionToken || currentSessionToken !== sessionToken) return;
+    if (!currentSessionToken) return;
 
     if (!sseReconnectTimer) {
-      sseReconnectTimer = setTimeout(() => {
+      sseReconnectTimer = setTimeout(async () => {
         sseReconnectTimer = null;
-        if (currentSessionToken === sessionToken)
-          openSseConnection(sessionToken);
+        if (!currentSessionToken) return;
+
+        try {
+          const resp = await chrome.runtime.sendMessage({
+            type: "REFRESH_SSE_CODE",
+            sessionToken: currentSessionToken,
+          });
+          if (resp?.ok && resp?.temp_code) {
+            openSseConnection(resp.temp_code);
+          } else {
+            console.error("Failed to refresh SSE code:", resp?.error);
+            // Fallback: retry with deprecated ?s= as last resort
+            if (currentSessionToken) {
+              sseReconnectTimer = setTimeout(() => {
+                sseReconnectTimer = null;
+                if (currentSessionToken) {
+                  openSseFallback(currentSessionToken);
+                }
+              }, 10000);
+            }
+          }
+        } catch (e) {
+          console.error("SSE reconnect error:", e);
+          // Fallback to deprecated ?s= if message passing failed
+          if (currentSessionToken) {
+            sseReconnectTimer = setTimeout(() => {
+              sseReconnectTimer = null;
+              if (currentSessionToken) {
+                openSseFallback(currentSessionToken);
+              }
+            }, 10000);
+          }
+        }
       }, 5000);
     }
   };
+}
 
-  console.log("SSE opened for session", sessionToken);
+function openSseFallback(sessionToken) {
+  const url = `${BASE_URL}/sse.php?s=${encodeURIComponent(sessionToken)}`;
+  const es = new EventSource(url);
+  sse = es;
+
+  es.addEventListener("update", (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      handleSessionUpdate(data);
+    } catch (e) {
+      console.error("Invalid SSE data", e);
+    }
+  });
+
+  es.onerror = (err) => {
+    console.error("SSE fallback error", err);
+    try { es.close(); } catch (e) {}
+    if (sse === es) sse = null;
+    // Don't auto-retry fallback — next page reload will use temp codes again
+  };
 }
 
 function stopFollowingSession() {
@@ -1900,9 +1947,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- Follow session start/stop ---
   if (msg?.type === "START_FOLLOW_SESSION") {
-    const { sessionToken } = msg || {};
+    const { sessionToken, tempCode } = msg || {};
     if (isTopWindow) {
-      startFollowingSession(sessionToken);
+      startFollowingSession(sessionToken, tempCode);
       sendResponse({ ok: true });
       return true;
     }

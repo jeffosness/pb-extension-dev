@@ -10,6 +10,15 @@ require_once __DIR__ . '/api/core/bootstrap.php';
 require_once __DIR__ . '/utils.php';
 
 // -------------------------
+// SSE headers (set BEFORE any output or early exit so CORS always works)
+// -------------------------
+header('Access-Control-Allow-Origin: *');
+header('Content-Type: text/event-stream; charset=utf-8');
+header('Cache-Control: no-cache');
+header('Connection: keep-alive');
+header('X-Accel-Buffering: no');
+
+// -------------------------
 // Read session token (via temporary code or direct token)
 // -------------------------
 // For security, session tokens should be passed via temporary codes (?code=CODE)
@@ -30,22 +39,23 @@ if ($code) {
 }
 
 // Fallback: direct token (deprecated, for backward compatibility)
+$sse_auth_method = 'temp_code';
 if (!$session_token) {
     $session_token =
       $_GET['s']
       ?? $_GET['session']
       ?? $_GET['sessionToken']
       ?? '';
+    $sse_auth_method = 'legacy_token';
 }
 
-// -------------------------
-// SSE headers
-// -------------------------
-header('Access-Control-Allow-Origin: *');
-header('Content-Type: text/event-stream; charset=utf-8');
-header('Cache-Control: no-cache');
-header('Connection: keep-alive');
-header('X-Accel-Buffering: no');
+// Log which connection method was used (for Phase 3 go/no-go decision)
+if ($session_token) {
+    api_log('sse.connect', [
+        'method'       => $sse_auth_method,
+        'session_hash' => substr(hash('sha256', $session_token), 0, 12),
+    ]);
+}
 
 @ini_set('output_buffering', 'off');
 @ini_set('zlib.output_compression', '0');

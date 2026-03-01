@@ -860,6 +860,14 @@ async function savePAT() {
     await showAlert("Please paste your PAT first.");
     return;
   }
+  if (pat.length < 20) {
+    await showAlert("That doesn't look like a valid PAT. Please check and try again.");
+    return;
+  }
+  if (/\s/.test(pat)) {
+    await showAlert("PAT should not contain spaces. Please check for extra whitespace.");
+    return;
+  }
   if (btn) btn.disabled = true;
 
   const resp = await sendToBackground({ type: "SAVE_PAT", pat });

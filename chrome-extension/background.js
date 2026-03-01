@@ -138,7 +138,7 @@ async function ensureContentScript(tabId) {
 }
 
 // Register session + tell content script to follow
-async function registerSessionForTab(tabId, sessionToken, backendBase) {
+async function registerSessionForTab(tabId, sessionToken, tempCode, backendBase) {
   if (!tabId || !sessionToken) return;
 
   currentSession = {
@@ -156,6 +156,7 @@ async function registerSessionForTab(tabId, sessionToken, backendBase) {
       {
         type: "START_FOLLOW_SESSION",
         sessionToken,
+        tempCode,
         backendBase: currentSession.backendBase,
       },
       { frameId: 0 },
@@ -430,6 +431,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         const sessionToken =
           resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
         const dialUrl =
           resp.launch_url ||
           resp.dialsession_url ||
@@ -445,7 +448,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
         }
 
-        await registerSessionForTab(hubTab.id, sessionToken, BASE_URL);
+        await registerSessionForTab(hubTab.id, sessionToken, tempCode, BASE_URL);
 
         chrome.windows.create({
           url: dialUrl,
@@ -500,6 +503,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         const sessionToken =
           resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
         const dialUrl =
           resp.launch_url ||
           resp.dialsession_url ||
@@ -522,7 +527,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         const followTabId = tabs?.[0]?.id || null;
         if (followTabId) {
-          await registerSessionForTab(followTabId, sessionToken, BASE_URL);
+          await registerSessionForTab(followTabId, sessionToken, tempCode, BASE_URL);
         }
 
         chrome.windows.create({
@@ -604,6 +609,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         const sessionToken =
           resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
         const dialUrl =
           resp.launch_url ||
           resp.dialsession_url ||
@@ -623,7 +630,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // (on non-HS pages, the first SSE navigation will take them to HubSpot)
         const followTabId = hubTab?.id || tabs?.[0]?.id || null;
         if (followTabId) {
-          await registerSessionForTab(followTabId, sessionToken, BASE_URL);
+          await registerSessionForTab(followTabId, sessionToken, tempCode, BASE_URL);
         }
 
         chrome.windows.create({
@@ -679,12 +686,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
 
         const sessionToken = resp.session_token || null;
+        const tempCode = resp.temp_code || null;
         const dialUrl = resp.launch_url || resp.dialsession_url || null;
 
         if (sessionToken && dialUrl) {
           const tabId =
             sender.tab && sender.tab.id != null ? sender.tab.id : null;
-          await registerSessionForTab(tabId, sessionToken, BASE_URL);
+          await registerSessionForTab(tabId, sessionToken, tempCode, BASE_URL);
 
           chrome.windows.create({
             url: dialUrl,
@@ -724,6 +732,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
         }
         return sendResponse({ ok: true, sessionToken: null });
+      }
+
+      if (msg.type === "REFRESH_SSE_CODE") {
+        const { sessionToken } = msg;
+        try {
+          const resp = await api("core/refresh_sse_code.php", {
+            session_token: sessionToken,
+          });
+          return sendResponse({
+            ok: !!resp?.ok,
+            temp_code: resp?.temp_code || null,
+          });
+        } catch (e) {
+          console.error("REFRESH_SSE_CODE failed:", e);
+          return sendResponse({ ok: false, error: e.message });
+        }
       }
 
       if (msg.type === "STOP_FOLLOW_SESSION") {
