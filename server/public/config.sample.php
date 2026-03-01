@@ -1,5 +1,10 @@
 <?php
 // generic_crm/config.php
+//
+// On the production server, this file is locked with: sudo chattr +i config.php
+// To edit:  sudo chattr -i config.php   (unlock)
+// After:    sudo chattr +i config.php   (re-lock)
+// To check: lsattr config.php           (look for 'i' flag)
 
 return [
     // Base URL for THIS project. When you move this later,

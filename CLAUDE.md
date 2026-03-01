@@ -1454,6 +1454,33 @@ sudo chmod 0600 /opt/pb-extension-dev/public/config.php
 #   - cache/ directory
 ```
 
+### Server Config File Management
+
+**`config.php` is protected from accidental edits** on the production server using Linux's immutable file attribute (`chattr +i`). This prevents anyone — including root — from modifying or deleting the file until the flag is removed.
+
+**To edit `config.php` on the server:**
+
+```bash
+# 1. Unlock the file (remove immutable flag)
+sudo chattr -i /opt/pb-extension-dev/server/public/config.php
+
+# 2. Edit the file
+sudo nano /opt/pb-extension-dev/server/public/config.php
+
+# 3. Lock it again (restore immutable flag)
+sudo chattr +i /opt/pb-extension-dev/server/public/config.php
+```
+
+**To check if the file is locked:**
+
+```bash
+lsattr /opt/pb-extension-dev/server/public/config.php
+# If locked, you'll see 'i' in the attribute list (e.g., ----i-----------)
+# If unlocked, dashes only (e.g., -------------------)
+```
+
+**DEBUG_MODE:** To enable debug endpoints (`scan_debug.php`, `scan_debug_view.php`, `_debug_get.php`), unlock config.php, set `'DEBUG_MODE' => true`, then lock it again when done. These endpoints return 404 when DEBUG_MODE is false or absent.
+
 ### Configuration (config.php)
 
 ```php
@@ -1470,6 +1497,9 @@ return [
   'HS_CLIENT_ID' => env('HS_CLIENT_ID'),
   'HS_CLIENT_SECRET' => env('HS_CLIENT_SECRET'),
   'HS_SCOPES' => 'crm.objects.contacts.read crm.lists.read crm.objects.deals.read crm.objects.companies.read',
+
+  // Debug (set to true only when needed, then revert)
+  'DEBUG_MODE' => false,
 
   // CORS (production)
   'PB_CORS_ORIGINS' => [
