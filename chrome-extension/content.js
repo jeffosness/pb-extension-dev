@@ -982,7 +982,7 @@ function openSseConnection(code) {
                 if (currentSessionToken) {
                   openSseFallback(currentSessionToken);
                 }
-              }, 10000);
+              }, 3000);
             }
           }
         } catch (e) {
@@ -994,10 +994,10 @@ function openSseConnection(code) {
               if (currentSessionToken) {
                 openSseFallback(currentSessionToken);
               }
-            }, 10000);
+            }, 3000);
           }
         }
-      }, 5000);
+      }, 2000);
     }
   };
 }
