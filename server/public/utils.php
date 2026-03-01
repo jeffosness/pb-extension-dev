@@ -81,7 +81,7 @@ function get_client_id_or_fail($from = null)
 // TTL: 5 minutes (300 seconds)
 
 function temp_code_file_path(string $code): string {
-    $cacheDir = cfg()['CACHE_DIR'] ?? (dirname(__DIR__) . '/cache');
+    $cacheDir = cfg()['CACHE_DIR'] ?? (__DIR__ . '/cache');
     ensure_dir($cacheDir);
     // Sanitize code to prevent directory traversal
     $safe_code = preg_replace('/[^a-zA-Z0-9_-]/', '', $code);
