@@ -1,1 +1,4 @@
-Deny from all
+# Block direct access to raw log/data files
+<FilesMatch "\.(log|json|txt)$">
+    Deny from all
+</FilesMatch>
