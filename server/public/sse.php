@@ -50,9 +50,10 @@ if (!$session_token) {
 }
 
 // Log which connection method was used (for Phase 3 go/no-go decision)
+// Note: field is 'auth_method' not 'method' to avoid collision with HTTP method in base log
 if ($session_token) {
     api_log('sse.connect', [
-        'method'       => $sse_auth_method,
+        'auth_method'  => $sse_auth_method,
         'session_hash' => substr(hash('sha256', $session_token), 0, 12),
     ]);
 }
