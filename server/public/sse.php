@@ -50,10 +50,11 @@ if (!$session_token) {
 }
 
 // Log which connection method was used (for Phase 3 go/no-go decision)
-// Note: field is 'auth_method' not 'method' to avoid collision with HTTP method in base log
+// Note: field name avoids 'method' (collides with HTTP method in base log)
+// and avoids 'auth*' (caught by PII redaction pattern /^.*auth.*$/i)
 if ($session_token) {
     api_log('sse.connect', [
-        'auth_method'  => $sse_auth_method,
+        'connect_via'  => $sse_auth_method,
         'session_hash' => substr(hash('sha256', $session_token), 0, 12),
     ]);
 }

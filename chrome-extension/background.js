@@ -867,11 +867,26 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 
     await ensureContentScript(tabId);
 
+    // Fetch a fresh temp code for the restored session so the content
+    // script can connect via ?code= instead of falling back to ?s=
+    let freshTempCode = null;
+    try {
+      const resp = await api("core/refresh_sse_code.php", {
+        session_token: currentSession.token,
+      });
+      if (resp?.ok && resp?.temp_code) {
+        freshTempCode = resp.temp_code;
+      }
+    } catch (e) {
+      // Non-fatal: content.js will fall back to reconnect via REFRESH_SSE_CODE
+    }
+
     chrome.tabs.sendMessage(
       tabId,
       {
         type: "START_FOLLOW_SESSION",
         sessionToken: currentSession.token,
+        tempCode: freshTempCode,
         backendBase: currentSession.backendBase || BASE_URL,
         restore: true,
       },
