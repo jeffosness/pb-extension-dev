@@ -574,17 +574,23 @@ function pb_api_call($pat, $method, $path, $body = null)
 }
 /**
  * Rate limiting per client_id using file-based rolling window.
- * 
+ *
  * Tracks request timestamps in a cache file. Returns true if under limit.
  * File format: comma-separated unix timestamps within the last 60 seconds.
+ *
+ * Each endpoint gets its own counter (scoped by script filename) so that
+ * high-frequency endpoints like track_crm_usage or refresh_sse_code don't
+ * eat into the budget for user-facing operations like dial session launches.
  */
 function rate_limit_check(string $client_id, int $maxPerMinute = 60): bool {
     $cacheDir = __DIR__ . '/cache';
     if (!is_dir($cacheDir)) {
         @mkdir($cacheDir, 0770, true);
     }
-    
-    $cacheFile = $cacheDir . '/rl_' . hash('sha256', (string)$client_id) . '.txt';
+
+    // Scope rate limit per endpoint so counters don't collide
+    $scope = basename($_SERVER['SCRIPT_FILENAME'] ?? 'global', '.php');
+    $cacheFile = $cacheDir . '/rl_' . hash('sha256', $client_id . ':' . $scope) . '.txt';
     $now = time();
     $window = $now - 60;  // 60-second rolling window
     
