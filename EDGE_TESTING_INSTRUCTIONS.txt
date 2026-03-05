@@ -1,0 +1,35 @@
+This extension requires a PhoneBurner account (phoneburner.com), a paid power-dialing platform. Users authenticate with their own Personal Access Token (PAT) from their PhoneBurner subscription. Test credentials cannot be provided as they are tied to paid accounts with live telephony services.
+
+STEPS TO VERIFY BEHAVIOR WITHOUT CREDENTIALS:
+
+1. Install and open any webpage. Click the extension icon.
+   → Shows popup with "Detected CRM: None", Dial/Settings tabs, and PAT input.
+   → No console errors in DevTools (F12).
+
+2. Navigate to app.hubspot.com (free account or landing page).
+   → Popup updates to "Detected CRM: HubSpot" with "Level 3" badge.
+   → No content scripts injected — verify in DevTools Sources tab.
+
+3. Navigate to any Salesforce, Pipedrive, or Zoho page.
+   → CRM detection updates with the correct name and level badge.
+
+4. Open Settings tab in popup.
+   → Goal Disposition fields and Follow Widget toggle are visible.
+   → No disconnect buttons shown (no active connection).
+
+5. Type "test" in PAT field and click "Save PAT".
+   → Extension validates against PhoneBurner API, shows error for invalid token.
+   → No data persisted — chrome.storage.local remains unchanged.
+
+6. Verify no background network activity without user action.
+   → DevTools Network tab shows no requests until user interacts.
+
+PERMISSION JUSTIFICATION:
+- storage: Persists user preferences and anonymous client ID
+- activeTab: Reads tab URL to detect supported CRM sites
+- scripting: Injects content script ONLY on user-initiated actions
+- tabs: Detects CRM navigation for context updates
+- permissions: Runtime-requests optional CRM host access when needed
+- Host permissions (phoneburner.biz): Backend API for session management
+
+All content script injection and CRM data access require explicit user action. No scripts execute automatically, no data is collected passively, and no background requests are made without user interaction.
