@@ -235,6 +235,11 @@
         font-weight: 600;
       }
 
+      /* List search clear button */
+      #hs-list-search-clear:hover {
+        color: var(--text);
+      }
+
       /* Loading animation for status text */
       .status.loading {
         animation: pulse 1.5s ease-in-out infinite;
@@ -429,7 +434,17 @@
         <!-- HubSpot Lists (any page when both PB + HS connected) -->
         <div id="hs-list-card" class="card hidden">
           <div class="card-title">HubSpot Lists</div>
-          <label for="hs-list-select">Launch a dial session from a saved list</label>
+          <label for="hs-list-search">Launch a dial session from a saved list</label>
+          <div style="position: relative; margin-bottom: 6px;">
+            <input type="text" id="hs-list-search" placeholder="Search lists by name…"
+                   aria-label="Search HubSpot lists" autocomplete="off" />
+            <span id="hs-list-search-clear" class="hidden"
+                  role="button" aria-label="Clear search"
+                  style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+                         cursor: pointer; color: var(--muted2); font-size: 14px; line-height: 1;
+                         padding: 2px 4px;">&#x2715;</span>
+          </div>
+          <div id="hs-list-search-status" class="help-text hidden" style="margin-bottom: 4px;"></div>
           <select id="hs-list-select">
             <option value="">Select a list…</option>
           </select>

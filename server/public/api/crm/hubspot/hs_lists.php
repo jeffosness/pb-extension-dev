@@ -4,7 +4,7 @@
 // Returns the user's most recently updated HubSpot lists (contacts + companies).
 // Used by the extension popup to populate the "Launch from List" dropdown.
 //
-// Accepts: { client_id }
+// Accepts: { client_id, query? }
 // Returns: { ok: true, lists: [{ listId, name, size, objectType, type, updatedAt }] }
 
 require_once __DIR__ . '/../../core/bootstrap.php';
@@ -17,6 +17,11 @@ require_once __DIR__ . '/hs_helpers.php';
 $data      = json_input();
 $client_id = get_client_id_or_fail($data);
 rate_limit_or_fail($client_id, 60);
+
+$query = trim((string)($data['query'] ?? ''));
+if (strlen($query) > 200) {
+  $query = substr($query, 0, 200);
+}
 
 $hs = load_hs_tokens($client_id);
 if (!is_array($hs)) {
@@ -43,19 +48,21 @@ $objectTypes = [
 ];
 
 foreach ($objectTypes as $objectTypeId => $objectTypeName) {
-  list($code, $json, $_raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', [
+  $searchBody = [
     'objectTypeId'    => $objectTypeId,
     'processingTypes' => ['MANUAL', 'DYNAMIC', 'SNAPSHOT'],
-  ]);
+  ];
+  if ($query !== '') {
+    $searchBody['query'] = $query;
+  }
+
+  list($code, $json, $_raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', $searchBody);
 
   // Retry once on 401
   if ($code === 401) {
     $hs = hs_refresh_access_token_or_fail($client_id, $hs);
     $hsAccess = (string)($hs['access_token'] ?? '');
-    list($code, $json, $_raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', [
-      'objectTypeId'    => $objectTypeId,
-      'processingTypes' => ['MANUAL', 'DYNAMIC', 'SNAPSHOT'],
-    ]);
+    list($code, $json, $_raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', $searchBody);
   }
 
   if ($code !== 200 || !is_array($json) || !isset($json['lists'])) {
@@ -86,12 +93,13 @@ usort($allLists, function($a, $b) {
   return strcmp($b['updatedAt'], $a['updatedAt']);
 });
 
-// Return top 10
-$allLists = array_slice($allLists, 0, 10);
+// Return top 20
+$allLists = array_slice($allLists, 0, 20);
 
 api_log('hs_lists.ok', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'total_lists'    => count($allLists),
+  'is_search'      => ($query !== ''),
 ]);
 
 api_ok(['lists' => $allLists]);

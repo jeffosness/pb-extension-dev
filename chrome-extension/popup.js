@@ -617,42 +617,90 @@ async function launchHubSpotRecordDial(callTarget = null) {
 // HubSpot List-based Dial Session
 // ---------------------------
 
-// Cache of fetched list metadata (keyed by listId) for the current popup session
+// Cache of fetched list metadata for the current popup session
 let _hsListsCache = [];
+let _hsListsPrefetch = [];    // Original prefetched lists (restored when search is cleared)
+let _hsListSearchTimer = null; // Debounce timer for search input
 
-async function fetchHubSpotLists() {
+async function fetchHubSpotLists(query = '') {
   const listCard = $("hs-list-card");
   const listSelect = $("hs-list-select");
   const listInfo = $("hs-list-info");
   const listBtn = $("hs-dial-from-list");
+  const searchStatus = $("hs-list-search-status");
 
   if (!listCard || !listSelect) return;
 
-  // Reset
-  listSelect.innerHTML = '<option value="">Loading lists…</option>';
+  const isSearch = (query !== '');
+
+  // Reset select state
+  listSelect.innerHTML = '<option value="">' + (isSearch ? 'Searching…' : 'Loading lists…') + '</option>';
   listSelect.disabled = true;
   setVisible(listBtn, false);
   if (listInfo) listInfo.textContent = "";
 
-  const resp = await sendToBackground({ type: "HS_FETCH_LISTS" });
+  if (isSearch && searchStatus) {
+    searchStatus.textContent = 'Searching…';
+    setVisible(searchStatus, true);
+    searchStatus.classList.add('loading');
+  }
+
+  const message = { type: "HS_FETCH_LISTS" };
+  if (isSearch) message.query = query;
+
+  const resp = await sendToBackground(message);
+
+  if (searchStatus) searchStatus.classList.remove('loading');
 
   if (!resp || !resp.ok || !Array.isArray(resp.lists)) {
-    // Silently hide the list card if endpoint not available (backward compatibility)
-    setVisible(listCard, false);
+    if (!isSearch) {
+      setVisible(listCard, false);
+      return;
+    }
+    // Search failed — restore prefetched lists
+    if (searchStatus) {
+      searchStatus.textContent = 'Search failed. Showing recent lists.';
+      setVisible(searchStatus, true);
+    }
+    populateListDropdown(_hsListsPrefetch);
     return;
   }
 
-  _hsListsCache = resp.lists;
+  const lists = resp.lists;
+  _hsListsCache = lists;
+  if (!isSearch) {
+    _hsListsPrefetch = lists;
+  }
 
-  if (resp.lists.length === 0) {
-    listSelect.innerHTML = '<option value="">No lists found</option>';
-    if (listInfo) listInfo.textContent = "Create lists in HubSpot to use this feature.";
+  // Update search status
+  if (isSearch && searchStatus) {
+    if (lists.length === 0) {
+      searchStatus.textContent = 'No lists match \u201c' + query + '\u201d';
+    } else {
+      searchStatus.textContent = lists.length + ' list' + (lists.length !== 1 ? 's' : '') + ' found';
+    }
+    setVisible(searchStatus, true);
+  } else if (searchStatus) {
+    setVisible(searchStatus, false);
+  }
+
+  populateListDropdown(lists, isSearch ? 'No matches' : 'No lists found');
+}
+
+function populateListDropdown(lists, emptyMessage = 'No lists found') {
+  const listSelect = $("hs-list-select");
+  const listInfo = $("hs-list-info");
+
+  if (!listSelect) return;
+
+  if (!lists || lists.length === 0) {
+    listSelect.innerHTML = '<option value="">' + emptyMessage + '</option>';
+    if (listInfo) listInfo.textContent = "";
     return;
   }
 
-  // Populate dropdown
   listSelect.innerHTML = '<option value="">Select a list…</option>';
-  for (const list of resp.lists) {
+  for (const list of lists) {
     const opt = document.createElement("option");
     opt.value = list.listId;
     const typeLabel = list.objectType === "companies" ? "companies" : "contacts";
@@ -677,6 +725,54 @@ async function fetchHubSpotLists() {
     listSelect.appendChild(opt);
   }
   listSelect.disabled = false;
+}
+
+function onHsListSearchInput() {
+  const searchInput = $("hs-list-search");
+  const clearBtn = $("hs-list-search-clear");
+  if (!searchInput) return;
+
+  const query = searchInput.value.trim();
+
+  // Show/hide clear button
+  setVisible(clearBtn, query.length > 0);
+
+  // Clear any pending debounce
+  if (_hsListSearchTimer) {
+    clearTimeout(_hsListSearchTimer);
+    _hsListSearchTimer = null;
+  }
+
+  // If empty, restore prefetched lists immediately
+  if (query === '') {
+    const searchStatus = $("hs-list-search-status");
+    if (searchStatus) setVisible(searchStatus, false);
+    populateListDropdown(_hsListsPrefetch);
+    return;
+  }
+
+  // Require at least 2 characters to search
+  if (query.length < 2) return;
+
+  // Debounce 300ms
+  _hsListSearchTimer = setTimeout(() => {
+    fetchHubSpotLists(query);
+  }, 300);
+}
+
+function onHsListSearchClear() {
+  const searchInput = $("hs-list-search");
+  const clearBtn = $("hs-list-search-clear");
+  const searchStatus = $("hs-list-search-status");
+
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.focus();
+  }
+  setVisible(clearBtn, false);
+  if (searchStatus) setVisible(searchStatus, false);
+
+  populateListDropdown(_hsListsPrefetch);
 }
 
 function onHsListSelectChange() {
@@ -1044,6 +1140,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // HubSpot list-based dial
+  $("hs-list-search")?.addEventListener("input", onHsListSearchInput);
+  $("hs-list-search-clear")?.addEventListener("click", onHsListSearchClear);
   $("hs-list-select")?.addEventListener("change", onHsListSelectChange);
   $("hs-dial-from-list")?.addEventListener("click", launchDialSessionFromList);
 

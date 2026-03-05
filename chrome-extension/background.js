@@ -545,7 +545,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // HubSpot L3: fetch available lists
       // -------------------------
       if (msg.type === "HS_FETCH_LISTS") {
-        const resp = await api("crm/hubspot/hs_lists.php");
+        const body = {};
+        if (msg.query && typeof msg.query === 'string') {
+          body.query = msg.query;
+        }
+        const resp = await api("crm/hubspot/hs_lists.php", body);
 
         if (!resp || resp.ok !== true) {
           return sendResponse({
