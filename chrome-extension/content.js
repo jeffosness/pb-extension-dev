@@ -955,6 +955,12 @@ function openSseConnection(code) {
     }
   });
 
+  es.addEventListener("session_expired", (ev) => {
+    console.log("SSE session expired, stopping reconnection", ev.data);
+    try { es.close(); } catch (e) {}
+    stopFollowingSession();
+  });
+
   es.onerror = (err) => {
     console.error("SSE error", err);
     try { es.close(); } catch (e) {}
@@ -1014,6 +1020,12 @@ function openSseFallback(sessionToken) {
     } catch (e) {
       console.error("Invalid SSE data", e);
     }
+  });
+
+  es.addEventListener("session_expired", (ev) => {
+    console.log("SSE session expired (fallback), stopping", ev.data);
+    try { es.close(); } catch (e) {}
+    stopFollowingSession();
   });
 
   es.onerror = (err) => {
