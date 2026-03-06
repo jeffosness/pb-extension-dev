@@ -247,6 +247,11 @@ while (true) {
   // ✅ INACTIVITY TIMEOUT: Close connection if no webhook activity for 60 minutes
   $inactiveSec = time() - $lastWebhookActivity;
   if ($inactiveSec > $inactivityTimeoutSec) {
+    // Tell the client to stop reconnecting — session is dead
+    echo "event: session_expired\n";
+    echo 'data: ' . json_encode(['reason' => 'inactivity_timeout', 'inactive_sec' => $inactiveSec], JSON_UNESCAPED_SLASHES) . "\n\n";
+    @ob_flush(); @flush();
+
     sse_log_activity('sse.timeout_inactive', [
       'session_token_hash' => $sessionHash,
       'duration_sec' => time() - $connectionStart,
