@@ -206,6 +206,7 @@ sse_log_activity('sse.connect', [
   'session_token_hash'   => $sessionHash,
   'ip_hash'              => $ipHash,
   'member_user_id_hash'  => $memberUserIdHash,
+  'connect_via'          => $sse_auth_method,
 ]);
 
 sse_presence_write($sessionHash, $connectionStart, $connectionStart);
