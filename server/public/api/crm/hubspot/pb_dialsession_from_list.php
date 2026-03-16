@@ -50,6 +50,15 @@ if (!in_array($objectType, ['contacts', 'companies'], true)) {
 
 $isCompanyList = ($objectType === 'companies');
 
+// HubSpot regional subdomain support (e.g., app.na2.hubspot.com)
+$hsHost = 'app.hubspot.com';
+if (!empty($data['hs_host']) && is_string($data['hs_host'])) {
+    $candidate = strtolower(trim($data['hs_host']));
+    if (preg_match('/^app(\.[a-z0-9-]+)?\.hubspot\.com$/', $candidate)) {
+        $hsHost = $candidate;
+    }
+}
+
 // Load PhoneBurner PAT
 $pat = load_pb_token($client_id);
 if (!$pat) {
@@ -201,7 +210,7 @@ foreach ($hsRecords as $c) {
     if ($phone === '') { $skipped++; continue; }
 
     $recordUrl = ($portalId !== '')
-      ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-2/' . rawurlencode($hsId))
+      ? ('https://' . $hsHost . '/contacts/' . rawurlencode($portalId) . '/record/0-2/' . rawurlencode($hsId))
       : null;
   } else {
     // Contact normalization
@@ -215,7 +224,7 @@ foreach ($hsRecords as $c) {
     if ($phone === '') { $skipped++; continue; }
 
     $recordUrl = ($portalId !== '')
-      ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-1/' . rawurlencode($hsId))
+      ? ('https://' . $hsHost . '/contacts/' . rawurlencode($portalId) . '/record/0-1/' . rawurlencode($hsId))
       : null;
   }
 
