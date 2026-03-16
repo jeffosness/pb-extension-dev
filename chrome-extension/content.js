@@ -908,6 +908,15 @@ function isSameCrmRecord(currentUrl, targetUrl) {
   try {
     const cur = new URL(currentUrl, window.location.origin);
     const tgt = new URL(targetUrl, window.location.origin);
+
+    // HubSpot regional subdomain support: normalize app.na2.hubspot.com ↔ app.hubspot.com
+    // Compare pathnames only when both hosts are HubSpot variants
+    const curHost = cur.hostname.toLowerCase();
+    const tgtHost = tgt.hostname.toLowerCase();
+    if (curHost.endsWith(".hubspot.com") && tgtHost.endsWith(".hubspot.com")) {
+      return cur.pathname === tgt.pathname;
+    }
+
     return cur.origin + cur.pathname === tgt.origin + tgt.pathname;
   } catch (e) {
     return false;

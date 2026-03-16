@@ -195,12 +195,25 @@ async function api(path, body = {}, baseUrl = BASE_URL) {
   const client_id = await getClientId();
   const payload = { client_id, ...(body || {}) };
 
-  const res = await fetch(`${baseUrl}/api/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Client-Id": client_id },
-    body: JSON.stringify(payload),
-    credentials: "include",
-  });
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/api/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Client-Id": client_id },
+      body: JSON.stringify(payload),
+      credentials: "include",
+    });
+  } catch (fetchErr) {
+    console.error("Network error calling", path, fetchErr);
+    return {
+      ok: false,
+      error: {
+        code: "network_error",
+        message: "Could not reach the server. Check your internet connection or firewall settings.",
+        details: String(fetchErr),
+      },
+    };
+  }
 
   const json = await res.json().catch(() => ({}));
   return json;
@@ -416,9 +429,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Extract call_target from message (for company dual-mode)
         const callTarget = msg.call_target || null;
 
+        // Extract the actual HubSpot hostname for regional subdomain support
+        const hsHost = deriveHostPathFromTabUrl(hubTab.url || "").host || "";
+
         const resp = await api("crm/hubspot/pb_dialsession_selection.php", {
           mode,
           call_target: callTarget, // NEW: Pass call_target to server
+          hs_host: hsHost,
           records: ids.map((id) => ({ id: String(id) })),
           context: {
             objectType,
@@ -478,11 +495,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (objectType === "deal") mode = "deals";
         if (objectType === "company") mode = "companies";
 
+        // Get the active tab URL for regional HubSpot subdomain support
+        const recordTabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const recordTabUrl = recordTabs?.[0]?.url || "";
+        const recordHsHost = deriveHostPathFromTabUrl(recordTabUrl).host || "";
+
         // Track usage (best effort)
         try {
           await api("core/track_crm_usage.php", {
             crm_id: "hubspot",
-            host: "app.hubspot.com",
+            host: recordHsHost || "app.hubspot.com",
             level: 3,
             portal_id: portalId,
             object_type: objectType,
@@ -493,6 +518,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const resp = await api("crm/hubspot/pb_dialsession_selection.php", {
           mode,
           call_target: callTarget,
+          hs_host: recordHsHost,
           records: [{ id: String(recordId) }],
           context: {
             objectType,
@@ -605,10 +631,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
         } catch (e) {}
 
+        // Extract actual HubSpot hostname for regional subdomain support
+        const listHsHost = deriveHostPathFromTabUrl(hubTab?.url || "").host || "";
+
         const resp = await api("crm/hubspot/pb_dialsession_from_list.php", {
           list_id: listId,
           portal_id: portalId || "",
           object_type: objectType,
+          hs_host: listHsHost,
         });
 
         const sessionToken =
@@ -844,7 +874,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return sendResponse({ ok: false, error: "Unknown message type" });
     } catch (err) {
       console.error("background error", err);
-      return sendResponse({ ok: false, error: String(err) });
+      const errStr = String(err);
+      let userMessage = errStr;
+      if (/fetch|network|blocked|refused|timeout|abort/i.test(errStr)) {
+        userMessage = "Could not reach the server. Check your internet connection or firewall settings.";
+      }
+      return sendResponse({
+        ok: false,
+        error: { code: "internal_error", message: userMessage, details: errStr },
+      });
     }
   })();
 

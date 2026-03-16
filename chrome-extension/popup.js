@@ -344,12 +344,25 @@ async function hsPost(path, body = {}) {
   const headers = { "Content-Type": "application/json" };
   if (clientId) headers["X-Client-Id"] = clientId;
 
-  const res = await fetch(`${BASE_URL}/api/${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    credentials: "include",
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}/api/${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      credentials: "include",
+    });
+  } catch (fetchErr) {
+    console.error("Network error calling", path, fetchErr);
+    return {
+      ok: false,
+      error: {
+        code: "network_error",
+        message: "Could not reach the server. Check your internet connection or firewall settings.",
+        details: String(fetchErr),
+      },
+    };
+  }
 
   return await res.json().catch(() => ({}));
 }

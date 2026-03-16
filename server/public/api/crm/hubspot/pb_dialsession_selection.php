@@ -62,6 +62,16 @@ if ($callTarget !== null && !in_array($callTarget, ['contacts', 'companies'], tr
 $records    = $data['records'] ?? [];
 $context    = $data['context'] ?? [];
 
+// HubSpot regional subdomain support (e.g., app.na2.hubspot.com)
+// Validate that it's a legitimate HubSpot hostname to prevent open redirect
+$hsHost = 'app.hubspot.com'; // default
+if (!empty($data['hs_host']) && is_string($data['hs_host'])) {
+    $candidate = strtolower(trim($data['hs_host']));
+    if (preg_match('/^app(\.[a-z0-9-]+)?\.hubspot\.com$/', $candidate)) {
+        $hsHost = $candidate;
+    }
+}
+
 $ids = extract_ids_from_records($records);
 if (empty($ids)) {
   api_error('No selected records provided', 'bad_request', 400);
@@ -177,7 +187,7 @@ foreach ($hsContacts as $c) {
 
     // Record URL for follow-me (0-2 = company object type)
     $recordUrl = ($portalId !== '')
-      ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-2/' . rawurlencode($hsId))
+      ? ('https://' . $hsHost . '/contacts/' . rawurlencode($portalId) . '/record/0-2/' . rawurlencode($hsId))
       : null;
   } else {
     // Contact normalization (existing)
@@ -192,7 +202,7 @@ foreach ($hsContacts as $c) {
 
     // Record URL for follow-me (0-1 = contact object type)
     $recordUrl = ($portalId !== '')
-      ? ('https://app.hubspot.com/contacts/' . rawurlencode($portalId) . '/record/0-1/' . rawurlencode($hsId))
+      ? ('https://' . $hsHost . '/contacts/' . rawurlencode($portalId) . '/record/0-1/' . rawurlencode($hsId))
       : null;
   }
 
