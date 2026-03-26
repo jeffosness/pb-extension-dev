@@ -1,9 +1,11 @@
 // background.js — Unified extension service worker (on-demand injection + no follow-me toggles)
 
+importScripts("crm_config.js");
+
 const BASE_URL = "https://extension-dev.phoneburner.biz";
 
-// Content script file
-const CONTENT_SCRIPT_FILES = ["content.js"];
+// Content script files (crm_config.js must be first — defines CRM_REGISTRY)
+const CONTENT_SCRIPT_FILES = ["crm_config.js", "content.js"];
 
 // Track CRM context per tab (populated when content.js runs)
 const tabContexts = {}; // { [tabId]: { crmId, crmName, level, host, path } }
@@ -97,14 +99,12 @@ function detectCrmFromUrl(tabUrl) {
 
     return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType, pageType, recordId, portalId };
   }
-  if (host.includes("pipedrive.com"))
-    return { host, path, crmId: "pipedrive", crmName: "Pipedrive", level: 2 };
-  if (host.includes("lightning.force.com"))
-    return { host, path, crmId: "salesforce", crmName: "Salesforce", level: 1 };
-  if (host.includes("crm.zoho.com"))
-    return { host, path, crmId: "zoho", crmName: "Zoho CRM", level: 1 };
-  if (host.includes("monday.com"))
-    return { host, path, crmId: "monday", crmName: "monday.com", level: 1 };
+  // Look up all other CRMs from shared registry
+  for (const crm of CRM_REGISTRY) {
+    if (crm.hostMatch && host.includes(crm.hostMatch)) {
+      return { host, path, crmId: crm.id, crmName: crm.displayName, level: crm.level || 1 };
+    }
+  }
 
   return { host, path, crmId: "generic", crmName: host, level: 1 };
 }

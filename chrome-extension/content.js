@@ -4,39 +4,7 @@
 
 const BASE_URL = "https://extension-dev.phoneburner.biz";
 
-// ---- CRM registry for context-aware behavior ----
-const CRM_REGISTRY = [
-  {
-    id: "hubspot",
-    displayName: "HubSpot",
-    level: 3,
-    match: (host) => host.includes("hubspot.com"),
-  },
-  {
-    id: "salesforce",
-    displayName: "Salesforce",
-    level: 2,
-    match: (host) => host.includes("lightning.force.com"),
-  },
-  {
-    id: "zoho",
-    displayName: "Zoho CRM",
-    level: 1,
-    match: (host) => host.includes("crm.zoho.com"),
-  },
-  {
-    id: "monday",
-    displayName: "monday.com",
-    level: 1,
-    match: (host) => host.includes("monday.com"),
-  },
-  {
-    id: "pipedrive",
-    displayName: "Pipedrive",
-    level: 2,
-    match: (host) => host.includes("pipedrive.com"),
-  },
-];
+// CRM_REGISTRY is defined in crm_config.js (injected before this script)
 
 function pbToText(x) {
   if (x == null) return "";
@@ -61,7 +29,7 @@ function detectCrmContext() {
   let crmName = host;
 
   for (const crm of CRM_REGISTRY) {
-    if (crm.match && crm.match(host)) {
+    if (crm.hostMatch && host.includes(crm.hostMatch)) {
       crmId = crm.id;
       level = crm.level || 1;
       crmName = crm.displayName || host;
