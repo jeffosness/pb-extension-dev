@@ -50,7 +50,14 @@ function showAlert(message, title = "PhoneBurner Extension") {
     }
 
     titleEl.textContent = title;
-    messageEl.textContent = message;
+    if (message instanceof HTMLElement) {
+      messageEl.textContent = "";
+      messageEl.style.whiteSpace = "normal";
+      messageEl.appendChild(message);
+    } else {
+      messageEl.style.whiteSpace = "pre-wrap";
+      messageEl.textContent = message;
+    }
     buttonsEl.replaceChildren();
 
     // Shared cleanup + resolve
@@ -147,6 +154,85 @@ function getClientIdFromBackground() {
       resolve(null);
     }
   });
+}
+
+// ---------------------------
+// What's New / Welcome modal (changelog.js must be loaded first)
+// ---------------------------
+
+const PB_VERSION_STORAGE_KEY = "pb_last_seen_version";
+
+/**
+ * Compare two semver-like version strings (e.g., "0.4.6" < "0.5.0").
+ * Returns negative if a < b, 0 if equal, positive if a > b.
+ */
+function compareVersions(a, b) {
+  const pa = (a || "0").split(".").map(Number);
+  const pb = (b || "0").split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/**
+ * Check if this is a first install or version upgrade, and show
+ * the appropriate modal (welcome or what's-new).
+ */
+async function checkChangelog() {
+  const manifest = chrome.runtime.getManifest();
+  const currentVersion = manifest.version;
+
+  const storageData = await new Promise((resolve) => {
+    chrome.storage.local.get([PB_VERSION_STORAGE_KEY, "pb_unified_client_id"], (res) => {
+      resolve(res || {});
+    });
+  });
+
+  const stored = storageData[PB_VERSION_STORAGE_KEY] || null;
+  const hasClientId = !!storageData["pb_unified_client_id"];
+
+  if (stored === null) {
+    if (hasClientId) {
+      // Existing user upgrading to a version with changelog support for the first time.
+      // Treat as an upgrade from "unknown old version" — show what's-new, not welcome.
+      // Fall through to the upgrade logic below by pretending they were on "0.0.0".
+      // (The upgrade block will handle showing the latest changelog entry.)
+    } else {
+      // Genuine first install — show welcome
+      if (typeof PB_WELCOME !== "undefined" && PB_WELCOME.title) {
+        const welcomeContent = (typeof buildWelcomeMessage === "function")
+          ? buildWelcomeMessage()
+          : (PB_WELCOME.message || "Welcome!");
+        await showAlert(welcomeContent, PB_WELCOME.title);
+      }
+      chrome.storage.local.set({ [PB_VERSION_STORAGE_KEY]: currentVersion });
+      return;
+    }
+  }
+
+  const effectiveStored = stored || "0.0.0";
+  if (compareVersions(currentVersion, effectiveStored) > 0) {
+    // Version upgrade — find the most relevant changelog entry
+    // Show entries for versions newer than what the user last saw
+    if (typeof PB_CHANGELOG !== "undefined") {
+      const newEntries = Object.keys(PB_CHANGELOG)
+        .filter((v) => compareVersions(v, effectiveStored) > 0)
+        .sort(compareVersions);
+
+      if (newEntries.length > 0) {
+        // Show the latest entry (most relevant to user)
+        const latest = newEntries[newEntries.length - 1];
+        const entry = PB_CHANGELOG[latest];
+
+        const message = entry.items.map((item) => "\u2022 " + item).join("\n");
+        await showAlert(message, entry.title);
+      }
+    }
+    chrome.storage.local.set({ [PB_VERSION_STORAGE_KEY]: currentVersion });
+  }
+  // If same version, do nothing
 }
 
 // ---------------------------
@@ -903,6 +989,74 @@ async function launchDialSessionFromList() {
   window.close();
 }
 
+// ---------------------------
+// L3 Phone Preference (settings)
+// ---------------------------
+
+async function loadPhonePreference() {
+  const section = $("hs-phone-pref-section");
+  const select = $("hs-phone-pref");
+  if (!section || !select) return;
+
+  // Only show when HS connected
+  if (!HS_STATE.connected) {
+    setVisible(section, false);
+    return;
+  }
+  setVisible(section, true);
+
+  // Fetch phone properties and saved preference in parallel
+  const [propsResp, prefsResp] = await Promise.all([
+    sendToBackground({ type: "HS_FETCH_PHONE_PROPERTIES", object_type: "contacts" }),
+    sendToBackground({ type: "GET_CRM_PREFERENCES" }),
+  ]);
+
+  const phoneProps = propsResp?.ok ? (propsResp.phone_properties || []) : [];
+  const savedPref = prefsResp?.ok
+    ? (prefsResp.crm_preferences?.hubspot?.preferred_phone_property_contacts || "")
+    : "";
+
+  // Populate dropdown
+  select.innerHTML = '<option value="">Default (first available)</option>';
+  for (const prop of phoneProps) {
+    const opt = document.createElement("option");
+    opt.value = prop.name;
+    opt.textContent = prop.label || prop.name;
+    if (prop.name === savedPref) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.disabled = false;
+}
+
+async function onPhonePrefChange() {
+  const select = $("hs-phone-pref");
+  const status = $("hs-phone-pref-status");
+  if (!select) return;
+
+  const value = select.value; // "" means default
+  if (status) {
+    status.textContent = "Saving…";
+    status.classList.add("loading");
+  }
+
+  const resp = await sendToBackground({
+    type: "SAVE_CRM_PREFERENCES",
+    provider: "hubspot",
+    preferences: { preferred_phone_property_contacts: value || null },
+  });
+
+  if (status) status.classList.remove("loading");
+
+  if (resp?.ok) {
+    if (status) status.textContent = value
+      ? "Saved — dial sessions will use this field as primary"
+      : "Saved — using default phone field priority";
+    setTimeout(() => { if (status) status.textContent = ""; }, 3000);
+  } else {
+    if (status) status.textContent = "Failed to save preference";
+  }
+}
+
 async function disconnectHubSpot() {
   const confirmed = await showConfirm("Disconnect HubSpot for this session?");
   if (!confirmed) return;
@@ -1158,6 +1312,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("hs-list-select")?.addEventListener("change", onHsListSelectChange);
   $("hs-dial-from-list")?.addEventListener("click", launchDialSessionFromList);
 
+  $("hs-phone-pref")?.addEventListener("change", onPhonePrefChange);
   $("hs-disconnect")?.addEventListener("click", disconnectHubSpot);
 
   // Tabs
@@ -1170,6 +1325,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     const manifest = chrome.runtime.getManifest();
     versionEl.textContent = `v${manifest.version}`;
   }
+
+  // 0. Show welcome or what's-new modal (first install or version upgrade)
+  await checkChangelog();
 
   // 1. Get CRM context from background (includes pageType, recordId, portalId)
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1188,4 +1346,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 4. Apply context-aware visibility
   applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+
+  // 5. Load L3 phone preference (if HS connected)
+  if (HS_STATE.connected) {
+    loadPhonePreference();
+  }
 });

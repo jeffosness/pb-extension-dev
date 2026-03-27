@@ -46,8 +46,9 @@ api_log('user_settings_get.ok', [
 
 // Only expose safe parts
 api_ok([
-    'member_user_id' => $settings['member_user_id'] ?? $memberUserId,
-    'profile'        => $settings['profile']        ?? [],
-    'crm_patterns'   => $settings['crm_patterns']   ?? [],
-    'goals'          => $settings['goals']          ?? [],
+    'member_user_id'  => $settings['member_user_id'] ?? $memberUserId,
+    'profile'         => $settings['profile']         ?? [],
+    'crm_patterns'    => $settings['crm_patterns']    ?? [],
+    'goals'           => $settings['goals']           ?? [],
+    'crm_preferences' => $settings['crm_preferences'] ?? [],
 ]);

@@ -82,6 +82,17 @@ if ($hsAccess === '') {
 
 $hubId = (string)($hs['hub_id'] ?? '');
 
+// Load user's preferred primary phone property (L3 setting)
+$preferredPhoneProp = null;
+if ($member_user_id) {
+  $userSettings = load_user_settings($member_user_id);
+  $preferredPhoneProp = $userSettings['crm_preferences']['hubspot']['preferred_phone_property_contacts'] ?? null;
+  if ($preferredPhoneProp !== null) {
+    $preferredPhoneProp = trim((string)$preferredPhoneProp);
+    if ($preferredPhoneProp === '') $preferredPhoneProp = null;
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Fetch list memberships (paginated, up to PB_MAX_CONTACTS)
 // -----------------------------------------------------------------------------
@@ -172,10 +183,10 @@ $hsRecords = [];
 
 if ($isCompanyList) {
   $phoneProps = hs_discover_phone_properties($hsAccess, 'companies', $hubId);
-  $hsRecords = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $memberIds, $phoneProps, $diag);
+  $hsRecords = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $memberIds, $phoneProps, $diag, $preferredPhoneProp);
 } else {
   $phoneProps = hs_discover_phone_properties($hsAccess, 'contacts', $hubId);
-  $hsRecords = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $memberIds, $phoneProps, $diag);
+  $hsRecords = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $memberIds, $phoneProps, $diag, $preferredPhoneProp);
 }
 
 $diag['phone_props'] = array_column($phoneProps, 'name');

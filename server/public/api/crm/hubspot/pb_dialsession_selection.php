@@ -51,6 +51,17 @@ if ($hsAccess === '') {
 
 $hubId = (string)($hs['hub_id'] ?? '');
 
+// Load user's preferred primary phone property (L3 setting)
+$preferredPhoneProp = null;
+if ($member_user_id) {
+  $userSettings = load_user_settings($member_user_id);
+  $preferredPhoneProp = $userSettings['crm_preferences']['hubspot']['preferred_phone_property_contacts'] ?? null;
+  if ($preferredPhoneProp !== null) {
+    $preferredPhoneProp = trim((string)$preferredPhoneProp);
+    if ($preferredPhoneProp === '') $preferredPhoneProp = null;
+  }
+}
+
 $mode       = (string)($data['mode'] ?? 'contacts');
 if (!in_array($mode, ['contacts', 'companies', 'deals'], true)) {
   api_error('Invalid mode', 'bad_request', 400);
@@ -91,7 +102,7 @@ $sourceObjectType = null;       // NEW: 'deals' | 'companies' | null
 
 if ($mode === 'contacts') {
   $phonePropsContacts = hs_discover_phone_properties($hsAccess, 'contacts', $hubId);
-  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $phonePropsContacts, $diag);
+  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $phonePropsContacts, $diag, $preferredPhoneProp);
 
 } elseif ($mode === 'deals') {
   $sourceObjectType = 'deals';
@@ -101,7 +112,7 @@ if ($mode === 'contacts') {
   $sourceObjectIdsByContact = is_array($map) ? $map : [];
 
   $phonePropsContacts = hs_discover_phone_properties($hsAccess, 'contacts', $hubId);
-  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $phonePropsContacts, $diag);
+  $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $phonePropsContacts, $diag, $preferredPhoneProp);
 
 } elseif ($mode === 'companies') {
   $sourceObjectType = 'companies';
@@ -114,7 +125,7 @@ if ($mode === 'contacts') {
 
     // Fetch company details (not contacts)
     $phonePropsCompanies = hs_discover_phone_properties($hsAccess, 'companies', $hubId);
-    $hsCompanies = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $phonePropsCompanies, $diag);
+    $hsCompanies = hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, $ids, $phonePropsCompanies, $diag, $preferredPhoneProp);
 
     // Diagnostic: Log raw company data (redacted)
     $diag['companies_raw_sample'] = !empty($hsCompanies) ? array_map(function($c) {
@@ -139,7 +150,7 @@ if ($mode === 'contacts') {
     $sourceObjectIdsByContact = is_array($map) ? $map : [];
 
     $phonePropsContacts = hs_discover_phone_properties($hsAccess, 'contacts', $hubId);
-    $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $phonePropsContacts, $diag);
+    $hsContacts = hs_fetch_contacts_with_refresh_retry($client_id, $hs, $hsAccess, $contactIds, $phonePropsContacts, $diag, $preferredPhoneProp);
   }
 
 } else {

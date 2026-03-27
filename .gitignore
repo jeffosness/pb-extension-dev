@@ -5,6 +5,7 @@
 Thumbs.db
 .vscode/
 .idea/
+.sfdx/
 
 ############################################
 # Archives / junk

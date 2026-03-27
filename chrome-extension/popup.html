@@ -310,6 +310,13 @@
         line-height: 1.5;
         white-space: pre-wrap;
       }
+      .modal-message a {
+        color: var(--primary);
+        text-decoration: underline;
+      }
+      .modal-message a:hover {
+        color: var(--text);
+      }
       .modal-buttons {
         display: flex;
         gap: 8px;
@@ -474,7 +481,22 @@
         <div id="hubspot-settings-card" class="card hidden">
           <div class="card-title">HubSpot Connection</div>
           <div id="hs-settings-status" class="status"></div>
-          <div class="help-text">
+
+          <!-- Primary Phone Field preference (L3 setting) -->
+          <div id="hs-phone-pref-section" class="list-section hidden">
+            <label for="hs-phone-pref">Primary Phone Field</label>
+            <div class="help-text">
+              Choose which HubSpot phone field to use as the primary number
+              when creating dial sessions. Other phone fields will be added
+              as additional numbers.
+            </div>
+            <select id="hs-phone-pref" class="mt-6">
+              <option value="">Default (first available)</option>
+            </select>
+            <div id="hs-phone-pref-status" class="status mt-4"></div>
+          </div>
+
+          <div class="help-text mt-10">
             Disconnecting removes the saved HubSpot authorization on the server
             for this browser session.
           </div>
@@ -518,6 +540,7 @@
       </div>
     </div>
 
+    <script src="changelog.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
