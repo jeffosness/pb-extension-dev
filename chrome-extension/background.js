@@ -591,6 +591,64 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       // -------------------------
+      // L3: fetch phone properties for primary phone preference
+      // -------------------------
+      if (msg.type === "HS_FETCH_PHONE_PROPERTIES") {
+        const objectType = msg.object_type || "contacts";
+        const resp = await api("crm/hubspot/hs_phone_properties.php", {
+          object_type: objectType,
+        });
+
+        if (!resp || resp.ok !== true) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to fetch phone properties.",
+          });
+        }
+
+        const phoneProps = resp.data?.phone_properties || resp.phone_properties || [];
+        return sendResponse({ ok: true, phone_properties: phoneProps });
+      }
+
+      // -------------------------
+      // L3: save CRM preferences (e.g., preferred phone property)
+      // -------------------------
+      if (msg.type === "SAVE_CRM_PREFERENCES") {
+        const provider = msg.provider || "hubspot";
+        const preferences = msg.preferences || {};
+
+        const resp = await api("core/user_settings_save.php", {
+          crm_preferences: { [provider]: preferences },
+        });
+
+        if (!resp || resp.ok !== true) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to save preferences.",
+          });
+        }
+
+        return sendResponse({ ok: true });
+      }
+
+      // -------------------------
+      // L3: load CRM preferences
+      // -------------------------
+      if (msg.type === "GET_CRM_PREFERENCES") {
+        const resp = await api("core/user_settings_get.php");
+
+        if (!resp || resp.ok !== true) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to load preferences.",
+          });
+        }
+
+        const crmPrefs = resp.data?.crm_preferences || resp.crm_preferences || {};
+        return sendResponse({ ok: true, crm_preferences: crmPrefs });
+      }
+
+      // -------------------------
       // HubSpot L3: launch from list
       // -------------------------
       if (msg.type === "HS_LAUNCH_FROM_LIST") {

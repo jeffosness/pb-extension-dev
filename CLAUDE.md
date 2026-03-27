@@ -1416,6 +1416,18 @@ if (host.includes("mynewcrm.example.com")) {
 
 ## Deployment Checklist
 
+### Pre-PR Checklist (Version & Changelog)
+
+When creating a PR that includes **user-facing changes** (new features, UI changes, new settings):
+
+- [ ] Bump version in `chrome-extension/manifest.json` (semver: major.minor.patch)
+- [ ] Add entry to `chrome-extension/changelog.js` under `PB_CHANGELOG` keyed by the new version
+- [ ] Changelog items should be short, user-friendly descriptions (not technical details)
+- [ ] Only add changelog entries for features users interact with — skip for bug fixes, refactors, or internal changes
+- [ ] `PB_WELCOME` in `changelog.js` only needs updating if the onboarding flow or value proposition changes
+
+**How it works:** On popup open, `checkChangelog()` compares the current manifest version against `pb_last_seen_version` in `chrome.storage.local`. First install shows the welcome modal. Version upgrades show the latest changelog entry. Same version = no modal.
+
 ### Pre-Deployment Security Review
 
 - [ ] No hardcoded secrets in code (use `config.php`)

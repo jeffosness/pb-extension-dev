@@ -68,15 +68,15 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
   return $resp;
 }
 
-function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array $phoneProperties = [], array &$diag = []) {
-  $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $phoneProperties, $diag);
+function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array $phoneProperties = [], array &$diag = [], ?string $preferredPrimary = null) {
+  $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $phoneProperties, $diag, $preferredPrimary);
 
   $lastHttp = $diag['contacts_fetch']['last_http'] ?? null;
   if (empty($contacts) && $lastHttp === 401) {
     // refresh + retry once
     $hs = hs_refresh_access_token_or_fail($client_id, $hs);
     $hsAccess = (string)($hs['access_token'] ?? '');
-    $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $phoneProperties, $diag);
+    $contacts = hs_fetch_contacts_by_ids($hsAccess, $ids, $phoneProperties, $diag, $preferredPrimary);
   }
 
   return $contacts;
@@ -340,7 +340,7 @@ function extract_ids_from_records($records) {
 }
 
 // Fetch contact objects by ID (HubSpot contacts)
-function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneProperties = [], &$diag = []) {
+function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneProperties = [], &$diag = [], ?string $preferredPrimary = null) {
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
@@ -362,7 +362,7 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneP
     }
 
     $props = $json['properties'] ?? [];
-    $phoneData = build_phone_fields_from_props($props, $phoneProperties);
+    $phoneData = build_phone_fields_from_props($props, $phoneProperties, $preferredPrimary);
 
     // Log phone extraction details for debugging (no PII - just property presence)
     $phonePropPresence = [];
@@ -375,6 +375,7 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneP
       'contact_idx' => $diag['contacts_fetch']['ok'],
       'props_requested' => $allProps,
       'phone_prop_presence' => $phonePropPresence,
+      'preferred_primary' => $preferredPrimary,
       'primary' => $phoneData['primary'] !== '' ? '(has value)' : '(empty)',
       'additional_count' => count($phoneData['additional']),
     ];
@@ -397,7 +398,7 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneP
  * Fetch company details by HubSpot company IDs
  * Mirrors hs_fetch_contacts_by_ids pattern
  */
-function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phoneProperties = [], &$diag = []) {
+function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phoneProperties = [], &$diag = [], ?string $preferredPrimary = null) {
   $companies = [];
   $diag['companies_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
@@ -419,7 +420,7 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
     }
 
     $props = $json['properties'] ?? [];
-    $phoneData = build_phone_fields_from_props($props, $phoneProperties);
+    $phoneData = build_phone_fields_from_props($props, $phoneProperties, $preferredPrimary);
 
     // Log phone extraction details for debugging (no PII - just property presence)
     $phonePropPresence = [];
@@ -432,6 +433,7 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
       'company_idx' => $diag['companies_fetch']['ok'],
       'props_requested' => $allProps,
       'phone_prop_presence' => $phonePropPresence,
+      'preferred_primary' => $preferredPrimary,
       'primary' => $phoneData['primary'] !== '' ? '(has value)' : '(empty)',
       'additional_count' => count($phoneData['additional']),
     ];
@@ -455,14 +457,14 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
  * Wrapper with token refresh retry for companies
  * Mirrors hs_fetch_contacts_with_refresh_retry pattern
  */
-function hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, array $companyIds, array $phoneProperties = [], &$diag = []) {
-  $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $phoneProperties, $diag);
+function hs_fetch_companies_with_refresh_retry($client_id, $hs, $hsAccess, array $companyIds, array $phoneProperties = [], &$diag = [], ?string $preferredPrimary = null) {
+  $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $phoneProperties, $diag, $preferredPrimary);
 
   // Retry with refresh if 401
   if (empty($companies) && ($diag['companies_fetch']['last_http'] ?? null) === 401) {
     $hs = hs_refresh_access_token_or_fail($client_id, $hs);
     $hsAccess = $hs['access_token'];
-    $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $phoneProperties, $diag);
+    $companies = hs_fetch_companies_by_ids($hsAccess, $companyIds, $phoneProperties, $diag, $preferredPrimary);
   }
 
   return $companies;
