@@ -12,7 +12,7 @@ const CRM_REGISTRY = [
     id: "salesforce",
     displayName: "Salesforce",
     level: 2,
-    hostMatch: "lightning.force.com",
+    hostMatch: ["lightning.force.com", "salesforce.com", "my.salesforce.com"],
   },
   {
     id: "zoho",

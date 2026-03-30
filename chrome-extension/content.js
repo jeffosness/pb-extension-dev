@@ -29,7 +29,8 @@ function detectCrmContext() {
   let crmName = host;
 
   for (const crm of CRM_REGISTRY) {
-    if (crm.hostMatch && host.includes(crm.hostMatch)) {
+    const matches = Array.isArray(crm.hostMatch) ? crm.hostMatch : [crm.hostMatch];
+    if (matches.some((m) => m && host.includes(m))) {
       crmId = crm.id;
       level = crm.level || 1;
       crmName = crm.displayName || host;

@@ -101,7 +101,8 @@ function detectCrmFromUrl(tabUrl) {
   }
   // Look up all other CRMs from shared registry
   for (const crm of CRM_REGISTRY) {
-    if (crm.hostMatch && host.includes(crm.hostMatch)) {
+    const matches = Array.isArray(crm.hostMatch) ? crm.hostMatch : [crm.hostMatch];
+    if (matches.some((m) => m && host.includes(m))) {
       return { host, path, crmId: crm.id, crmName: crm.displayName, level: crm.level || 1 };
     }
   }
