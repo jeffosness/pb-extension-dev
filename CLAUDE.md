@@ -114,8 +114,8 @@
 
 | Level  | Method                | CRMs                         | Capabilities                                 |
 | ------ | --------------------- | ---------------------------- | -------------------------------------------- |
-| **L1** | Generic HTML scraping | Salesforce, Zoho, Monday.com | Extract from HTML tables/ARIA grids          |
-| **L2** | CRM-specific scraping | Pipedrive                    | Custom DOM selectors per CRM                 |
+| **L1** | Generic HTML scraping | Zoho, Monday.com             | Extract from HTML tables/ARIA grids          |
+| **L2** | CRM-specific scraping | Salesforce, Pipedrive        | Custom DOM selectors per CRM                 |
 | **L3** | Full API integration  | HubSpot                      | OAuth + server-side API calls + associations |
 
 **Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
