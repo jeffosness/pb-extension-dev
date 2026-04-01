@@ -217,6 +217,16 @@ function extractPhoneFromRowFallback(row, currentPhone) {
       return anchor.innerText.trim();
   }
 
+  // Check button/a aria-labels for phone numbers (e.g. "Call +1 555-123-4567")
+  const phoneEl = row.querySelector(
+    'button[aria-label*="Call "], a[aria-label*="Call "]',
+  );
+  if (phoneEl) {
+    const label = phoneEl.getAttribute("aria-label") || "";
+    const m = label.match(/Call\s+([\d+\s()\-.]+)/i);
+    if (m && looksLikePhone(m[1])) return m[1].trim();
+  }
+
   return currentPhone;
 }
 
@@ -658,6 +668,77 @@ function scanPipedriveContacts(maxContacts = 500) {
 }
 
 // ============================================================================
+//  🧩 CLOSE-SPECIFIC SCANNER (LEVEL 2)
+// ============================================================================
+
+function scanCloseContacts(maxContacts) {
+  maxContacts = maxContacts || 500;
+  // Close.com uses hashed CSS class names that change between deploys.
+  // We rely on stable selectors: tr[data-index], a[href], button[aria-label].
+  var rows = document.querySelectorAll("tr[data-index]");
+  if (!rows.length) return [];
+
+  var selectedRows = [];
+  var allRows = [];
+
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (row.getAttribute("aria-hidden") === "true") continue;
+    allRows.push(row);
+    var cb = row.querySelector('input[type="checkbox"]');
+    if (cb && cb.checked) selectedRows.push(row);
+  }
+
+  var rowsToScan = selectedRows.length ? selectedRows : allRows;
+  var contacts = [];
+
+  for (var j = 0; j < rowsToScan.length; j++) {
+    if (contacts.length >= maxContacts) break;
+    var r = rowsToScan[j];
+
+    // Name + Record URL + Contact ID from the lead/contact link
+    var nameLink = r.querySelector('a[href*="/lead/"]');
+    var name = nameLink ? nameLink.textContent.trim() : "";
+
+    var recordUrl = null;
+    var contactId = null;
+    if (nameLink) {
+      try {
+        var href = nameLink.getAttribute("href") || "";
+        recordUrl = new URL(href, window.location.origin).href;
+        var cidMatch = href.match(/contactId=([^&\s]+)/);
+        if (cidMatch) contactId = cidMatch[1];
+      } catch (e) {}
+    }
+
+    // Phone from button aria-label: "Call +1 339-201-9830"
+    var phone = "";
+    var phoneBtn = r.querySelector('button[aria-label^="Call "]');
+    if (phoneBtn) {
+      var label = phoneBtn.getAttribute("aria-label") || "";
+      var m = label.match(/Call\s+([\d+\s()\-.]+)/);
+      if (m) phone = m[1].trim();
+    }
+
+    if (!name && !phone) continue;
+
+    contacts.push({
+      name: name,
+      phone: phone,
+      email: "",
+      source_url: window.location.href,
+      source_label: document.title || "",
+      record_url: recordUrl,
+      crm_identifier: contactId,
+      row_index: parseInt(r.getAttribute("data-index"), 10) || 0,
+    });
+  }
+
+  console.log("[PB-CRM] Close contacts extracted:", contacts.length);
+  return contacts;
+}
+
+// ============================================================================
 //  🧩 SALESFORCE-SPECIFIC SCANNER (LEVEL 2 with virtual scrolling support)
 // ============================================================================
 
@@ -811,6 +892,8 @@ async function scanPageForContacts() {
     contacts = scanMondayContacts();
   } else if (crmId === "pipedrive") {
     contacts = scanPipedriveContacts();
+  } else if (crmId === "close") {
+    contacts = scanCloseContacts();
   } else if (crmId === "salesforce") {
     // Use specialized Salesforce scanner with virtual scrolling support
     contacts = await scanSalesforceContactsWithSelection();
