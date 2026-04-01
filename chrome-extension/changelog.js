@@ -16,6 +16,13 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.5.1": {
+    title: "What's New in v0.5.1",
+    items: [
+      "Added Close CRM support — scan contacts and launch dial sessions directly from Close",
+      "Improved phone number detection for CRMs that display phone in button labels"
+    ]
+  },
   "0.5.0": {
     title: "What's New in v0.5.0",
     items: [

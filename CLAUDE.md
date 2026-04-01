@@ -115,7 +115,7 @@
 | Level  | Method                | CRMs                         | Capabilities                                 |
 | ------ | --------------------- | ---------------------------- | -------------------------------------------- |
 | **L1** | Generic HTML scraping | Zoho, Monday.com             | Extract from HTML tables/ARIA grids          |
-| **L2** | CRM-specific scraping | Salesforce, Pipedrive        | Custom DOM selectors per CRM                 |
+| **L2** | CRM-specific scraping | Salesforce, Pipedrive, Close | Custom DOM selectors per CRM                 |
 | **L3** | Full API integration  | HubSpot                      | OAuth + server-side API calls + associations |
 
 **Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
@@ -1043,7 +1043,7 @@ server/public/api/crm/{provider}/
 
 3. **Verify no regressions**
    - Test both L1/L2 (generic scan) and L3 (HubSpot) flows
-   - Test existing CRMs (BnTouch, Pipedrive, HubSpot)
+   - Test existing CRMs (BnTouch, Pipedrive, Close, HubSpot)
    - Verify existing sessions still work
 
 ---
@@ -1285,55 +1285,63 @@ All token files must include:
 
 ### Adding L1/L2 Provider (HTML Scraping)
 
-**Step 1:** Add to CRM registry in `content.js`
+**Step 1:** Add to CRM registry in `crm_config.js`
 
 ```javascript
-const CRM_REGISTRY = [
-  {
-    id: "mynewcrm",
-    displayName: "My New CRM",
-    level: 2,
-    match: (host) => host.includes("mycrm.example.com"),
-  },
-  // ...
-];
-```
-
-**Step 2:** Implement scanner function
-
-```javascript
-function scanMyNewCrmContacts() {
-  // Find table/list in DOM
-  const rows = document.querySelectorAll(".crm-table tr");
-
-  return Array.from(rows)
-    .map((row) => ({
-      name: row.querySelector(".name").textContent,
-      phone: row.querySelector(".phone").textContent,
-      email: row.querySelector(".email").textContent,
-      record_url: row.querySelector("a").href,
-      crm_identifier: extractIdFromUrl(row.querySelector("a").href),
-    }))
-    .filter((c) => c.phone || c.email); // Must have contact method
+// crm_config.js — shared registry (injected into both background.js and content.js)
+{
+  id: "mynewcrm",
+  displayName: "My New CRM",
+  level: 2,                        // 1 = generic, 2 = CRM-specific selectors
+  hostMatch: "mynewcrm.com",       // String or array of strings to match hostname
 }
 ```
 
-**Step 3:** Add to dispatcher
+**Step 2:** Implement scanner function in `content.js`
 
 ```javascript
-function scanPageForContacts() {
-  // ...
-  if (crmId === "mynewcrm") {
-    contacts = scanMyNewCrmContacts();
-  }
-  // ...
+function scanMyNewCrmContacts(maxContacts) {
+  maxContacts = maxContacts || 500;
+  var rows = document.querySelectorAll("tr[data-index]");  // Use stable selectors
+  if (!rows.length) return [];
+
+  // ... extract name, phone, email, record_url, crm_identifier from each row
+  // Return array of contact objects (see existing scanners for pattern)
 }
 ```
 
-**Step 4:** Test via generic endpoint
+**Step 3:** Add to dispatcher in `scanPageForContacts()`
+
+```javascript
+} else if (crmId === "mynewcrm") {
+  contacts = scanMyNewCrmContacts();
+}
+```
+
+**Step 4:** Test incrementally — reload extension after EACH file change
 
 - Use `/api/crm/generic/dialsession_from_scan.php`
 - No server changes needed (generic endpoint handles all L1/L2)
+
+**⚠️ Content Script Safety Rules (learned the hard way):**
+
+1. **Test one file at a time** — Edit `crm_config.js` first, reload, verify popup loads. Then edit `content.js`, reload, verify again. A broken content script silently kills the entire extension (popup hangs on "Loading...") with no console errors.
+2. **Avoid advanced CSS selectors** in `querySelector` — No case-insensitive `i` flag (`[attr*="val" i]`), no `:has()`, no CSS4 features. Stick to basic attribute selectors (`^=`, `*=`, `=`).
+3. **Avoid unicode escapes in regex** — Use literal characters or simpler patterns instead of `\u2013` etc.
+4. **Use stable DOM selectors** — Avoid hashed/minified class names (e.g., `_hcsbn_134`). Prefer `[data-*]` attributes, `[aria-label]`, `[role]`, semantic HTML tags, and `[href*="pattern"]`.
+5. **`node -c content.js`** validates JS syntax but NOT CSS selector validity — bad selectors only fail at runtime in the browser.
+
+**Close.com L2 Scanner Reference (v0.5.1):**
+
+| Data | Stable Selector | Notes |
+|------|----------------|-------|
+| Rows | `tr[data-index]` | Skip `aria-hidden="true"` placeholders |
+| Name | `a[href*="/lead/"]` textContent | Link contains both lead and contact IDs |
+| Phone | `button[aria-label^="Call "]` | Parse phone from aria-label, not cell text |
+| Contact ID | `href` hash: `#contactId=cont_xxx` | Use as `crm_identifier` |
+| Record URL | Full `href` from name link | Resolve relative with `new URL(href, origin)` |
+| Email | Not available in table view | Close hides email behind disabled icon buttons |
+| Selection | `input[type="checkbox"]` checked state | If any checked, scan only those rows |
 
 ### Adding L3 Provider (Full API Integration)
 

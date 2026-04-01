@@ -32,4 +32,10 @@ const CRM_REGISTRY = [
     level: 2,
     hostMatch: "pipedrive.com",
   },
+  {
+    id: "close",
+    displayName: "Close",
+    level: 2,
+    hostMatch: "close.com",
+  },
 ];
