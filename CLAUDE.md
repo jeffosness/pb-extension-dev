@@ -115,8 +115,8 @@
 | Level  | Method                | CRMs                         | Capabilities                                 |
 | ------ | --------------------- | ---------------------------- | -------------------------------------------- |
 | **L1** | Generic HTML scraping | Zoho, Monday.com             | Extract from HTML tables/ARIA grids          |
-| **L2** | CRM-specific scraping | Salesforce, Pipedrive, Close | Custom DOM selectors per CRM                 |
-| **L3** | Full API integration  | HubSpot                      | OAuth + server-side API calls + associations |
+| **L2** | CRM-specific scraping | Salesforce, Pipedrive        | Custom DOM selectors per CRM                 |
+| **L3** | Full API integration  | HubSpot, Close               | OAuth + server-side API calls + call logging |
 
 **Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
 
@@ -203,11 +203,22 @@ server/public/api/crm/
 ├── generic/
 │   └── dialsession_from_scan.php    # L1/L2: Accepts scraped contacts
 │
-└── hubspot/                         # L3: Full API integration
-    ├── oauth_hs_start.php           # OAuth flow initiation
-    ├── oauth_hs_finish.php          # OAuth callback handler
+├── hubspot/                         # L3: Full API integration
+│   ├── oauth_hs_start.php           # OAuth flow initiation
+│   ├── oauth_hs_finish.php          # OAuth callback handler
+│   ├── oauth_disconnect.php         # Disconnect
+│   ├── hs_helpers.php               # Shared HubSpot API functions
+│   ├── pb_dialsession_selection.php # Dial from selected records
+│   ├── pb_dialsession_from_list.php # Dial from saved list
+│   ├── hs_lists.php                 # Fetch user's lists
+│   └── state.php                    # Connection status
+│
+└── close/                           # L3: Close CRM integration
+    ├── oauth_close_start.php        # OAuth flow initiation
+    ├── oauth_close_finish.php       # OAuth callback handler
     ├── oauth_disconnect.php         # Disconnect
-    ├── pb_dialsession_selection.php # Dial from selected records
+    ├── close_helpers.php            # Shared Close API functions
+    ├── pb_dialsession_selection.php  # Dial from contacts/leads
     └── state.php                    # Connection status
 ```
 
@@ -1216,6 +1227,8 @@ Chrome extension message types (handled in `background.js`):
 - `CLEAR_PAT` — Clear PAT
 - `START_FOLLOW_SESSION` — Register follow-me session
 - `STOP_FOLLOW_SESSION` — Unregister follow-me
+- `CLOSE_LAUNCH_FROM_SELECTED` — Launch Close dial from visible/selected contacts
+- `CLOSE_GET_SELECTED_IDS` — Content script extracts Close contact/lead IDs from DOM
 
 **Rule:** Changing message types requires updating all handlers.
 
@@ -1331,94 +1344,128 @@ function scanMyNewCrmContacts(maxContacts) {
 4. **Use stable DOM selectors** — Avoid hashed/minified class names (e.g., `_hcsbn_134`). Prefer `[data-*]` attributes, `[aria-label]`, `[role]`, semantic HTML tags, and `[href*="pattern"]`.
 5. **`node -c content.js`** validates JS syntax but NOT CSS selector validity — bad selectors only fail at runtime in the browser.
 
-**Close.com L2 Scanner Reference (v0.5.1):**
+**Close.com DOM Reference (used by L3 ID extraction in content.js):**
 
 | Data | Stable Selector | Notes |
 |------|----------------|-------|
 | Rows | `tr[data-index]` | Skip `aria-hidden="true"` placeholders |
-| Name | `a[href*="/lead/"]` textContent | Link contains both lead and contact IDs |
+| Name | `a[href*="/lead/"]` textContent | Link contains lead ID; contacts page also has `#contactId=cont_xxx` |
 | Phone | `button[aria-label^="Call "]` | Parse phone from aria-label, not cell text |
-| Contact ID | `href` hash: `#contactId=cont_xxx` | Use as `crm_identifier` |
-| Record URL | Full `href` from name link | Resolve relative with `new URL(href, origin)` |
-| Email | Not available in table view | Close hides email behind disabled icon buttons |
-| Selection | `input[type="checkbox"]` checked state | If any checked, scan only those rows |
+| Contact ID | `href` hash: `#contactId=cont_xxx` | Only on `/contacts/` page, NOT on `/leads/` page |
+| Lead ID | `href` path: `/lead/lead_xxx/` | On both `/contacts/` and `/leads/` pages |
+| Selection | `input[type="checkbox"]` checked state | If any checked, use only those rows |
+
+**Close.com L3 API Reference (v0.5.2):**
+
+| Endpoint | Purpose | Notes |
+|----------|---------|-------|
+| `GET /api/v1/contact/{id}/` | Fetch full contact (phones[], emails[], name) | Returns arrays not flat fields |
+| `GET /api/v1/contact/?lead_id=lead_xxx` | Get contacts for a lead | Used when launched from `/leads/` page |
+| `GET /api/v1/me/` | Verify token + get org info | Used by state.php |
+| `POST /api/v1/activity/call/` | Log call activity | Requires `lead_id`, `contact_id`, `<body>` wrapped note_html |
+| `POST /api/v1/activity/note/` | Create note on lead | Used for user-entered call notes |
+| `POST /oauth2/token/` | Exchange code or refresh token | Access tokens expire in 3600s |
+
+**Close data model:** Leads contain Contacts. `name` is a single field (split on first space for first/last). Phones and emails are arrays of `{phone, type}` and `{email, type}`.
 
 ### Adding L3 Provider (Full API Integration)
 
-**Step 1:** Create provider directory
+**Reference implementations:** HubSpot (`/api/crm/hubspot/`), Close (`/api/crm/close/`)
 
+#### Phase 1: Server-Side Foundation
+
+**1a. Token management in `utils.php`** — Add 4 functions following the exact pattern:
+```php
+function {provider}_token_path(string $client_id): string    // ensure_dir_secure() + path
+function save_{provider}_tokens($client_id, array $tokens)   // atomic_write_json + saved_at
+function load_{provider}_tokens($client_id)                  // returns array or null
+function clear_{provider}_tokens($client_id)                 // unlink file
+```
+
+**1b. Create provider directory** with these files:
+```
+server/public/api/crm/{provider}/
+├── {provider}_helpers.php           # API calls, token refresh, contact fetching
+├── oauth_{provider}_start.php       # Build auth URL, return via api_ok_flat()
+├── oauth_{provider}_finish.php      # Exchange code, save tokens, return HTML page
+├── oauth_disconnect.php             # Clear tokens
+├── state.php                        # Return {provider}_ready flag
+└── pb_dialsession_selection.php     # Fetch contacts, create PB session
+```
+
+**1c. Critical patterns for OAuth finish page:**
+- Define `PB_BOOTSTRAP_NO_JSON` BEFORE `require_once bootstrap.php`
+- Return HTML (not JSON) — it's a browser redirect target
+- Use `state` parameter to carry `client_id` through OAuth
+- Set security headers: `Cache-Control: no-store`, `X-Frame-Options: DENY`
+- Subtract 60s from `expires_at` to refresh tokens early
+
+**1d. Add config keys** to `config.sample.php` and the server's `config.php`:
+```php
+'{PROVIDER}_CLIENT_ID' => '...',
+'{PROVIDER}_CLIENT_SECRET' => '...',
+```
+
+**1e. Create tokens directory on server:**
 ```bash
-mkdir -p server/public/api/crm/mynewcrm
+sudo mkdir -p /var/lib/pb-extension-dev/tokens/{provider}
+sudo chown www-data:www-data /var/lib/pb-extension-dev/tokens/{provider}
+sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 ```
 
-**Step 2:** Implement OAuth flow
+#### Phase 2: Extension-Side
 
-```php
-// oauth_mynewcrm_start.php
-$auth_url = "https://mynewcrm.com/oauth/authorize?" . http_build_query([
-  'client_id' => cfg('MYNEWCRM_CLIENT_ID'),
-  'redirect_uri' => cfg('BASE_URL') . '/api/crm/mynewcrm/oauth_mynewcrm_finish.php',
-  'scope' => 'contacts.read',
-  'state' => $client_id,
-]);
-api_ok_flat(['auth_url' => $auth_url]);
+**2a. `crm_config.js`** — Set `level: 3` (or upgrade from 2→3)
 
-// oauth_mynewcrm_finish.php
-$code = $_GET['code'] ?? null;
-$token_response = http_post('https://mynewcrm.com/oauth/token', [
-  'grant_type' => 'authorization_code',
-  'code' => $code,
-  'client_id' => cfg('MYNEWCRM_CLIENT_ID'),
-  'client_secret' => cfg('MYNEWCRM_CLIENT_SECRET'),
-]);
-atomic_write_json(mynewcrm_token_path($client_id), $token_response);
-```
+**2b. `content.js`** — Two changes:
+- Add `|| crmId === "{provider}"` to the L3 guard in `scanPageForContacts()`
+- Add `{PROVIDER}_GET_SELECTED_IDS` message handler to extract record IDs from DOM
 
-**Step 3:** Implement token refresh
+**2c. `background.js`** — Add `{PROVIDER}_LAUNCH_FROM_SELECTED` handler:
+- Find active CRM tab
+- Send `{PROVIDER}_GET_SELECTED_IDS` to content script
+- POST IDs to server's `pb_dialsession_selection.php`
+- Register follow session + open PB dial window
 
-```php
-function mynewcrm_refresh_access_token_or_fail($client_id) {
-  $token = load_mynewcrm_token($client_id);
-  // Refresh logic...
-  atomic_write_json(mynewcrm_token_path($client_id), $refreshed);
-  return $refreshed['access_token'];
-}
-```
+**2d. `popup.js`** — Add:
+- `{PROVIDER}_STATE` global object
+- `is{Provider}L3(ctx)` detection function
+- `check{Provider}ConnectionState()` — calls state.php
+- `start{Provider}OAuth()` / `disconnect{Provider}()` — OAuth flow
+- `launch{Provider}DialSession()` — sends launch message
+- `refresh{Provider}DialUi()` — updates button state
+- Update `applyContextVisibility()` to show/hide CRM cards
+- Add event listeners in DOMContentLoaded
 
-**Step 4:** Implement dial session creation
+**2e. `popup.html`** — Add dial card and settings card (both `class="hidden"` by default)
 
-```php
-// pb_dialsession_selection.php
-$access_token = mynewcrm_refresh_access_token_or_fail($client_id);
+#### Phase 3: Call Logging (in `webhooks/call_done.php`)
 
-// Fetch contacts from CRM API
-$contacts = mynewcrm_fetch_contacts($object_ids, $access_token);
+**Critical lessons learned from Close integration:**
 
-// Normalize to common format
-$normalized = array_map(function($c) {
-  return [
-    'name' => $c['full_name'],
-    'phone' => $c['phone_number'],
-    'email' => $c['email_address'],
-    'crm_name' => 'mynewcrm',
-    'record_url' => $c['url'],
-    'crm_identifier' => $c['id'],
-  ];
-}, $contacts);
+1. **Use the payload's `contact.external_id` to identify the called contact**, NOT `$state['current']`. The `contact_displayed` webhook for the NEXT contact fires BEFORE `call_done` for the current call, so `$state['current']` points to the wrong person.
 
-// Use shared dial session creation logic
-$pb_response = pb_create_dialsession($pat, $normalized, $contactsMap);
-// ... return with temp_code
-```
+2. **Use direct curl**, not `{provider}_helpers.php` functions. The webhook context doesn't include `bootstrap.php`, so functions that call `api_error()` or `cfg()` will fail. Exception: `cfg()` is available since it's in `utils.php`.
 
-**Step 5:** Update extension detection
+3. **Handle token refresh inline** for long dial sessions (>1 hour). Use direct curl to the token endpoint rather than the helper's refresh function.
 
-```javascript
-// In background.js → detectCrmFromUrl()
-if (host.includes("mynewcrm.example.com")) {
-  return { crmId: "mynewcrm", crmName: "My New CRM", level: 3 };
-}
-```
+4. **Close API requires `<body>` tags** in `note_html` fields. Always wrap: `<body><p>...</p></body>`.
+
+5. **Include `call_notes` from the payload** — these are user-entered notes during the call. Create both a call activity note AND a separate Note activity if notes exist.
+
+6. **Wrap everything in try/catch** — webhook must always return 200 OK to PhoneBurner. Log errors but never block.
+
+#### Lessons Learned from Close L3 Implementation
+
+| Lesson | Details |
+|--------|---------|
+| **Leads vs Contacts pages** | Close's Leads page links don't include contactId in the URL. Must extract lead IDs and resolve to contact IDs via API (`GET /contact/?lead_id=lead_xxx`). |
+| **`pb_call_dialsession()` is shared** | Moved from hs_helpers.php to utils.php. All L3 providers use it. |
+| **Content script safety** | Test ONE file at a time. A broken content.js silently kills the entire extension with no console errors. |
+| **`hsPost()` is misnamed** | It's a generic server POST helper used by both HubSpot and Close. Consider renaming to `apiPost()` in future. |
+| **Rate limit all endpoints** | Every new PHP endpoint needs `rate_limit_or_fail()`. |
+| **OAuth app setup** | Redirect URI must match EXACTLY between start.php and the OAuth app config. |
+| **Follow-me works automatically** | If `contacts_map` has correct `record_url` values, SSE follow-me navigation works without additional code. |
 
 ---
 
