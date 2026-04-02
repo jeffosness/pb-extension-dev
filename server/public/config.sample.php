@@ -38,5 +38,10 @@ return [
   'HS_CLIENT_SECRET' => 'Client_Secret',
   'HS_SCOPES' => 'crm.objects.contacts.read crm.lists.read crm.objects.deals.read crm.objects.companies.read crm.schemas.contacts.read crm.schemas.companies.read',
 
+  // Close OAuth credentials (create app at https://app.close.com/settings/developer/)
+  // Redirect URI: {BASE_URL}/api/crm/close/oauth_close_finish.php
+  'CLOSE_CLIENT_ID' => 'Client_ID',
+  'CLOSE_CLIENT_SECRET' => 'Client_Secret',
+
 ];
 

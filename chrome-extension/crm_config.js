@@ -35,7 +35,7 @@ const CRM_REGISTRY = [
   {
     id: "close",
     displayName: "Close",
-    level: 2,
+    level: 3,
     hostMatch: "close.com",
   },
 ];

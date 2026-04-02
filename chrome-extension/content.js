@@ -881,8 +881,8 @@ async function scanSalesforceContactsWithSelection(maxMs = 10000) {
 async function scanPageForContacts() {
   const crmId = CURRENT_CRM_CONTEXT?.crmId || "generic";
 
-  // 🚫 HubSpot must NOT use generic scanning (standalone parity uses selected IDs + server fetch)
-  if (crmId === "hubspot") return [];
+  // 🚫 L3 CRMs must NOT use generic scanning (they use selected IDs + server fetch)
+  if (crmId === "hubspot" || crmId === "close") return [];
 
   let contacts = [];
 
@@ -892,8 +892,6 @@ async function scanPageForContacts() {
     contacts = scanMondayContacts();
   } else if (crmId === "pipedrive") {
     contacts = scanPipedriveContacts();
-  } else if (crmId === "close") {
-    contacts = scanCloseContacts();
   } else if (crmId === "salesforce") {
     // Use specialized Salesforce scanner with virtual scrolling support
     contacts = await scanSalesforceContactsWithSelection();
@@ -1875,6 +1873,52 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // --- Required for ensureContentScript() ping test ---
   if (msg?.type === "PING") {
     sendResponse({ ok: true });
+    return true;
+  }
+
+  // --- Close L3 contact ID extraction ---
+  if (msg && msg.type === "CLOSE_GET_SELECTED_IDS") {
+    try {
+      var ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+      if (ctx.crmId !== "close") {
+        sendResponse({ error: "Not on a Close page." });
+        return true;
+      }
+
+      // Reuse the Close scanner logic to get contact IDs from DOM
+      var rows = document.querySelectorAll("tr[data-index]");
+      var selectedIds = [];
+      var allIds = [];
+
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        if (row.getAttribute("aria-hidden") === "true") continue;
+
+        var link = row.querySelector('a[href*="/lead/"]');
+        if (!link) continue;
+
+        var href = link.getAttribute("href") || "";
+        var cidMatch = href.match(/contactId=([^&\s]+)/);
+        if (!cidMatch) continue;
+
+        var contactId = cidMatch[1];
+        allIds.push(contactId);
+
+        var cb = row.querySelector('input[type="checkbox"]');
+        if (cb && cb.checked) selectedIds.push(contactId);
+      }
+
+      // If any are checked, use only those; otherwise use all visible
+      var ids = selectedIds.length > 0 ? selectedIds : allIds;
+
+      sendResponse({
+        ids: ids,
+        url: window.location.href,
+        title: document.title || "",
+      });
+    } catch (e) {
+      sendResponse({ error: e && e.message ? e.message : String(e) });
+    }
     return true;
   }
 

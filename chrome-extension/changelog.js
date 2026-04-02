@@ -16,6 +16,13 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.5.2": {
+    title: "What's New in v0.5.2",
+    items: [
+      "Close CRM full integration — connect your Close account via OAuth for complete contact data including emails",
+      "Launch dial sessions from Close with automatic phone and email fetching from the Close API"
+    ]
+  },
   "0.5.1": {
     title: "What's New in v0.5.1",
     items: [
