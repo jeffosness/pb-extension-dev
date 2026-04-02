@@ -246,11 +246,12 @@ if (($state['crm_name'] ?? '') === 'close') {
                     }
 
                     if ($closeLeadId !== '' && $closeContactId !== '') {
-                        // Build note from PB status
-                        $noteHtml = '<p>Call via PhoneBurner: ' . htmlspecialchars($status ?: 'Unknown') . '</p>';
+                        // Build note from PB status (Close requires single root element)
+                        $noteBody = 'Call via PhoneBurner: ' . htmlspecialchars($status ?: 'Unknown');
                         if (($lastCall['duration'] ?? 0) > 0) {
-                            $noteHtml .= '<p>Duration: ' . (int)$lastCall['duration'] . ' seconds</p>';
+                            $noteBody .= ' — Duration: ' . (int)$lastCall['duration'] . 's';
                         }
+                        $noteHtml = '<p>' . $noteBody . '</p>';
 
                         $callData = [
                             'lead_id'    => $closeLeadId,
