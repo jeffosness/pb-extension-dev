@@ -227,15 +227,21 @@ if (($state['crm_name'] ?? '') === 'close') {
                     }
                 }
 
-                // Find the current contact's Close IDs from contacts_map
-                $currentContact = $state['current'] ?? [];
-                $lookupKey = $currentContact['lookup_key'] ?? null;
-                $mapEntry = ($lookupKey && isset($state['contacts_map'][$lookupKey]))
-                    ? $state['contacts_map'][$lookupKey]
+                // Find the CALLED contact from the call_done payload, NOT from
+                // $state['current'] (which is already the NEXT contact from contact_displayed)
+                $calledExternalId = trim((string)(
+                    $payload['contact']['external_id'] ??
+                    $payload['external_id'] ??
+                    ''
+                ));
+
+                // Look up in contacts_map using the payload's external_id
+                $mapEntry = ($calledExternalId !== '' && isset($state['contacts_map'][$calledExternalId]))
+                    ? $state['contacts_map'][$calledExternalId]
                     : null;
 
                 if ($mapEntry) {
-                    $closeContactId = $mapEntry['crm_identifier'] ?? '';
+                    $closeContactId = $calledExternalId;
                     $closePhone = $mapEntry['phone'] ?? '';
 
                     // Extract lead_id from record_url
