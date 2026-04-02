@@ -1885,10 +1885,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
       }
 
-      // Reuse the Close scanner logic to get contact IDs from DOM
+      // Extract IDs from DOM — supports both Contacts page (has contactId in URL)
+      // and Leads page (only has lead_xxx in URL path)
       var rows = document.querySelectorAll("tr[data-index]");
-      var selectedIds = [];
-      var allIds = [];
+      var selectedContactIds = [];
+      var allContactIds = [];
+      var selectedLeadIds = [];
+      var allLeadIds = [];
 
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i];
@@ -1898,21 +1901,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!link) continue;
 
         var href = link.getAttribute("href") || "";
-        var cidMatch = href.match(/contactId=([^&\s]+)/);
-        if (!cidMatch) continue;
-
-        var contactId = cidMatch[1];
-        allIds.push(contactId);
-
         var cb = row.querySelector('input[type="checkbox"]');
-        if (cb && cb.checked) selectedIds.push(contactId);
+        var isChecked = cb && cb.checked;
+
+        // Try contact ID first (Contacts page: /lead/lead_xxx/#contactId=cont_xxx)
+        var cidMatch = href.match(/contactId=([^&\s]+)/);
+        if (cidMatch) {
+          allContactIds.push(cidMatch[1]);
+          if (isChecked) selectedContactIds.push(cidMatch[1]);
+          continue;
+        }
+
+        // Fall back to lead ID (Leads page: /lead/lead_xxx/)
+        var lidMatch = href.match(/\/lead\/(lead_[a-zA-Z0-9]+)/);
+        if (lidMatch) {
+          allLeadIds.push(lidMatch[1]);
+          if (isChecked) selectedLeadIds.push(lidMatch[1]);
+        }
       }
 
-      // If any are checked, use only those; otherwise use all visible
-      var ids = selectedIds.length > 0 ? selectedIds : allIds;
+      // Prefer contact IDs if available, otherwise use lead IDs
+      var contactIds = selectedContactIds.length > 0 ? selectedContactIds : allContactIds;
+      var leadIds = selectedLeadIds.length > 0 ? selectedLeadIds : allLeadIds;
 
       sendResponse({
-        ids: ids,
+        ids: contactIds,
+        lead_ids: leadIds,
+        id_type: contactIds.length > 0 ? "contact" : "lead",
         url: window.location.href,
         title: document.title || "",
       });

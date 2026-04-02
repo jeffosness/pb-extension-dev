@@ -36,20 +36,62 @@ if ($accessToken === '') {
 }
 
 $contactIds = $data['contact_ids'] ?? [];
+$leadIds    = $data['lead_ids'] ?? [];
 $context    = $data['context'] ?? [];
 
-if (!is_array($contactIds) || empty($contactIds)) {
-  api_error('No contact IDs provided', 'bad_request', 400);
-}
+if (!is_array($contactIds)) $contactIds = [];
+if (!is_array($leadIds)) $leadIds = [];
 
-// Sanitize IDs (Close format: cont_XXXXX)
+// Sanitize contact IDs (Close format: cont_XXXXX)
 $contactIds = array_values(array_filter(array_map(function($id) {
   $id = trim((string)$id);
   return preg_match('/^cont_[a-zA-Z0-9]+$/', $id) ? $id : '';
 }, $contactIds)));
 
+// Sanitize lead IDs (Close format: lead_XXXXX)
+$leadIds = array_values(array_filter(array_map(function($id) {
+  $id = trim((string)$id);
+  return preg_match('/^lead_[a-zA-Z0-9]+$/', $id) ? $id : '';
+}, $leadIds)));
+
+if (empty($contactIds) && empty($leadIds)) {
+  api_error('No contact or lead IDs provided', 'bad_request', 400);
+}
+
+// -----------------------------------------------------------------------------
+// If we have lead IDs (from /leads/ page), resolve to contact IDs via Close API
+// -----------------------------------------------------------------------------
+if (!empty($leadIds) && empty($contactIds)) {
+  $resolvedContactIds = [];
+  foreach ($leadIds as $lid) {
+    if (count($resolvedContactIds) >= 500) break;
+
+    $url = 'https://api.close.com/api/v1/contact/?lead_id=' . rawurlencode($lid);
+    list($code, $json, $_raw) = close_api_get_json($accessToken, $url);
+
+    // Retry once on 401
+    if ($code === 401) {
+      $closeTokens = close_refresh_access_token_or_fail($client_id, $closeTokens);
+      $accessToken = (string)($closeTokens['access_token'] ?? '');
+      list($code, $json, $_raw) = close_api_get_json($accessToken, $url);
+    }
+
+    if ($code === 200 && is_array($json) && isset($json['data'])) {
+      foreach ($json['data'] as $contact) {
+        $cid = (string)($contact['id'] ?? '');
+        if ($cid !== '' && count($resolvedContactIds) < 500) {
+          $resolvedContactIds[] = $cid;
+        }
+      }
+    }
+  }
+  $contactIds = $resolvedContactIds;
+}
+
 if (empty($contactIds)) {
-  api_error('No valid Close contact IDs after sanitization', 'bad_request', 400);
+  api_error('No contacts found for the selected leads', 'bad_request', 400, [
+    'lead_ids_provided' => count($leadIds),
+  ]);
 }
 
 // Cap at 500 contacts
@@ -58,10 +100,11 @@ if (count($contactIds) > 500) {
 }
 
 // -----------------------------------------------------------------------------
-// Fetch contacts from Close API
+// Fetch full contact details from Close API
 // -----------------------------------------------------------------------------
 $diag = [
-  'selected_ids' => count($contactIds),
+  'selected_contact_ids' => count($contactIds),
+  'lead_ids_resolved' => !empty($leadIds) ? count($leadIds) : 0,
 ];
 
 $closeContacts = close_fetch_contacts_with_refresh_retry(

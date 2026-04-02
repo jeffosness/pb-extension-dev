@@ -777,19 +777,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
         }
 
-        const ids = Array.isArray(selected.ids) ? selected.ids : [];
-        if (!ids.length)
+        const contactIds = Array.isArray(selected.ids) ? selected.ids : [];
+        const leadIds = Array.isArray(selected.lead_ids) ? selected.lead_ids : [];
+
+        if (!contactIds.length && !leadIds.length)
           return sendResponse({
             ok: false,
-            error: "No contacts found on this page.",
+            error: "No contacts or leads found on this page.",
           });
 
         const resp = await api("crm/close/pb_dialsession_selection.php", {
-          contact_ids: ids,
+          contact_ids: contactIds,
+          lead_ids: leadIds,
           context: {
             url: selected.url || closeTab.url || null,
             title: selected.title || null,
-            selectedCount: ids.length,
+            selectedCount: contactIds.length || leadIds.length,
           },
         });
 
