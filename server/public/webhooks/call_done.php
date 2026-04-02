@@ -281,12 +281,19 @@ if (($state['crm_name'] ?? '') === 'close') {
                         $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
                         curl_close($ch);
 
-                        log_msg('close_call_log: ' . json_encode([
+                        $logData = [
                             'http_code'   => $httpCode,
                             'success'     => ($httpCode >= 200 && $httpCode < 300),
                             'lead_id'     => $closeLeadId,
+                            'contact_id'  => $closeContactId,
                             'pb_status'   => $status,
-                        ]));
+                        ];
+                        // Include Close error response for debugging 400s
+                        if ($httpCode >= 400 && $rawResp) {
+                            $errBody = json_decode($rawResp, true);
+                            $logData['close_error'] = is_array($errBody) ? $errBody : substr($rawResp, 0, 500);
+                        }
+                        log_msg('close_call_log: ' . json_encode($logData));
                     }
                 }
             }
