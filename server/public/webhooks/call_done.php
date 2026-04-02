@@ -252,12 +252,20 @@ if (($state['crm_name'] ?? '') === 'close') {
                     }
 
                     if ($closeLeadId !== '' && $closeContactId !== '') {
-                        // Build note from PB status (Close requires single root element)
-                        $noteBody = 'Call via PhoneBurner: ' . htmlspecialchars($status ?: 'Unknown');
+                        // Collect call_notes from PB payload (user-entered notes during this call)
+                        $callNotes = $payload['call_notes'] ?? [];
+                        if (!is_array($callNotes)) $callNotes = [];
+                        $callNotes = array_filter(array_map('trim', $callNotes));
+
+                        // Build call activity note (Close requires <body> wrapper)
+                        $noteParts = ['Call via PhoneBurner: ' . htmlspecialchars($status ?: 'Unknown')];
                         if (($lastCall['duration'] ?? 0) > 0) {
-                            $noteBody .= ' — Duration: ' . (int)$lastCall['duration'] . 's';
+                            $noteParts[] = 'Duration: ' . (int)$lastCall['duration'] . 's';
                         }
-                        $noteHtml = '<body><p>' . $noteBody . '</p></body>';
+                        if (!empty($callNotes)) {
+                            $noteParts[] = 'Notes: ' . htmlspecialchars(implode(' | ', $callNotes));
+                        }
+                        $noteHtml = '<body><p>' . implode(' — ', $noteParts) . '</p></body>';
 
                         $callData = [
                             'lead_id'    => $closeLeadId,
@@ -269,24 +277,31 @@ if (($state['crm_name'] ?? '') === 'close') {
                             'note_html'  => $noteHtml,
                         ];
 
-                        // Direct curl POST — avoids close_helpers.php which depends
-                        // on bootstrap.php functions (api_error, cfg) not available
-                        // in webhook context
-                        $ch = curl_init('https://api.close.com/api/v1/activity/call/');
-                        curl_setopt_array($ch, [
-                            CURLOPT_RETURNTRANSFER => true,
-                            CURLOPT_POST           => true,
-                            CURLOPT_POSTFIELDS     => json_encode($callData),
-                            CURLOPT_HTTPHEADER     => [
-                                'Authorization: Bearer ' . $closeAccess,
-                                'Content-Type: application/json',
-                                'Accept: application/json',
-                            ],
-                            CURLOPT_TIMEOUT => 10,
-                        ]);
-                        $rawResp = curl_exec($ch);
-                        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                        curl_close($ch);
+                        // Helper: POST JSON to Close API
+                        $closePost = function($url, $body) use ($closeAccess) {
+                            $ch = curl_init($url);
+                            curl_setopt_array($ch, [
+                                CURLOPT_RETURNTRANSFER => true,
+                                CURLOPT_POST           => true,
+                                CURLOPT_POSTFIELDS     => json_encode($body),
+                                CURLOPT_HTTPHEADER     => [
+                                    'Authorization: Bearer ' . $closeAccess,
+                                    'Content-Type: application/json',
+                                    'Accept: application/json',
+                                ],
+                                CURLOPT_TIMEOUT => 10,
+                            ]);
+                            $raw = curl_exec($ch);
+                            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                            curl_close($ch);
+                            return [$code, $raw];
+                        };
+
+                        // 1) Log call activity
+                        list($httpCode, $rawResp) = $closePost(
+                            'https://api.close.com/api/v1/activity/call/',
+                            $callData
+                        );
 
                         $logData = [
                             'http_code'   => $httpCode,
@@ -294,13 +309,31 @@ if (($state['crm_name'] ?? '') === 'close') {
                             'lead_id'     => $closeLeadId,
                             'contact_id'  => $closeContactId,
                             'pb_status'   => $status,
+                            'has_notes'   => !empty($callNotes),
                         ];
-                        // Include Close error response for debugging 400s
                         if ($httpCode >= 400 && $rawResp) {
                             $errBody = json_decode($rawResp, true);
                             $logData['close_error'] = is_array($errBody) ? $errBody : substr($rawResp, 0, 500);
                         }
                         log_msg('close_call_log: ' . json_encode($logData));
+
+                        // 2) If user wrote notes, also create a separate Note activity on the lead
+                        if (!empty($callNotes)) {
+                            $noteBody = '<body><p>' . htmlspecialchars(implode("\n", $callNotes)) . '</p></body>';
+                            list($noteHttpCode, $noteRawResp) = $closePost(
+                                'https://api.close.com/api/v1/activity/note/',
+                                [
+                                    'lead_id'    => $closeLeadId,
+                                    'contact_id' => $closeContactId,
+                                    'note_html'  => $noteBody,
+                                ]
+                            );
+                            log_msg('close_note_log: ' . json_encode([
+                                'http_code' => $noteHttpCode,
+                                'success'   => ($noteHttpCode >= 200 && $noteHttpCode < 300),
+                                'lead_id'   => $closeLeadId,
+                            ]));
+                        }
                     }
                 }
             }
