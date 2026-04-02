@@ -170,4 +170,131 @@ if (isset($payload['agent']) && isset($payload['agent']['user_id'])) {
 
 save_session_state($session_token, $state);
 
+// -----------------------------------------------------------------------------
+// Close CRM: log call activity back to Close (fire-and-forget, non-blocking)
+// -----------------------------------------------------------------------------
+if (($state['crm_name'] ?? '') === 'close') {
+    try {
+        $closeClientId = $state['client_id'] ?? '';
+        if ($closeClientId !== '') {
+            $closeTokens = load_close_tokens($closeClientId);
+            if (is_array($closeTokens) && !empty($closeTokens['access_token'])) {
+                $closeAccess = (string)$closeTokens['access_token'];
+
+                // Refresh token if expired (dial sessions can last > 1 hour)
+                $closeExpiresAt = isset($closeTokens['expires_at']) ? (int)$closeTokens['expires_at'] : 0;
+                if ($closeExpiresAt > 0 && time() >= $closeExpiresAt) {
+                    $closeRefresh = $closeTokens['refresh_token'] ?? '';
+                    if ($closeRefresh !== '') {
+                        $closeCfg = cfg();
+                        $refreshResp = null;
+                        $ch = curl_init('https://api.close.com/oauth2/token/');
+                        curl_setopt_array($ch, [
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_POST           => true,
+                            CURLOPT_POSTFIELDS     => http_build_query([
+                                'grant_type'    => 'refresh_token',
+                                'client_id'     => $closeCfg['CLOSE_CLIENT_ID'] ?? '',
+                                'client_secret' => $closeCfg['CLOSE_CLIENT_SECRET'] ?? '',
+                                'refresh_token' => $closeRefresh,
+                            ]),
+                            CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
+                            CURLOPT_TIMEOUT => 10,
+                        ]);
+                        $refreshRaw = curl_exec($ch);
+                        $refreshCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        curl_close($ch);
+
+                        if ($refreshCode >= 200 && $refreshCode < 300 && $refreshRaw) {
+                            $refreshResp = json_decode($refreshRaw, true);
+                        }
+
+                        if (is_array($refreshResp) && !empty($refreshResp['access_token'])) {
+                            $closeAccess = (string)$refreshResp['access_token'];
+                            // Preserve refresh_token if not returned
+                            if (empty($refreshResp['refresh_token'])) {
+                                $refreshResp['refresh_token'] = $closeRefresh;
+                            }
+                            $now = time();
+                            $expiresIn = isset($refreshResp['expires_in']) ? (int)$refreshResp['expires_in'] : 3600;
+                            $refreshResp['created_at'] = $now;
+                            $refreshResp['expires_at'] = $now + max(0, $expiresIn - 60);
+                            save_close_tokens($closeClientId, $refreshResp);
+                            log_msg('close_call_log_token_refresh: success');
+                        } else {
+                            log_msg('close_call_log_token_refresh: failed (http=' . $refreshCode . ')');
+                        }
+                    }
+                }
+
+                // Find the current contact's Close IDs from contacts_map
+                $currentContact = $state['current'] ?? [];
+                $lookupKey = $currentContact['lookup_key'] ?? null;
+                $mapEntry = ($lookupKey && isset($state['contacts_map'][$lookupKey]))
+                    ? $state['contacts_map'][$lookupKey]
+                    : null;
+
+                if ($mapEntry) {
+                    $closeContactId = $mapEntry['crm_identifier'] ?? '';
+                    $closePhone = $mapEntry['phone'] ?? '';
+
+                    // Extract lead_id from record_url
+                    $closeLeadId = '';
+                    $recordUrl = $mapEntry['record_url'] ?? '';
+                    if (preg_match('/\/lead\/(lead_[a-zA-Z0-9]+)/', $recordUrl, $m)) {
+                        $closeLeadId = $m[1];
+                    }
+
+                    if ($closeLeadId !== '' && $closeContactId !== '') {
+                        // Build note from PB status
+                        $noteHtml = '<p>Call via PhoneBurner: ' . htmlspecialchars($status ?: 'Unknown') . '</p>';
+                        if (($lastCall['duration'] ?? 0) > 0) {
+                            $noteHtml .= '<p>Duration: ' . (int)$lastCall['duration'] . ' seconds</p>';
+                        }
+
+                        $callData = [
+                            'lead_id'    => $closeLeadId,
+                            'contact_id' => $closeContactId,
+                            'direction'  => 'outbound',
+                            'status'     => 'completed',
+                            'duration'   => (int)($lastCall['duration'] ?? 0),
+                            'phone'      => $closePhone,
+                            'note_html'  => $noteHtml,
+                        ];
+
+                        // Direct curl POST — avoids close_helpers.php which depends
+                        // on bootstrap.php functions (api_error, cfg) not available
+                        // in webhook context
+                        $ch = curl_init('https://api.close.com/api/v1/activity/call/');
+                        curl_setopt_array($ch, [
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_POST           => true,
+                            CURLOPT_POSTFIELDS     => json_encode($callData),
+                            CURLOPT_HTTPHEADER     => [
+                                'Authorization: Bearer ' . $closeAccess,
+                                'Content-Type: application/json',
+                                'Accept: application/json',
+                            ],
+                            CURLOPT_TIMEOUT => 10,
+                        ]);
+                        $rawResp = curl_exec($ch);
+                        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        curl_close($ch);
+
+                        log_msg('close_call_log: ' . json_encode([
+                            'http_code'   => $httpCode,
+                            'success'     => ($httpCode >= 200 && $httpCode < 300),
+                            'lead_id'     => $closeLeadId,
+                            'pb_status'   => $status,
+                        ]));
+                    }
+                }
+            }
+        }
+    } catch (\Throwable $e) {
+        // Non-blocking: log error but don't fail the webhook
+        log_msg('close_call_log_error: ' . $e->getMessage());
+    }
+}
+
 echo 'OK';
