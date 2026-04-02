@@ -251,7 +251,7 @@ if (($state['crm_name'] ?? '') === 'close') {
                         if (($lastCall['duration'] ?? 0) > 0) {
                             $noteBody .= ' — Duration: ' . (int)$lastCall['duration'] . 's';
                         }
-                        $noteHtml = '<p>' . $noteBody . '</p>';
+                        $noteHtml = '<body><p>' . $noteBody . '</p></body>';
 
                         $callData = [
                             'lead_id'    => $closeLeadId,
