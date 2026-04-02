@@ -521,21 +521,5 @@ function hs_resolve_contact_ids_map_from_objects($accessToken, $objectType, arra
 }
 
 
-// -----------------------------------------------------------------------------
-// PhoneBurner API compatibility wrapper (unified projects vary)
-// -----------------------------------------------------------------------------
-function pb_call_dialsession($pat, array $payload) {
-  // Prefer pb_api_call if present
-  if (function_exists('pb_api_call')) {
-    return pb_api_call($pat, 'POST', '/dialsession', $payload); // [info, resp]
-  }
-
-  // Some unified codebases expose pb_api($pat, $method, $path, $payload)
-  if (function_exists('pb_api')) {
-    $resp = pb_api($pat, 'POST', '/dialsession', $payload);
-    // Try to emulate pb_api_call return shape
-    return [['http_code' => is_array($resp) && isset($resp['_http_code']) ? (int)$resp['_http_code'] : 200], $resp];
-  }
-
-  api_error('PhoneBurner API helper not found (pb_api_call/pb_api)', 'server_error', 500);
-}
+// pb_call_dialsession() has been moved to utils.php (shared by all L3 providers).
+// The function_exists guard ensures backward compatibility if utils.php is loaded first.

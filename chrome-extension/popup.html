@@ -438,6 +438,15 @@
           </button>
         </div>
 
+        <!-- Close CRM (Level 3) -->
+        <div id="close-dial-card" class="card hidden">
+          <div class="card-title">
+            Close CRM <span class="pill">Level 3</span>
+          </div>
+          <div id="close-dial-status" class="status"></div>
+          <button id="close-dial-action" class="primary" data-mode="">Loading…</button>
+        </div>
+
         <!-- HubSpot Lists (any page when both PB + HS connected) -->
         <div id="hs-list-card" class="card hidden">
           <div class="card-title">HubSpot Lists</div>
@@ -501,6 +510,17 @@
             for this browser session.
           </div>
           <button id="hs-disconnect" class="danger">Disconnect HubSpot</button>
+        </div>
+
+        <!-- Close Settings (only when Close is connected) -->
+        <div id="close-settings-card" class="card hidden">
+          <div class="card-title">Close Connection</div>
+          <div id="close-settings-status" class="status"></div>
+          <div class="help-text mt-10">
+            Disconnecting removes the saved Close authorization on the server
+            for this browser session.
+          </div>
+          <button id="close-disconnect" class="danger">Disconnect Close</button>
         </div>
 
         <div class="card">

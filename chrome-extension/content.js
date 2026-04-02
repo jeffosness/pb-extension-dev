@@ -881,8 +881,8 @@ async function scanSalesforceContactsWithSelection(maxMs = 10000) {
 async function scanPageForContacts() {
   const crmId = CURRENT_CRM_CONTEXT?.crmId || "generic";
 
-  // 🚫 HubSpot must NOT use generic scanning (standalone parity uses selected IDs + server fetch)
-  if (crmId === "hubspot") return [];
+  // 🚫 L3 CRMs must NOT use generic scanning (they use selected IDs + server fetch)
+  if (crmId === "hubspot" || crmId === "close") return [];
 
   let contacts = [];
 
@@ -892,8 +892,6 @@ async function scanPageForContacts() {
     contacts = scanMondayContacts();
   } else if (crmId === "pipedrive") {
     contacts = scanPipedriveContacts();
-  } else if (crmId === "close") {
-    contacts = scanCloseContacts();
   } else if (crmId === "salesforce") {
     // Use specialized Salesforce scanner with virtual scrolling support
     contacts = await scanSalesforceContactsWithSelection();
@@ -1875,6 +1873,67 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // --- Required for ensureContentScript() ping test ---
   if (msg?.type === "PING") {
     sendResponse({ ok: true });
+    return true;
+  }
+
+  // --- Close L3 contact ID extraction ---
+  if (msg && msg.type === "CLOSE_GET_SELECTED_IDS") {
+    try {
+      var ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+      if (ctx.crmId !== "close") {
+        sendResponse({ error: "Not on a Close page." });
+        return true;
+      }
+
+      // Extract IDs from DOM — supports both Contacts page (has contactId in URL)
+      // and Leads page (only has lead_xxx in URL path)
+      var rows = document.querySelectorAll("tr[data-index]");
+      var selectedContactIds = [];
+      var allContactIds = [];
+      var selectedLeadIds = [];
+      var allLeadIds = [];
+
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        if (row.getAttribute("aria-hidden") === "true") continue;
+
+        var link = row.querySelector('a[href*="/lead/"]');
+        if (!link) continue;
+
+        var href = link.getAttribute("href") || "";
+        var cb = row.querySelector('input[type="checkbox"]');
+        var isChecked = cb && cb.checked;
+
+        // Try contact ID first (Contacts page: /lead/lead_xxx/#contactId=cont_xxx)
+        var cidMatch = href.match(/contactId=([^&\s]+)/);
+        if (cidMatch) {
+          allContactIds.push(cidMatch[1]);
+          if (isChecked) selectedContactIds.push(cidMatch[1]);
+          continue;
+        }
+
+        // Fall back to lead ID (Leads page: /lead/lead_xxx/)
+        var lidMatch = href.match(/\/lead\/(lead_[a-zA-Z0-9]+)/);
+        if (lidMatch) {
+          allLeadIds.push(lidMatch[1]);
+          if (isChecked) selectedLeadIds.push(lidMatch[1]);
+        }
+      }
+
+      // Prefer contact IDs if available, otherwise use lead IDs
+      var contactIds = selectedContactIds.length > 0 ? selectedContactIds : allContactIds;
+      var leadIds = selectedLeadIds.length > 0 ? selectedLeadIds : allLeadIds;
+
+      sendResponse({
+        ids: contactIds,
+        lead_ids: leadIds,
+        id_type: contactIds.length > 0 ? "contact" : "lead",
+        url: window.location.href,
+        title: document.title || "",
+      });
+    } catch (e) {
+      sendResponse({ error: e && e.message ? e.message : String(e) });
+    }
     return true;
   }
 

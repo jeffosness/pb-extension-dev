@@ -337,6 +337,7 @@ async function requestOptionalPermissionForActiveSiteBestEffort() {
 let ACTIVE_CTX = null;
 let PB_CONNECTED = false;
 let HS_STATE = { connected: false, portalId: null };
+let CLOSE_STATE = { connected: false };
 
 function setCrmHeader(context) {
   ACTIVE_CTX = context || null;
@@ -364,6 +365,10 @@ function isHubSpotL3(ctx) {
   return !!(ctx && ctx.crmId === "hubspot" && ctx.level === 3);
 }
 
+function isCloseL3(ctx) {
+  return !!(ctx && ctx.crmId === "close" && ctx.level === 3);
+}
+
 function applyContextVisibility(ctx, pbConnected) {
   const currentPageCard = $("card-current-page");
   const hsDialCard = $("hubspot-dial-card");
@@ -371,11 +376,12 @@ function applyContextVisibility(ctx, pbConnected) {
   const hsListCard = $("hs-list-card");
 
   const isHS = isHubSpotL3(ctx);
+  const isClose = isCloseL3(ctx);
   const pageType = ctx?.pageType || "other";
   const bothAuth = pbConnected && HS_STATE.connected;
 
-  // Scan & Launch: any non-HubSpot page (generic scanner may work on obscure CRMs)
-  setVisible(currentPageCard, !isHS);
+  // Scan & Launch: any non-L3 page (generic scanner may work on obscure CRMs)
+  setVisible(currentPageCard, !isHS && !isClose);
 
   // Selection card: HS list pages only
   setVisible(hsDialCard, isHS && pageType === "list");
@@ -394,6 +400,26 @@ function applyContextVisibility(ctx, pbConnected) {
   if (HS_STATE.connected) {
     if (settingsStatus) settingsStatus.textContent = "Connected ✔";
     if (disconnectBtn) disconnectBtn.disabled = false;
+  }
+
+  // Close CRM cards
+  const closeDialCard = $("close-dial-card");
+  const closeSettingsCard = $("close-settings-card");
+  // Close dial card: show on Close pages
+  setVisible(closeDialCard, isClose);
+
+  // Close settings card: show when Close is connected
+  setVisible(closeSettingsCard, CLOSE_STATE.connected);
+  if (CLOSE_STATE.connected) {
+    const closeSettingsStatus = $("close-settings-status");
+    const closeDisconnectBtn = $("close-disconnect");
+    if (closeSettingsStatus) closeSettingsStatus.textContent = "Connected ✔";
+    if (closeDisconnectBtn) closeDisconnectBtn.disabled = false;
+  }
+
+  // Populate Close dial card
+  if (isClose) {
+    refreshCloseDialUi();
   }
 
   // Populate active cards
@@ -1085,6 +1111,109 @@ async function disconnectHubSpot() {
 }
 
 // ---------------------------
+// Close CRM connection
+// ---------------------------
+
+async function checkCloseConnectionState() {
+  try {
+    const state = await hsPost("crm/close/state.php");
+    CLOSE_STATE.connected = !!state?.close_ready;
+  } catch (e) {
+    CLOSE_STATE.connected = false;
+  }
+  return CLOSE_STATE.connected;
+}
+
+async function startCloseOAuth() {
+  const status = $("close-dial-status");
+  if (status) status.textContent = "Starting Close connection…";
+
+  const resp = await hsPost("crm/close/oauth_close_start.php");
+  const authUrl = resp?.auth_url;
+
+  if (!authUrl) {
+    if (status) status.textContent = "Could not start Close OAuth.";
+    await showAlert("Server did not return auth_url. Check server logs.");
+    return;
+  }
+
+  chrome.tabs.create({ url: authUrl });
+  window.close();
+}
+
+async function disconnectClose() {
+  const confirmed = await showConfirm("Disconnect Close for this session?");
+  if (!confirmed) return;
+
+  const btn = $("close-disconnect");
+  const settingsStatus = $("close-settings-status");
+  if (btn) btn.disabled = true;
+  if (settingsStatus) settingsStatus.textContent = "Disconnecting…";
+
+  const resp = await hsPost("crm/close/oauth_disconnect.php");
+
+  if (!resp || resp.ok !== true) {
+    const errorMsg = getErrorMessage(resp, "Failed to disconnect Close.");
+    if (settingsStatus) settingsStatus.textContent = "Failed to disconnect.";
+    if (btn) btn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  CLOSE_STATE.connected = false;
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+  activateTab("dial");
+}
+
+function refreshCloseDialUi() {
+  const btn = $("close-dial-action");
+  const status = $("close-dial-status");
+
+  if (!CLOSE_STATE.connected) {
+    if (btn) {
+      btn.textContent = "Connect Close";
+      btn.dataset.mode = "connect";
+      btn.disabled = false;
+    }
+    if (status) status.textContent = "Connect Close to launch dial sessions with full contact data.";
+  } else if (!PB_CONNECTED) {
+    if (btn) {
+      btn.textContent = "Launch Dial Session";
+      btn.disabled = true;
+    }
+    if (status) status.textContent = "Save your PhoneBurner PAT first.";
+  } else {
+    if (btn) {
+      btn.textContent = "Launch Dial Session";
+      btn.dataset.mode = "launch";
+      btn.disabled = false;
+    }
+    if (status) status.textContent = "";
+  }
+}
+
+async function launchCloseDialSession() {
+  const btn = $("close-dial-action");
+  const status = $("close-dial-status");
+
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = "Launching dial session…";
+
+  const resp = await sendToBackground({ type: "CLOSE_LAUNCH_FROM_SELECTED" });
+
+  if (!resp || !resp.ok) {
+    const errorMsg = getErrorMessage(resp, "Failed to launch dial session.");
+    if (status) status.textContent = "";
+    if (btn) btn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  if (status) status.textContent = "Dial session launched!";
+  window.close();
+}
+
+// ---------------------------
 // PhoneBurner PAT UI (keep your existing handlers)
 // ---------------------------
 
@@ -1315,6 +1444,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("hs-phone-pref")?.addEventListener("change", onPhonePrefChange);
   $("hs-disconnect")?.addEventListener("click", disconnectHubSpot);
 
+  // Close CRM
+  $("close-dial-action")?.addEventListener("click", async () => {
+    if ($("close-dial-action")?.dataset?.mode === "connect") return startCloseOAuth();
+    return launchCloseDialSession();
+  });
+  $("close-disconnect")?.addEventListener("click", disconnectClose);
+
   // Tabs
   $("tab-dial")?.addEventListener("click", () => activateTab("dial"));
   $("tab-settings")?.addEventListener("click", () => activateTab("settings"));
@@ -1343,6 +1479,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3. Check HS connection (always, even on non-HS pages — needed for list card)
   await checkHubSpotConnectionState();
+
+  // 3b. Check Close connection
+  await checkCloseConnectionState();
 
   // 4. Apply context-aware visibility
   applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);

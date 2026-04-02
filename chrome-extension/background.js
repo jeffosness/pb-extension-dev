@@ -738,6 +738,97 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       // -------------------------
+      // Close L3: launch from selected contacts
+      // -------------------------
+      if (msg.type === "CLOSE_LAUNCH_FROM_SELECTED") {
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const closeTab = (tabs || []).find((t) =>
+          (t.url || "").includes("close.com"),
+        );
+        if (!closeTab || !closeTab.id) {
+          return sendResponse({
+            ok: false,
+            error: "Open a Close page with contacts visible.",
+          });
+        }
+
+        await ensureContentScript(closeTab.id);
+
+        const selected = await new Promise((resolve) => {
+          chrome.tabs.sendMessage(
+            closeTab.id,
+            { type: "CLOSE_GET_SELECTED_IDS" },
+            { frameId: 0 },
+            (res) => {
+              if (chrome.runtime.lastError)
+                return resolve({ error: chrome.runtime.lastError.message });
+              resolve(res);
+            },
+          );
+        });
+
+        if (!selected || selected.error) {
+          return sendResponse({
+            ok: false,
+            error: selected?.error || "Could not read Close contacts.",
+          });
+        }
+
+        const contactIds = Array.isArray(selected.ids) ? selected.ids : [];
+        const leadIds = Array.isArray(selected.lead_ids) ? selected.lead_ids : [];
+
+        if (!contactIds.length && !leadIds.length)
+          return sendResponse({
+            ok: false,
+            error: "No contacts or leads found on this page.",
+          });
+
+        const resp = await api("crm/close/pb_dialsession_selection.php", {
+          contact_ids: contactIds,
+          lead_ids: leadIds,
+          context: {
+            url: selected.url || closeTab.url || null,
+            title: selected.title || null,
+            selectedCount: contactIds.length || leadIds.length,
+          },
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session.",
+            details: resp,
+          });
+        }
+
+        await registerSessionForTab(closeTab.id, sessionToken, tempCode, BASE_URL);
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
       // Level 1/2: scanned -> server -> dialsession
       // -------------------------
       if (msg.type === "SCANNED_CONTACTS") {

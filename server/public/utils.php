@@ -312,7 +312,65 @@ function clear_hs_tokens($client_id)
     }
 }
 
+// -------------------------------------------------------------------------
+// Close token helpers (per client_id)
+// -------------------------------------------------------------------------
 
+function close_token_path(string $client_id): string
+{
+    $dir = tokens_base_dir() . '/close';
+    ensure_dir_secure($dir);
+    return $dir . '/' . $client_id . '.json';
+}
+
+function save_close_tokens($client_id, array $tokens)
+{
+    $client_id = (string)$client_id;
+    $path = close_token_path($client_id);
+
+    $tokens['saved_at'] = date('c');
+    atomic_write_json($path, $tokens);
+}
+
+function load_close_tokens($client_id)
+{
+    $client_id = (string)$client_id;
+    $path = close_token_path($client_id);
+
+    if (!is_file($path)) {
+        return null;
+    }
+
+    $data = json_decode(@file_get_contents($path), true);
+    return is_array($data) ? $data : null;
+}
+
+function clear_close_tokens($client_id)
+{
+    $client_id = (string)$client_id;
+    $path = close_token_path($client_id);
+
+    if (is_file($path)) {
+        @unlink($path);
+    }
+}
+
+
+
+// -------------------------------------------------------------------------
+// PhoneBurner API: create dial session (shared by all L3 providers)
+// -------------------------------------------------------------------------
+
+function pb_call_dialsession($pat, array $payload) {
+  if (function_exists('pb_api_call')) {
+    return pb_api_call($pat, 'POST', '/dialsession', $payload);
+  }
+  if (function_exists('pb_api')) {
+    $resp = pb_api($pat, 'POST', '/dialsession', $payload);
+    return [['http_code' => is_array($resp) && isset($resp['_http_code']) ? (int)$resp['_http_code'] : 200], $resp];
+  }
+  api_error('PhoneBurner API helper not found (pb_api_call/pb_api)', 'server_error', 500);
+}
 
 function get_user_settings_dir()
 {
