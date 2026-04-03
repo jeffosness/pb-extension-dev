@@ -336,12 +336,15 @@ if (($state['crm_name'] ?? '') === 'close') {
                         );
 
                         $logData = [
-                            'http_code'   => $httpCode,
-                            'success'     => ($httpCode >= 200 && $httpCode < 300),
-                            'lead_id'     => $closeLeadId,
-                            'contact_id'  => $closeContactId,
-                            'pb_status'   => $status,
-                            'has_notes'   => !empty($callNotes),
+                            'http_code'      => $httpCode,
+                            'success'        => ($httpCode >= 200 && $httpCode < 300),
+                            'lead_id'        => $closeLeadId,
+                            'contact_id'     => $closeContactId,
+                            'pb_status'      => $status,
+                            'pb_connected'   => $payload['connected'] ?? null,
+                            'disposition'    => $closeDisposition,
+                            'has_notes'      => !empty($callNotes),
+                            'has_recording'  => isset($callData['recording_url']),
                         ];
                         if ($httpCode >= 400 && $rawResp) {
                             $errBody = json_decode($rawResp, true);
