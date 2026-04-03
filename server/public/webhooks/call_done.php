@@ -257,35 +257,57 @@ if (($state['crm_name'] ?? '') === 'close') {
                         if (!is_array($callNotes)) $callNotes = [];
                         $callNotes = array_filter(array_map('trim', $callNotes));
 
-                        // Recording link (public URL, no auth required)
+                        // Recording URL (Close requires HTTPS; PB provides HTTP — upgrade)
                         $recordingUrl = trim((string)($payload['recording_url_public'] ?? ''));
-                        // TODO: Check user setting to include/exclude recording link
-                        // For now, always include if available
+                        if ($recordingUrl !== '' && strpos($recordingUrl, 'http://') === 0) {
+                            $recordingUrl = 'https://' . substr($recordingUrl, 7);
+                        }
+                        // TODO: Check user setting to include/exclude recording
                         $includeRecording = true;
+
+                        // Map PB status/connected to Close disposition
+                        $pbStatusLower = strtolower($status);
+                        $pbConnected = strtolower((string)($payload['connected'] ?? '0'));
+                        $closeDisposition = null;
+
+                        if (strpos($pbStatusLower, 'voicemail') !== false || strpos($pbStatusLower, 'left message') !== false) {
+                            $closeDisposition = 'vm-left';
+                        } elseif (strpos($pbStatusLower, 'live voicemail') !== false) {
+                            $closeDisposition = 'vm-answer';
+                        } elseif (strpos($pbStatusLower, 'busy') !== false) {
+                            $closeDisposition = 'busy';
+                        } elseif (strpos($pbStatusLower, 'bad number') !== false || strpos($pbStatusLower, 'bad_number') !== false) {
+                            $closeDisposition = 'error';
+                        } elseif (strpos($pbStatusLower, 'no answer') !== false || strpos($pbStatusLower, 'did not answer') !== false) {
+                            $closeDisposition = 'no-answer';
+                        } elseif ($pbConnected === '1') {
+                            $closeDisposition = 'answered';
+                        } else {
+                            $closeDisposition = 'no-answer';
+                        }
 
                         // Build call activity note (Close requires <body> wrapper)
                         $noteParts = ['Call via PhoneBurner: ' . htmlspecialchars($status ?: 'Unknown')];
-                        if (($lastCall['duration'] ?? 0) > 0) {
-                            $noteParts[] = 'Duration: ' . (int)$lastCall['duration'] . 's';
-                        }
                         if (!empty($callNotes)) {
                             $noteParts[] = 'Notes: ' . htmlspecialchars(implode(' | ', $callNotes));
                         }
-                        $noteBody = '<p>' . implode(' — ', $noteParts) . '</p>';
-                        if ($includeRecording && $recordingUrl !== '') {
-                            $noteBody .= '<p><a href="' . htmlspecialchars($recordingUrl) . '">Listen to recording</a></p>';
-                        }
-                        $noteHtml = '<body>' . $noteBody . '</body>';
+                        $noteHtml = '<body><p>' . implode(' — ', $noteParts) . '</p></body>';
 
                         $callData = [
                             'lead_id'    => $closeLeadId,
                             'contact_id' => $closeContactId,
                             'direction'  => 'outbound',
                             'status'     => 'completed',
+                            'disposition' => $closeDisposition,
                             'duration'   => (int)($lastCall['duration'] ?? 0),
                             'phone'      => $closePhone,
                             'note_html'  => $noteHtml,
                         ];
+
+                        // Use Close's native recording_url field (must be HTTPS)
+                        if ($includeRecording && $recordingUrl !== '' && strpos($recordingUrl, 'https://') === 0) {
+                            $callData['recording_url'] = $recordingUrl;
+                        }
 
                         // Helper: POST JSON to Close API
                         $closePost = function($url, $body) use ($closeAccess) {
