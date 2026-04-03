@@ -271,11 +271,11 @@ if (($state['crm_name'] ?? '') === 'close') {
                         if (!empty($callNotes)) {
                             $noteParts[] = 'Notes: ' . htmlspecialchars(implode(' | ', $callNotes));
                         }
-                        $noteBody = implode(' — ', $noteParts);
+                        $noteBody = '<p>' . implode(' — ', $noteParts) . '</p>';
                         if ($includeRecording && $recordingUrl !== '') {
-                            $noteBody .= '<br><a href="' . htmlspecialchars($recordingUrl) . '">Listen to recording</a>';
+                            $noteBody .= '<p><a href="' . htmlspecialchars($recordingUrl) . '">Listen to recording</a></p>';
                         }
-                        $noteHtml = '<body><p>' . $noteBody . '</p></body>';
+                        $noteHtml = '<body>' . $noteBody . '</body>';
 
                         $callData = [
                             'lead_id'    => $closeLeadId,
