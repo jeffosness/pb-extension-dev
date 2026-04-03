@@ -293,19 +293,22 @@ if (($state['crm_name'] ?? '') === 'close') {
                         }
                         $noteHtml = '<body><p>' . implode(' — ', $noteParts) . '</p></body>';
 
+                        // Only include recording for answered calls
+                        $callWasAnswered = ($closeDisposition === 'answered');
+
                         $callData = [
-                            'lead_id'    => $closeLeadId,
-                            'contact_id' => $closeContactId,
-                            'direction'  => 'outbound',
-                            'status'     => 'completed',
+                            'lead_id'     => $closeLeadId,
+                            'contact_id'  => $closeContactId,
+                            'direction'   => 'outbound',
                             'disposition' => $closeDisposition,
-                            'duration'   => (int)($lastCall['duration'] ?? 0),
-                            'phone'      => $closePhone,
-                            'note_html'  => $noteHtml,
+                            'duration'    => (int)($lastCall['duration'] ?? 0),
+                            'phone'       => $closePhone,
+                            'note_html'   => $noteHtml,
                         ];
 
-                        // Use Close's native recording_url field (must be HTTPS)
-                        if ($includeRecording && $recordingUrl !== '' && strpos($recordingUrl, 'https://') === 0) {
+                        // Only include recording for answered calls (Close may override
+                        // disposition to "answered" if recording_url is present)
+                        if ($includeRecording && $callWasAnswered && $recordingUrl !== '' && strpos($recordingUrl, 'https://') === 0) {
                             $callData['recording_url'] = $recordingUrl;
                         }
 
