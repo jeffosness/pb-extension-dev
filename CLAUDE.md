@@ -1472,6 +1472,7 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 | **Follow-me works automatically** | If `contacts_map` has correct `record_url` values, SSE follow-me navigation works without additional code. |
 | **Recording links** | PB `call_done` payload includes `recording_url_public` — include as clickable link in CRM call activities. Plan for a user setting to toggle this per CRM. |
 | **Close HTML is strict** | No `<br>`, no multiple root elements without `<body>`. Always use `<body><p>...</p></body>`. Test HTML in the API before assuming standard HTML works. |
+| **Close ignores disposition on external calls** | API-created calls (`call_method: "external"`) always show `disposition: answered` regardless of what you send. PUT updates are also ignored. PB call status is preserved in `note_html` as the workaround. |
 
 ---
 
