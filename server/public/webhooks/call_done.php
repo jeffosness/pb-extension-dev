@@ -257,6 +257,12 @@ if (($state['crm_name'] ?? '') === 'close') {
                         if (!is_array($callNotes)) $callNotes = [];
                         $callNotes = array_filter(array_map('trim', $callNotes));
 
+                        // Recording link (public URL, no auth required)
+                        $recordingUrl = trim((string)($payload['recording_url_public'] ?? ''));
+                        // TODO: Check user setting to include/exclude recording link
+                        // For now, always include if available
+                        $includeRecording = true;
+
                         // Build call activity note (Close requires <body> wrapper)
                         $noteParts = ['Call via PhoneBurner: ' . htmlspecialchars($status ?: 'Unknown')];
                         if (($lastCall['duration'] ?? 0) > 0) {
@@ -265,7 +271,11 @@ if (($state['crm_name'] ?? '') === 'close') {
                         if (!empty($callNotes)) {
                             $noteParts[] = 'Notes: ' . htmlspecialchars(implode(' | ', $callNotes));
                         }
-                        $noteHtml = '<body><p>' . implode(' — ', $noteParts) . '</p></body>';
+                        $noteBody = implode(' — ', $noteParts);
+                        if ($includeRecording && $recordingUrl !== '') {
+                            $noteBody .= '<br><a href="' . htmlspecialchars($recordingUrl) . '">Listen to recording</a>';
+                        }
+                        $noteHtml = '<body><p>' . $noteBody . '</p></body>';
 
                         $callData = [
                             'lead_id'    => $closeLeadId,
