@@ -1453,7 +1453,11 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 
 5. **Include `call_notes` from the payload** — these are user-entered notes during the call. Create both a call activity note AND a separate Note activity if notes exist.
 
-6. **Wrap everything in try/catch** — webhook must always return 200 OK to PhoneBurner. Log errors but never block.
+6. **Include `recording_url_public` from the payload** — add as a clickable link in the call activity note. Currently always included; a `$includeRecording` flag in `call_done.php` is ready for a future user setting toggle. **TODO:** Add a per-user setting in extension Settings tab to let users enable/disable recording links per CRM.
+
+7. **Close HTML restrictions** — No `<br>` tags allowed (rejected as "Element content is not allowed"). Use multiple `<p>` tags inside `<body>` instead. Safe pattern: `<body><p>line 1</p><p>line 2</p></body>`.
+
+8. **Wrap everything in try/catch** — webhook must always return 200 OK to PhoneBurner. Log errors but never block.
 
 #### Lessons Learned from Close L3 Implementation
 
@@ -1466,6 +1470,8 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 | **Rate limit all endpoints** | Every new PHP endpoint needs `rate_limit_or_fail()`. |
 | **OAuth app setup** | Redirect URI must match EXACTLY between start.php and the OAuth app config. |
 | **Follow-me works automatically** | If `contacts_map` has correct `record_url` values, SSE follow-me navigation works without additional code. |
+| **Recording links** | PB `call_done` payload includes `recording_url_public` — include as clickable link in CRM call activities. Plan for a user setting to toggle this per CRM. |
+| **Close HTML is strict** | No `<br>`, no multiple root elements without `<body>`. Always use `<body><p>...</p></body>`. Test HTML in the API before assuming standard HTML works. |
 
 ---
 
@@ -1480,6 +1486,8 @@ When creating a PR that includes **user-facing changes** (new features, UI chang
 - [ ] Changelog items should be short, user-friendly descriptions (not technical details)
 - [ ] Only add changelog entries for features users interact with — skip for bug fixes, refactors, or internal changes
 - [ ] `PB_WELCOME` in `changelog.js` only needs updating if the onboarding flow or value proposition changes
+- [ ] Review `manifest.json` description (max 132 chars) — update if supported CRMs or headline features changed
+- [ ] Review `chrome-extension/STORE_LISTING.md` — update if the new feature warrants a listing change (new CRM, major capability, security model change). Not every release needs a listing update, but always consider it.
 
 **How it works:** On popup open, `checkChangelog()` compares the current manifest version against `pb_last_seen_version` in `chrome.storage.local`. First install shows the welcome modal. Version upgrades show the latest changelog entry. Same version = no modal.
 
