@@ -1439,25 +1439,55 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 
 **2e. `popup.html`** — Add dial card and settings card (both `class="hidden"` by default)
 
-#### Phase 3: Call Logging (in `webhooks/call_done.php`)
+#### Phase 3: Call Logging
 
-**Critical lessons learned from Close integration:**
+**Architecture:** `call_done.php` is a universal webhook handler — it MUST NOT contain provider-specific logic. Each L3 provider owns its call logging in a dedicated file:
 
-1. **Use the payload's `contact.external_id` to identify the called contact**, NOT `$state['current']`. The `contact_displayed` webhook for the NEXT contact fires BEFORE `call_done` for the current call, so `$state['current']` points to the wrong person.
+```
+server/public/api/crm/{provider}/{provider}_call_logger.php
+```
 
-2. **Use direct curl**, not `{provider}_helpers.php` functions. The webhook context doesn't include `bootstrap.php`, so functions that call `api_error()` or `cfg()` will fail. Exception: `cfg()` is available since it's in `utils.php`.
+The dispatcher in `call_done.php` is a simple switch:
+```php
+$crmName = $state['crm_name'] ?? '';
+if ($crmName === 'close') {
+    require_once __DIR__ . '/../api/crm/close/close_call_logger.php';
+    close_log_call($state, $payload, $lastCall, $status);
+}
+```
 
-3. **Handle token refresh inline** for long dial sessions (>1 hour). Use direct curl to the token endpoint rather than the helper's refresh function.
+**Call logger function contract:** Each provider implements:
+```php
+function {provider}_log_call(array $state, array $payload, array $lastCall, string $status): void
+```
 
-4. **Close API requires `<body>` tags** in `note_html` fields. Always wrap: `<body><p>...</p></body>`.
+Parameters available:
+- `$state` — session state with `client_id`, `contacts_map`, `crm_name`
+- `$payload` — raw PB webhook payload (contains `contact.external_id`, `call_notes`, `recording_url_public`, `connected`)
+- `$lastCall` — parsed call data (`status`, `duration`, `call_id`)
+- `$status` — PB disposition text (e.g., "No Answer", "Appointment")
 
-5. **Include `call_notes` from the payload** — these are user-entered notes during the call. Create both a call activity note AND a separate Note activity if notes exist.
+**Critical rules for call logger files:**
 
-6. **Include `recording_url_public` from the payload** — add as a clickable link in the call activity note. Currently always included; a `$includeRecording` flag in `call_done.php` is ready for a future user setting toggle. **TODO:** Add a per-user setting in extension Settings tab to let users enable/disable recording links per CRM.
+1. **Self-contained curl** — use direct curl, not `{provider}_helpers.php`. The webhook doesn't include `bootstrap.php`, so `api_error()` is unavailable. Exception: `cfg()`, `log_msg()`, `load_{provider}_tokens()`, `save_{provider}_tokens()` ARE available via `utils.php`.
 
-7. **Close HTML restrictions** — No `<br>` tags allowed (rejected as "Element content is not allowed"). Use multiple `<p>` tags inside `<body>` instead. Safe pattern: `<body><p>line 1</p><p>line 2</p></body>`.
+2. **Use `payload.contact.external_id`** to identify the called contact, NOT `$state['current']`. The `contact_displayed` webhook for the NEXT contact fires BEFORE `call_done`, so `current` points to the wrong person.
 
-8. **Wrap everything in try/catch** — webhook must always return 200 OK to PhoneBurner. Log errors but never block.
+3. **Handle token refresh inline** for long dial sessions (>1 hour).
+
+4. **Include `call_notes`** from the payload — user-entered notes during the call.
+
+5. **Include `recording_url_public`** from the payload — use the CRM's native recording field if available (e.g., Close has a dedicated `recording_url` field). Upgrade HTTP→HTTPS if needed. **TODO:** Add per-user setting to toggle recording links.
+
+6. **Map PB statuses to CRM outcomes/dispositions dynamically** — use the actual PB status text, match existing CRM outcomes case-insensitively, create if not found. Cache outcome IDs per org to avoid API calls on every webhook.
+
+7. **Never block the webhook** — wrap in try/catch in call_done.php. Always return 200 OK to PhoneBurner.
+
+**CRM-specific notes:**
+
+- **Close HTML:** No `<br>` tags. Always use `<body><p>...</p></body>`.
+- **Close dispositions:** Ignored on external calls (`call_method: "external"` always stores `answered`). Use custom Outcomes instead — they work correctly on external calls.
+- **Close recording_url:** Must be HTTPS. Only include for answered calls (Close may override disposition if recording present).
 
 #### Lessons Learned from Close L3 Implementation
 
