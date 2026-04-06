@@ -252,6 +252,126 @@ if (($state['crm_name'] ?? '') === 'close') {
                     }
 
                     if ($closeLeadId !== '' && $closeContactId !== '') {
+                        // Helper: POST JSON to Close API (returns [$httpCode, $decodedJson, $rawString])
+                        $closePost = function($url, $body) use ($closeAccess) {
+                            $ch = curl_init($url);
+                            curl_setopt_array($ch, [
+                                CURLOPT_RETURNTRANSFER => true,
+                                CURLOPT_POST           => true,
+                                CURLOPT_POSTFIELDS     => json_encode($body),
+                                CURLOPT_HTTPHEADER     => [
+                                    'Authorization: Bearer ' . $closeAccess,
+                                    'Content-Type: application/json',
+                                    'Accept: application/json',
+                                ],
+                                CURLOPT_TIMEOUT => 10,
+                            ]);
+                            $raw = curl_exec($ch);
+                            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                            curl_close($ch);
+                            $json = $raw ? json_decode($raw, true) : null;
+                            return [$code, $json, $raw];
+                        };
+
+                        // Helper: GET from Close API
+                        $closeGet = function($url) use ($closeAccess) {
+                            $ch = curl_init($url);
+                            curl_setopt_array($ch, [
+                                CURLOPT_RETURNTRANSFER => true,
+                                CURLOPT_HTTPHEADER => [
+                                    'Authorization: Bearer ' . $closeAccess,
+                                    'Accept: application/json',
+                                ],
+                                CURLOPT_TIMEOUT => 10,
+                            ]);
+                            $raw = curl_exec($ch);
+                            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                            curl_close($ch);
+                            return [$code, $raw ? json_decode($raw, true) : null];
+                        };
+
+                        // Helper: PUT to Close API
+                        $closePut = function($url, $body) use ($closeAccess) {
+                            $ch = curl_init($url);
+                            curl_setopt_array($ch, [
+                                CURLOPT_RETURNTRANSFER => true,
+                                CURLOPT_CUSTOMREQUEST  => 'PUT',
+                                CURLOPT_POSTFIELDS     => json_encode($body),
+                                CURLOPT_HTTPHEADER     => [
+                                    'Authorization: Bearer ' . $closeAccess,
+                                    'Content-Type: application/json',
+                                    'Accept: application/json',
+                                ],
+                                CURLOPT_TIMEOUT => 10,
+                            ]);
+                            $raw = curl_exec($ch);
+                            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                            curl_close($ch);
+                            return [$code, $raw ? json_decode($raw, true) : null];
+                        };
+
+                        // ---------------------------------------------------------
+                        // Resolve Close Outcome ID for PB status
+                        // Auto-creates standard outcomes on first use per org, cached
+                        // ---------------------------------------------------------
+                        $pbOutcomeMap = [
+                            'answered'  => 'PB: Connected',
+                            'no-answer' => 'PB: No Answer',
+                            'vm-left'   => 'PB: Left Voicemail',
+                            'vm-answer' => 'PB: Voicemail (Live)',
+                            'busy'      => 'PB: Busy',
+                            'error'     => 'PB: Bad Number',
+                        ];
+
+                        // Cache outcomes per client_id to avoid API calls on every webhook
+                        $outcomeCacheDir = __DIR__ . '/../cache';
+                        if (!is_dir($outcomeCacheDir)) @mkdir($outcomeCacheDir, 0770, true);
+                        $safeClientHash = substr(hash('sha256', $closeClientId), 0, 16);
+                        $outcomeCacheFile = $outcomeCacheDir . '/close_outcomes_' . $safeClientHash . '.json';
+
+                        $outcomeCache = null;
+                        if (is_file($outcomeCacheFile)) {
+                            $mtime = @filemtime($outcomeCacheFile);
+                            // Cache for 24 hours
+                            if ($mtime !== false && (time() - $mtime) < 86400) {
+                                $outcomeCache = @json_decode(@file_get_contents($outcomeCacheFile), true);
+                            }
+                        }
+
+                        if (!is_array($outcomeCache)) {
+                            // Fetch existing outcomes from Close
+                            $outcomeCache = [];
+                            list($ocCode, $ocResp) = $closeGet('https://api.close.com/api/v1/outcome/');
+                            if ($ocCode === 200 && is_array($ocResp) && isset($ocResp['data'])) {
+                                foreach ($ocResp['data'] as $oc) {
+                                    $ocName = trim((string)($oc['name'] ?? ''));
+                                    $ocId = (string)($oc['id'] ?? '');
+                                    if ($ocName !== '' && $ocId !== '') {
+                                        $outcomeCache[$ocName] = $ocId;
+                                    }
+                                }
+                            }
+
+                            // Auto-create any missing PB outcomes
+                            foreach ($pbOutcomeMap as $disp => $outcomeName) {
+                                if (!isset($outcomeCache[$outcomeName])) {
+                                    list($createCode, $createResp) = $closePost(
+                                        'https://api.close.com/api/v1/outcome/',
+                                        [
+                                            'name'       => $outcomeName,
+                                            'applies_to' => ['calls'],
+                                        ]
+                                    );
+                                    if ($createCode >= 200 && $createCode < 300 && is_array($createResp) && !empty($createResp['id'])) {
+                                        $outcomeCache[$outcomeName] = (string)$createResp['id'];
+                                    }
+                                }
+                            }
+
+                            // Save cache
+                            @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
+                        }
+
                         // Collect call_notes from PB payload (user-entered notes during this call)
                         $callNotes = $payload['call_notes'] ?? [];
                         if (!is_array($callNotes)) $callNotes = [];
@@ -312,28 +432,8 @@ if (($state['crm_name'] ?? '') === 'close') {
                             $callData['recording_url'] = $recordingUrl;
                         }
 
-                        // Helper: POST JSON to Close API
-                        $closePost = function($url, $body) use ($closeAccess) {
-                            $ch = curl_init($url);
-                            curl_setopt_array($ch, [
-                                CURLOPT_RETURNTRANSFER => true,
-                                CURLOPT_POST           => true,
-                                CURLOPT_POSTFIELDS     => json_encode($body),
-                                CURLOPT_HTTPHEADER     => [
-                                    'Authorization: Bearer ' . $closeAccess,
-                                    'Content-Type: application/json',
-                                    'Accept: application/json',
-                                ],
-                                CURLOPT_TIMEOUT => 10,
-                            ]);
-                            $raw = curl_exec($ch);
-                            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                            curl_close($ch);
-                            return [$code, $raw];
-                        };
-
                         // 1) Log call activity
-                        list($httpCode, $rawResp) = $closePost(
+                        list($httpCode, $callResp, $rawResp) = $closePost(
                             'https://api.close.com/api/v1/activity/call/',
                             $callData
                         );
@@ -355,10 +455,31 @@ if (($state['crm_name'] ?? '') === 'close') {
                         }
                         log_msg('close_call_log: ' . json_encode($logData));
 
+                        // 1b) Assign outcome to the call activity via PUT
+                        $callActivityId = is_array($callResp) ? ($callResp['id'] ?? null) : null;
+                        $outcomeName = $pbOutcomeMap[$closeDisposition] ?? null;
+                        $outcomeId = ($outcomeName && isset($outcomeCache[$outcomeName]))
+                            ? $outcomeCache[$outcomeName]
+                            : null;
+
+                        if ($callActivityId && $outcomeId) {
+                            list($putCode, $putResp) = $closePut(
+                                'https://api.close.com/api/v1/activity/call/' . rawurlencode($callActivityId) . '/',
+                                ['outcome_id' => $outcomeId]
+                            );
+                            log_msg('close_outcome_set: ' . json_encode([
+                                'http_code'    => $putCode,
+                                'success'      => ($putCode >= 200 && $putCode < 300),
+                                'activity_id'  => $callActivityId,
+                                'outcome_name' => $outcomeName,
+                                'disposition'  => $closeDisposition,
+                            ]));
+                        }
+
                         // 2) If user wrote notes, also create a separate Note activity on the lead
                         if (!empty($callNotes)) {
                             $noteBody = '<body><p>' . htmlspecialchars(implode("\n", $callNotes)) . '</p></body>';
-                            list($noteHttpCode, $noteRawResp) = $closePost(
+                            list($noteHttpCode, $_noteResp, $_noteRaw) = $closePost(
                                 'https://api.close.com/api/v1/activity/note/',
                                 [
                                     'lead_id'    => $closeLeadId,
