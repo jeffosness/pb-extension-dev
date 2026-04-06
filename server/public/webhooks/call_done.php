@@ -311,65 +311,68 @@ if (($state['crm_name'] ?? '') === 'close') {
                         };
 
                         // ---------------------------------------------------------
-                        // Resolve Close Outcome ID for PB status
-                        // Auto-creates standard outcomes on first use per org, cached
+                        // Resolve Close Outcome ID for the PB status
+                        //
+                        // Uses the actual PB status text (e.g., "No Answer", "Appointment",
+                        // "Left Voicemail 2") as the outcome name. Matches existing Close
+                        // outcomes by name (case-insensitive), creates if not found.
+                        // Cache grows dynamically as new PB dispositions are encountered.
                         // ---------------------------------------------------------
-                        $pbOutcomeMap = [
-                            'answered'  => 'PB: Connected',
-                            'no-answer' => 'PB: No Answer',
-                            'vm-left'   => 'PB: Left Voicemail',
-                            'vm-answer' => 'PB: Voicemail (Live)',
-                            'busy'      => 'PB: Busy',
-                            'error'     => 'PB: Bad Number',
-                        ];
+                        $pbStatusForOutcome = trim($status);
 
-                        // Cache outcomes per client_id to avoid API calls on every webhook
+                        // Cache: { "lowercase_pb_status": "outcome_id", ... }
                         $outcomeCacheDir = __DIR__ . '/../cache';
                         if (!is_dir($outcomeCacheDir)) @mkdir($outcomeCacheDir, 0770, true);
                         $safeClientHash = substr(hash('sha256', $closeClientId), 0, 16);
                         $outcomeCacheFile = $outcomeCacheDir . '/close_outcomes_' . $safeClientHash . '.json';
 
-                        $outcomeCache = null;
+                        $outcomeCache = [];
                         if (is_file($outcomeCacheFile)) {
-                            $mtime = @filemtime($outcomeCacheFile);
-                            // Cache for 24 hours
-                            if ($mtime !== false && (time() - $mtime) < 86400) {
-                                $outcomeCache = @json_decode(@file_get_contents($outcomeCacheFile), true);
-                            }
+                            $cached = @json_decode(@file_get_contents($outcomeCacheFile), true);
+                            if (is_array($cached)) $outcomeCache = $cached;
                         }
 
-                        if (!is_array($outcomeCache)) {
-                            // Fetch existing outcomes from Close
-                            $outcomeCache = [];
+                        $outcomeLookupKey = strtolower($pbStatusForOutcome);
+                        $resolvedOutcomeId = $outcomeCache[$outcomeLookupKey] ?? null;
+
+                        if ($pbStatusForOutcome !== '' && !$resolvedOutcomeId) {
+                            // Fetch existing outcomes from Close and try to match
                             list($ocCode, $ocResp) = $closeGet('https://api.close.com/api/v1/outcome/');
                             if ($ocCode === 200 && is_array($ocResp) && isset($ocResp['data'])) {
                                 foreach ($ocResp['data'] as $oc) {
                                     $ocName = trim((string)($oc['name'] ?? ''));
                                     $ocId = (string)($oc['id'] ?? '');
-                                    if ($ocName !== '' && $ocId !== '') {
-                                        $outcomeCache[$ocName] = $ocId;
+                                    $appliesTo = $oc['applies_to'] ?? [];
+                                    if ($ocName === '' || $ocId === '') continue;
+                                    if (!is_array($appliesTo) || !in_array('calls', $appliesTo)) continue;
+
+                                    // Case-insensitive match
+                                    if (strtolower($ocName) === $outcomeLookupKey) {
+                                        $resolvedOutcomeId = $ocId;
+                                        break;
                                     }
                                 }
                             }
 
-                            // Auto-create any missing PB outcomes
-                            foreach ($pbOutcomeMap as $disp => $outcomeName) {
-                                if (!isset($outcomeCache[$outcomeName])) {
-                                    list($createCode, $createResp) = $closePost(
-                                        'https://api.close.com/api/v1/outcome/',
-                                        [
-                                            'name'       => $outcomeName,
-                                            'applies_to' => ['calls'],
-                                        ]
-                                    );
-                                    if ($createCode >= 200 && $createCode < 300 && is_array($createResp) && !empty($createResp['id'])) {
-                                        $outcomeCache[$outcomeName] = (string)$createResp['id'];
-                                    }
+                            // No match found — create the outcome using the PB status name
+                            if (!$resolvedOutcomeId) {
+                                list($createCode, $createResp, $_) = $closePost(
+                                    'https://api.close.com/api/v1/outcome/',
+                                    [
+                                        'name'       => $pbStatusForOutcome,
+                                        'applies_to' => ['calls'],
+                                    ]
+                                );
+                                if ($createCode >= 200 && $createCode < 300 && is_array($createResp) && !empty($createResp['id'])) {
+                                    $resolvedOutcomeId = (string)$createResp['id'];
                                 }
                             }
 
-                            // Save cache
-                            @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
+                            // Update cache with this mapping
+                            if ($resolvedOutcomeId) {
+                                $outcomeCache[$outcomeLookupKey] = $resolvedOutcomeId;
+                                @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
+                            }
                         }
 
                         // Collect call_notes from PB payload (user-entered notes during this call)
@@ -457,22 +460,18 @@ if (($state['crm_name'] ?? '') === 'close') {
 
                         // 1b) Assign outcome to the call activity via PUT
                         $callActivityId = is_array($callResp) ? ($callResp['id'] ?? null) : null;
-                        $outcomeName = $pbOutcomeMap[$closeDisposition] ?? null;
-                        $outcomeId = ($outcomeName && isset($outcomeCache[$outcomeName]))
-                            ? $outcomeCache[$outcomeName]
-                            : null;
 
-                        if ($callActivityId && $outcomeId) {
+                        if ($callActivityId && $resolvedOutcomeId) {
                             list($putCode, $putResp) = $closePut(
                                 'https://api.close.com/api/v1/activity/call/' . rawurlencode($callActivityId) . '/',
-                                ['outcome_id' => $outcomeId]
+                                ['outcome_id' => $resolvedOutcomeId]
                             );
                             log_msg('close_outcome_set: ' . json_encode([
                                 'http_code'    => $putCode,
                                 'success'      => ($putCode >= 200 && $putCode < 300),
                                 'activity_id'  => $callActivityId,
-                                'outcome_name' => $outcomeName,
-                                'disposition'  => $closeDisposition,
+                                'outcome_id'   => $resolvedOutcomeId,
+                                'pb_status'    => $pbStatusForOutcome,
                             ]));
                         }
 
