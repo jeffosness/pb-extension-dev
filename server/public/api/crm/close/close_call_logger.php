@@ -23,10 +23,16 @@
  */
 function close_log_call(array $state, array $payload, array $lastCall, string $status): void {
     $clientId = $state['client_id'] ?? '';
-    if ($clientId === '') return;
+    if ($clientId === '') {
+        log_msg('close_call_log_skip: no client_id in session state');
+        return;
+    }
 
     $closeTokens = load_close_tokens($clientId);
-    if (!is_array($closeTokens) || empty($closeTokens['access_token'])) return;
+    if (!is_array($closeTokens) || empty($closeTokens['access_token'])) {
+        log_msg('close_call_log_skip: no Close tokens for client ' . substr(hash('sha256', $clientId), 0, 12));
+        return;
+    }
 
     $accessToken = (string)$closeTokens['access_token'];
 
@@ -86,7 +92,10 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     $mapEntry = ($calledExternalId !== '' && isset($contactsMap[$calledExternalId]))
         ? $contactsMap[$calledExternalId] : null;
 
-    if (!$mapEntry) return;
+    if (!$mapEntry) {
+        log_msg('close_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap));
+        return;
+    }
 
     $closeContactId = $calledExternalId;
     $closePhone = $mapEntry['phone'] ?? '';
@@ -98,7 +107,10 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         $closeLeadId = $m[1];
     }
 
-    if ($closeLeadId === '' || $closeContactId === '') return;
+    if ($closeLeadId === '' || $closeContactId === '') {
+        log_msg('close_call_log_skip: missing lead_id=' . ($closeLeadId ?: '(empty)') . ' or contact_id=' . ($closeContactId ?: '(empty)') . ', record_url=' . substr($recordUrl, 0, 80));
+        return;
+    }
 
     // -------------------------------------------------------------------------
     // HTTP helpers (self-contained, no bootstrap dependency)
@@ -172,15 +184,25 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     $outcomeCacheFile = $outcomeCacheDir . '/close_outcomes_' . $safeClientHash . '.json';
 
     $outcomeCache = [];
+    $outcomeCacheTtl = 86400; // 24 hours — re-fetch outcomes daily
+    $cacheExpired = false;
     if (is_file($outcomeCacheFile)) {
-        $cached = @json_decode(@file_get_contents($outcomeCacheFile), true);
-        if (is_array($cached)) $outcomeCache = $cached;
+        $cacheAge = time() - filemtime($outcomeCacheFile);
+        if ($cacheAge > $outcomeCacheTtl) {
+            $cacheExpired = true;
+            log_msg('close_outcome_cache_expired: age=' . $cacheAge . 's, clearing');
+        } else {
+            $cached = @json_decode(@file_get_contents($outcomeCacheFile), true);
+            if (is_array($cached)) $outcomeCache = $cached;
+        }
     }
 
     $outcomeLookupKey = strtolower($pbStatusForOutcome);
-    $resolvedOutcomeId = $outcomeCache[$outcomeLookupKey] ?? null;
+    $resolvedOutcomeId = $cacheExpired ? null : ($outcomeCache[$outcomeLookupKey] ?? null);
 
     if ($pbStatusForOutcome !== '' && !$resolvedOutcomeId) {
+        // Cache miss or expired — reset and rebuild from API
+        if ($cacheExpired) $outcomeCache = [];
         // Fetch existing outcomes and try case-insensitive match
         list($ocCode, $ocResp) = $closeGet('https://api.close.com/api/v1/outcome/');
         if ($ocCode === 200 && is_array($ocResp) && isset($ocResp['data'])) {
@@ -308,13 +330,24 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
             'https://api.close.com/api/v1/activity/call/' . rawurlencode($callActivityId) . '/',
             ['outcome_id' => $resolvedOutcomeId]
         );
-        log_msg('close_outcome_set: ' . json_encode([
+        $outcomeLogData = [
             'http_code'    => $putCode,
             'success'      => ($putCode >= 200 && $putCode < 300),
             'activity_id'  => $callActivityId,
             'outcome_id'   => $resolvedOutcomeId,
             'pb_status'    => $pbStatusForOutcome,
-        ]));
+        ];
+        if ($putCode >= 400 && is_array($putResp)) {
+            $outcomeLogData['close_error'] = $putResp;
+        }
+        log_msg('close_outcome_set: ' . json_encode($outcomeLogData));
+
+        // If outcome PUT failed with 400, cached ID may be stale — clear it
+        if ($putCode === 400) {
+            unset($outcomeCache[$outcomeLookupKey]);
+            @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
+            log_msg('close_outcome_cache_invalidated: ' . $outcomeLookupKey);
+        }
     }
 
     // -------------------------------------------------------------------------
