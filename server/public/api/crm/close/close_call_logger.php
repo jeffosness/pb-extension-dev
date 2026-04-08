@@ -127,6 +127,24 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     $mapEntry = ($calledExternalId !== '' && isset($contactsMap[$calledExternalId]))
         ? $contactsMap[$calledExternalId] : null;
 
+    // 3) Fallback: match by phone number from webhook against contacts_map
+    //    Some PB accounts don't return external_crm_data in webhooks,
+    //    but the dialed phone number is always present.
+    if (!$mapEntry) {
+        $webhookPhone = preg_replace('/\D/', '', trim((string)($payload['contact']['phone'] ?? '')));
+        if ($webhookPhone !== '') {
+            foreach ($contactsMap as $mapKey => $mapVal) {
+                $mapPhone = preg_replace('/\D/', '', trim((string)($mapVal['phone'] ?? '')));
+                if ($mapPhone !== '' && $mapPhone === $webhookPhone) {
+                    $calledExternalId = $mapKey;
+                    $mapEntry = $mapVal;
+                    log_msg('close_call_log_phone_match: matched by phone, key=' . substr($mapKey, 0, 30));
+                    break;
+                }
+            }
+        }
+    }
+
     if (!$mapEntry) {
         log_msg('close_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap) . ', has_ecd=' . (is_array($ecd) ? count($ecd) : 'no'));
         return;
