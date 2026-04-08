@@ -127,6 +127,43 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     $mapEntry = ($calledExternalId !== '' && isset($contactsMap[$calledExternalId]))
         ? $contactsMap[$calledExternalId] : null;
 
+    // 3) Fallback: PB contact lookup by user_id to get external_crm_data
+    //    PB includes external_crm_data in contact_displayed but NOT call_done.
+    //    The PB contact record has it (visible in PB UI), so we fetch it via API.
+    if (!$mapEntry) {
+        $pbUserId = trim((string)($payload['contact']['user_id'] ?? ''));
+        if ($pbUserId !== '') {
+            $pat = load_pb_token($clientId);
+            if ($pat) {
+                list($pbInfo, $pbContact) = pb_api_call($pat, 'GET', '/contacts/' . rawurlencode($pbUserId));
+                $pbHttpCode = (int)($pbInfo['http_code'] ?? 0);
+
+                if ($pbHttpCode === 200 && is_array($pbContact)) {
+                    // PB returns external_crm_data on the contact record
+                    $pbEcd = $pbContact['external_crm_data'] ?? $pbContact['external_crm'] ?? null;
+                    if (is_array($pbEcd)) {
+                        foreach ($pbEcd as $row) {
+                            if (!is_array($row)) continue;
+                            $crmId = trim((string)($row['crm_id'] ?? ''));
+                            if ($crmId !== '' && isset($contactsMap[$crmId])) {
+                                $calledExternalId = $crmId;
+                                $mapEntry = $contactsMap[$crmId];
+                                log_msg('close_call_log_pb_lookup: matched via PB contact API, user_id=' . $pbUserId . ', crm_id=' . substr($crmId, 0, 30));
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!$mapEntry) {
+                        log_msg('close_call_log_pb_lookup: PB contact fetched but no matching crm_id, user_id=' . $pbUserId . ', ecd_count=' . (is_array($pbEcd) ? count($pbEcd) : 0));
+                    }
+                } else {
+                    log_msg('close_call_log_pb_lookup: PB API returned http=' . $pbHttpCode . ' for user_id=' . $pbUserId);
+                }
+            }
+        }
+    }
+
     if (!$mapEntry) {
         log_msg('close_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap) . ', has_ecd=' . (is_array($ecd) ? count($ecd) : 'no'));
         return;
