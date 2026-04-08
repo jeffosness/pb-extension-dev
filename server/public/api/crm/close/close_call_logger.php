@@ -258,6 +258,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     $outcomeCache = [];
     $outcomeCacheTtl = 86400; // 24 hours — re-fetch outcomes daily
     $cacheExpired = false;
+    $outcomesDisabled = false;
     if (is_file($outcomeCacheFile)) {
         $cacheAge = time() - filemtime($outcomeCacheFile);
         if ($cacheAge > $outcomeCacheTtl) {
@@ -269,15 +270,37 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         }
     }
 
-    $outcomeLookupKey = strtolower($pbStatusForOutcome);
-    $resolvedOutcomeId = $cacheExpired ? null : ($outcomeCache[$outcomeLookupKey] ?? null);
+    // Check if outcomes are disabled for this org (cached from prior 400)
+    if (!$cacheExpired && !empty($outcomeCache['_disabled'])) {
+        $outcomesDisabled = true;
+    }
 
-    if ($pbStatusForOutcome !== '' && !$resolvedOutcomeId) {
+    $outcomeLookupKey = strtolower($pbStatusForOutcome);
+    $resolvedOutcomeId = ($cacheExpired || $outcomesDisabled) ? null : ($outcomeCache[$outcomeLookupKey] ?? null);
+
+    if ($pbStatusForOutcome !== '' && !$resolvedOutcomeId && !$outcomesDisabled) {
         // Cache miss or expired — reset and rebuild from API
         if ($cacheExpired) $outcomeCache = [];
         // Fetch existing outcomes and try case-insensitive match
         list($ocCode, $ocResp) = $closeGet('https://api.close.com/api/v1/outcome/');
-        if ($ocCode === 200 && is_array($ocResp) && isset($ocResp['data'])) {
+
+        // Detect orgs where outcomes aren't available (plan limitation)
+        if ($ocCode >= 400 && is_array($ocResp)) {
+            $errs = $ocResp['errors'] ?? [];
+            if (is_array($errs)) {
+                foreach ($errs as $e) {
+                    if (is_string($e) && stripos($e, 'not available') !== false) {
+                        $outcomesDisabled = true;
+                        $outcomeCache = ['_disabled' => true];
+                        @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
+                        log_msg('close_outcomes_disabled: org does not support outcomes, caching for 24h');
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!$outcomesDisabled && $ocCode === 200 && is_array($ocResp) && isset($ocResp['data'])) {
             foreach ($ocResp['data'] as $oc) {
                 $ocName = trim((string)($oc['name'] ?? ''));
                 $ocId = (string)($oc['id'] ?? '');
@@ -293,7 +316,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         }
 
         // No match — create the outcome using the PB status name
-        if (!$resolvedOutcomeId) {
+        if (!$resolvedOutcomeId && !$outcomesDisabled) {
             list($createCode, $createResp, $_) = $closePost(
                 'https://api.close.com/api/v1/outcome/',
                 ['name' => $pbStatusForOutcome, 'applies_to' => ['calls']]
@@ -414,11 +437,26 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         }
         log_msg('close_outcome_set: ' . json_encode($outcomeLogData));
 
-        // If outcome PUT failed with 400, cached ID may be stale — clear it
-        if ($putCode === 400) {
-            unset($outcomeCache[$outcomeLookupKey]);
+        // If outcome PUT failed with 400, check if outcomes are disabled for this org
+        if ($putCode === 400 && is_array($putResp)) {
+            $putErrs = $putResp['errors'] ?? [];
+            $isDisabled = false;
+            if (is_array($putErrs)) {
+                foreach ($putErrs as $e) {
+                    if (is_string($e) && stripos($e, 'not available') !== false) {
+                        $isDisabled = true;
+                        break;
+                    }
+                }
+            }
+            if ($isDisabled) {
+                $outcomeCache = ['_disabled' => true];
+                log_msg('close_outcomes_disabled: org does not support outcomes, caching for 24h');
+            } else {
+                unset($outcomeCache[$outcomeLookupKey]);
+                log_msg('close_outcome_cache_invalidated: ' . $outcomeLookupKey);
+            }
             @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
-            log_msg('close_outcome_cache_invalidated: ' . $outcomeLookupKey);
         }
     }
 
