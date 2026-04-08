@@ -83,17 +83,52 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
 
     // -------------------------------------------------------------------------
     // Find the CALLED contact from the payload (not $state['current'])
+    // Uses same multi-path lookup as contact_displayed.php to handle
+    // different PB webhook payload formats (external_id vs external_crm_data)
     // -------------------------------------------------------------------------
-    $calledExternalId = trim((string)(
-        $payload['contact']['external_id'] ?? $payload['external_id'] ?? ''
-    ));
-
     $contactsMap = $state['contacts_map'] ?? [];
+    $calledExternalId = '';
+
+    // 1) Try external_crm_data / external_crm (array of {crm_id, crm_name})
+    $ecd =
+        $payload['external_crm'] ??
+        $payload['external_crm_data'] ??
+        ($payload['contact']['external_crm'] ?? null) ??
+        ($payload['contact']['external_crm_data'] ?? null) ??
+        null;
+
+    if (is_array($ecd)) {
+        // First pass: find a crm_id that exists in contacts_map
+        foreach ($ecd as $row) {
+            if (!is_array($row)) continue;
+            $crmId = trim((string)($row['crm_id'] ?? ''));
+            if ($crmId !== '' && isset($contactsMap[$crmId])) {
+                $calledExternalId = $crmId;
+                break;
+            }
+        }
+        // Second pass: take first crm_id as fallback
+        if ($calledExternalId === '') {
+            foreach ($ecd as $row) {
+                if (!is_array($row)) continue;
+                $crmId = trim((string)($row['crm_id'] ?? ''));
+                if ($crmId !== '') { $calledExternalId = $crmId; break; }
+            }
+        }
+    }
+
+    // 2) Fallback: external_id (flat string, legacy format)
+    if ($calledExternalId === '') {
+        $calledExternalId = trim((string)(
+            $payload['contact']['external_id'] ?? $payload['external_id'] ?? ''
+        ));
+    }
+
     $mapEntry = ($calledExternalId !== '' && isset($contactsMap[$calledExternalId]))
         ? $contactsMap[$calledExternalId] : null;
 
     if (!$mapEntry) {
-        log_msg('close_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap));
+        log_msg('close_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap) . ', has_ecd=' . (is_array($ecd) ? count($ecd) : 'no'));
         return;
     }
 
