@@ -8,7 +8,7 @@
 //   - apollo_sequence_tasks.php     (get open call tasks)
 //   - apollo_call_logger.php        (complete tasks + log calls)
 //
-// Apollo API base: https://api.apollo.io/v1/
+// Apollo API base: https://app.apollo.io/api/v1/
 // Auth: OAuth 2.0 Bearer tokens
 // Docs: https://developer.apollo.io/
 
@@ -189,7 +189,7 @@ function apollo_api_put_json($accessToken, $url, array $body) {
  * Used to verify token validity.
  */
 function apollo_get_me($accessToken) {
-  return apollo_api_get_json($accessToken, 'https://api.apollo.io/v1/users/me');
+  return apollo_api_get_json($accessToken, 'https://app.apollo.io/api/v1/users/me');
 }
 
 // -----------------------------------------------------------------------------
@@ -207,7 +207,7 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null, 'last_error' => null];
 
   foreach ($contactIds as $cid) {
-    $url = 'https://api.apollo.io/v1/contacts/' . rawurlencode($cid);
+    $url = 'https://app.apollo.io/api/v1/contacts/' . rawurlencode($cid);
 
     list($code, $json, $raw) = apollo_api_get_json($accessToken, $url);
     $diag['contacts_fetch']['last_http'] = $code;

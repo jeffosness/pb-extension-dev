@@ -35,13 +35,13 @@ $searchBody = [
   'sort_ascending' => false,
 ];
 
-list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/v1/emailer_campaigns/search', $searchBody);
+list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://app.apollo.io/api/v1/emailer_campaigns/search', $searchBody);
 
 // Retry once on 401
 if ($code === 401) {
   $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
   $accessToken = (string)($tokens['access_token'] ?? '');
-  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/v1/emailer_campaigns/search', $searchBody);
+  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://app.apollo.io/api/v1/emailer_campaigns/search', $searchBody);
 }
 
 if ($code !== 200 || !is_array($json)) {

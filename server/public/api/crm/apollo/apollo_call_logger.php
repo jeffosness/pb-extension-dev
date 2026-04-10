@@ -139,14 +139,14 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
         // Try POST to mark task complete — Apollo may use POST /v1/tasks/{id}/complete
         // or PUT /v1/tasks/{id} with completed flag. Try both patterns.
         list($taskCode, $taskResp, $taskRaw) = $apolloPost(
-            'https://api.apollo.io/v1/tasks/' . rawurlencode($apolloTaskId) . '/complete',
+            'https://app.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId) . '/complete',
             []
         );
 
         // If /complete endpoint doesn't exist, try PUT with status
         if ($taskCode === 404 || $taskCode === 405) {
             list($taskCode, $taskResp, $taskRaw) = $apolloPut(
-                'https://api.apollo.io/v1/tasks/' . rawurlencode($apolloTaskId),
+                'https://app.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId),
                 ['completed' => true, 'status' => 'completed']
             );
         }
@@ -211,7 +211,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     }
 
     list($callHttpCode, $callResp, $callRaw) = $apolloPost(
-        'https://api.apollo.io/v1/calls',
+        'https://app.apollo.io/api/v1/calls',
         $callData
     );
 
@@ -219,7 +219,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     if ($callHttpCode === 404 || $callHttpCode === 405) {
         $callData['type'] = 'call';
         list($callHttpCode, $callResp, $callRaw) = $apolloPost(
-            'https://api.apollo.io/v1/activities',
+            'https://app.apollo.io/api/v1/activities',
             $callData
         );
     }
@@ -251,7 +251,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
 
     if ($shouldExitSequence && $apolloSeqId !== '') {
         list($exitCode, $exitResp, $_exitRaw) = $apolloPost(
-            'https://api.apollo.io/v1/emailer_campaigns/' . rawurlencode($apolloSeqId) . '/remove_or_stop_contact_ids',
+            'https://app.apollo.io/api/v1/emailer_campaigns/' . rawurlencode($apolloSeqId) . '/remove_or_stop_contact_ids',
             ['contact_ids' => [$apolloContactId]]
         );
 
