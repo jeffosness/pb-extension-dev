@@ -23,10 +23,16 @@
  */
 function close_log_call(array $state, array $payload, array $lastCall, string $status): void {
     $clientId = $state['client_id'] ?? '';
-    if ($clientId === '') return;
+    if ($clientId === '') {
+        log_msg('close_call_log_skip: no client_id in session state');
+        return;
+    }
 
     $closeTokens = load_close_tokens($clientId);
-    if (!is_array($closeTokens) || empty($closeTokens['access_token'])) return;
+    if (!is_array($closeTokens) || empty($closeTokens['access_token'])) {
+        log_msg('close_call_log_skip: no Close tokens for client ' . substr(hash('sha256', $clientId), 0, 12));
+        return;
+    }
 
     $accessToken = (string)$closeTokens['access_token'];
 
@@ -77,16 +83,91 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
 
     // -------------------------------------------------------------------------
     // Find the CALLED contact from the payload (not $state['current'])
+    // Uses same multi-path lookup as contact_displayed.php to handle
+    // different PB webhook payload formats (external_id vs external_crm_data)
     // -------------------------------------------------------------------------
-    $calledExternalId = trim((string)(
-        $payload['contact']['external_id'] ?? $payload['external_id'] ?? ''
-    ));
-
     $contactsMap = $state['contacts_map'] ?? [];
+    $calledExternalId = '';
+
+    // 1) Try external_crm_data / external_crm (array of {crm_id, crm_name})
+    $ecd =
+        $payload['external_crm'] ??
+        $payload['external_crm_data'] ??
+        ($payload['contact']['external_crm'] ?? null) ??
+        ($payload['contact']['external_crm_data'] ?? null) ??
+        null;
+
+    if (is_array($ecd)) {
+        // First pass: find a crm_id that exists in contacts_map
+        foreach ($ecd as $row) {
+            if (!is_array($row)) continue;
+            $crmId = trim((string)($row['crm_id'] ?? ''));
+            if ($crmId !== '' && isset($contactsMap[$crmId])) {
+                $calledExternalId = $crmId;
+                break;
+            }
+        }
+        // Second pass: take first crm_id as fallback
+        if ($calledExternalId === '') {
+            foreach ($ecd as $row) {
+                if (!is_array($row)) continue;
+                $crmId = trim((string)($row['crm_id'] ?? ''));
+                if ($crmId !== '') { $calledExternalId = $crmId; break; }
+            }
+        }
+    }
+
+    // 2) Fallback: external_id (flat string, legacy format)
+    if ($calledExternalId === '') {
+        $calledExternalId = trim((string)(
+            $payload['contact']['external_id'] ?? $payload['external_id'] ?? ''
+        ));
+    }
+
     $mapEntry = ($calledExternalId !== '' && isset($contactsMap[$calledExternalId]))
         ? $contactsMap[$calledExternalId] : null;
 
-    if (!$mapEntry) return;
+    // 3) Fallback: PB contact lookup by user_id to get external_crm_data
+    //    PB includes external_crm_data in contact_displayed but NOT call_done.
+    //    The PB contact record has it (visible in PB UI), so we fetch it via API.
+    if (!$mapEntry) {
+        $pbUserId = trim((string)($payload['contact']['user_id'] ?? ''));
+        if ($pbUserId !== '') {
+            $pat = load_pb_token($clientId);
+            if ($pat) {
+                list($pbInfo, $pbContact) = pb_api_call($pat, 'GET', '/contacts/' . rawurlencode($pbUserId));
+                $pbHttpCode = (int)($pbInfo['http_code'] ?? 0);
+
+                if ($pbHttpCode === 200 && is_array($pbContact)) {
+                    // PB returns external_crm_data on the contact record
+                    $pbEcd = $pbContact['external_crm_data'] ?? $pbContact['external_crm'] ?? null;
+                    if (is_array($pbEcd)) {
+                        foreach ($pbEcd as $row) {
+                            if (!is_array($row)) continue;
+                            $crmId = trim((string)($row['crm_id'] ?? ''));
+                            if ($crmId !== '' && isset($contactsMap[$crmId])) {
+                                $calledExternalId = $crmId;
+                                $mapEntry = $contactsMap[$crmId];
+                                log_msg('close_call_log_pb_lookup: matched via PB contact API, user_id=' . $pbUserId . ', crm_id=' . substr($crmId, 0, 30));
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!$mapEntry) {
+                        log_msg('close_call_log_pb_lookup: PB contact fetched but no matching crm_id, user_id=' . $pbUserId . ', ecd_count=' . (is_array($pbEcd) ? count($pbEcd) : 0));
+                    }
+                } else {
+                    log_msg('close_call_log_pb_lookup: PB API returned http=' . $pbHttpCode . ' for user_id=' . $pbUserId);
+                }
+            }
+        }
+    }
+
+    if (!$mapEntry) {
+        log_msg('close_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap) . ', has_ecd=' . (is_array($ecd) ? count($ecd) : 'no'));
+        return;
+    }
 
     $closeContactId = $calledExternalId;
     $closePhone = $mapEntry['phone'] ?? '';
@@ -98,7 +179,10 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         $closeLeadId = $m[1];
     }
 
-    if ($closeLeadId === '' || $closeContactId === '') return;
+    if ($closeLeadId === '' || $closeContactId === '') {
+        log_msg('close_call_log_skip: missing lead_id=' . ($closeLeadId ?: '(empty)') . ' or contact_id=' . ($closeContactId ?: '(empty)') . ', record_url=' . substr($recordUrl, 0, 80));
+        return;
+    }
 
     // -------------------------------------------------------------------------
     // HTTP helpers (self-contained, no bootstrap dependency)
@@ -172,18 +256,51 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     $outcomeCacheFile = $outcomeCacheDir . '/close_outcomes_' . $safeClientHash . '.json';
 
     $outcomeCache = [];
+    $outcomeCacheTtl = 86400; // 24 hours — re-fetch outcomes daily
+    $cacheExpired = false;
+    $outcomesDisabled = false;
     if (is_file($outcomeCacheFile)) {
-        $cached = @json_decode(@file_get_contents($outcomeCacheFile), true);
-        if (is_array($cached)) $outcomeCache = $cached;
+        $cacheAge = time() - filemtime($outcomeCacheFile);
+        if ($cacheAge > $outcomeCacheTtl) {
+            $cacheExpired = true;
+            log_msg('close_outcome_cache_expired: age=' . $cacheAge . 's, clearing');
+        } else {
+            $cached = @json_decode(@file_get_contents($outcomeCacheFile), true);
+            if (is_array($cached)) $outcomeCache = $cached;
+        }
+    }
+
+    // Check if outcomes are disabled for this org (cached from prior 400)
+    if (!$cacheExpired && !empty($outcomeCache['_disabled'])) {
+        $outcomesDisabled = true;
     }
 
     $outcomeLookupKey = strtolower($pbStatusForOutcome);
-    $resolvedOutcomeId = $outcomeCache[$outcomeLookupKey] ?? null;
+    $resolvedOutcomeId = ($cacheExpired || $outcomesDisabled) ? null : ($outcomeCache[$outcomeLookupKey] ?? null);
 
-    if ($pbStatusForOutcome !== '' && !$resolvedOutcomeId) {
+    if ($pbStatusForOutcome !== '' && !$resolvedOutcomeId && !$outcomesDisabled) {
+        // Cache miss or expired — reset and rebuild from API
+        if ($cacheExpired) $outcomeCache = [];
         // Fetch existing outcomes and try case-insensitive match
         list($ocCode, $ocResp) = $closeGet('https://api.close.com/api/v1/outcome/');
-        if ($ocCode === 200 && is_array($ocResp) && isset($ocResp['data'])) {
+
+        // Detect orgs where outcomes aren't available (plan limitation)
+        if ($ocCode >= 400 && is_array($ocResp)) {
+            $errs = $ocResp['errors'] ?? [];
+            if (is_array($errs)) {
+                foreach ($errs as $e) {
+                    if (is_string($e) && stripos($e, 'not available') !== false) {
+                        $outcomesDisabled = true;
+                        $outcomeCache = ['_disabled' => true];
+                        @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
+                        log_msg('close_outcomes_disabled: org does not support outcomes, caching for 24h');
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!$outcomesDisabled && $ocCode === 200 && is_array($ocResp) && isset($ocResp['data'])) {
             foreach ($ocResp['data'] as $oc) {
                 $ocName = trim((string)($oc['name'] ?? ''));
                 $ocId = (string)($oc['id'] ?? '');
@@ -199,7 +316,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         }
 
         // No match — create the outcome using the PB status name
-        if (!$resolvedOutcomeId) {
+        if (!$resolvedOutcomeId && !$outcomesDisabled) {
             list($createCode, $createResp, $_) = $closePost(
                 'https://api.close.com/api/v1/outcome/',
                 ['name' => $pbStatusForOutcome, 'applies_to' => ['calls']]
@@ -308,13 +425,39 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
             'https://api.close.com/api/v1/activity/call/' . rawurlencode($callActivityId) . '/',
             ['outcome_id' => $resolvedOutcomeId]
         );
-        log_msg('close_outcome_set: ' . json_encode([
+        $outcomeLogData = [
             'http_code'    => $putCode,
             'success'      => ($putCode >= 200 && $putCode < 300),
             'activity_id'  => $callActivityId,
             'outcome_id'   => $resolvedOutcomeId,
             'pb_status'    => $pbStatusForOutcome,
-        ]));
+        ];
+        if ($putCode >= 400 && is_array($putResp)) {
+            $outcomeLogData['close_error'] = $putResp;
+        }
+        log_msg('close_outcome_set: ' . json_encode($outcomeLogData));
+
+        // If outcome PUT failed with 400, check if outcomes are disabled for this org
+        if ($putCode === 400 && is_array($putResp)) {
+            $putErrs = $putResp['errors'] ?? [];
+            $isDisabled = false;
+            if (is_array($putErrs)) {
+                foreach ($putErrs as $e) {
+                    if (is_string($e) && stripos($e, 'not available') !== false) {
+                        $isDisabled = true;
+                        break;
+                    }
+                }
+            }
+            if ($isDisabled) {
+                $outcomeCache = ['_disabled' => true];
+                log_msg('close_outcomes_disabled: org does not support outcomes, caching for 24h');
+            } else {
+                unset($outcomeCache[$outcomeLookupKey]);
+                log_msg('close_outcome_cache_invalidated: ' . $outcomeLookupKey);
+            }
+            @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
+        }
     }
 
     // -------------------------------------------------------------------------
