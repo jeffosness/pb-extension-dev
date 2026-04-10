@@ -438,7 +438,9 @@ function applyContextVisibility(ctx, pbConnected) {
   // Apollo sequence card: show when Apollo connected + PB connected (works from any page)
   setVisible(apolloSequenceCard, APOLLO_STATE.connected && pbConnected);
   // Apollo settings card: show when Apollo is connected
+  const apolloApiKeyCard = $("apollo-apikey-card");
   setVisible(apolloSettingsCard, APOLLO_STATE.connected);
+  setVisible(apolloApiKeyCard, !APOLLO_STATE.connected);
   if (APOLLO_STATE.connected) {
     const apolloSettingsStatus = $("apollo-settings-status");
     const apolloDisconnectBtn = $("apollo-disconnect");
@@ -1300,6 +1302,36 @@ async function disconnectApollo() {
   activateTab("dial");
 }
 
+async function saveApolloApiKey() {
+  const input = $("apollo-apikey-input");
+  const status = $("apollo-apikey-status");
+  const btn = $("apollo-apikey-save");
+
+  const apiKey = (input?.value || "").trim();
+  if (!apiKey) {
+    if (status) status.textContent = "Please paste your API key.";
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = "Validating API key\u2026";
+
+  const resp = await hsPost("crm/apollo/save_api_key.php", { api_key: apiKey });
+
+  if (!resp || resp.ok !== true) {
+    const errorMsg = getErrorMessage(resp, "Invalid API key.");
+    if (status) status.textContent = errorMsg;
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  if (status) status.textContent = "Connected!";
+  if (input) input.value = "";
+  APOLLO_STATE.connected = true;
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+  activateTab("dial");
+}
+
 function refreshApolloDialUi() {
   const btn = $("apollo-dial-action");
   const status = $("apollo-dial-status");
@@ -1310,7 +1342,7 @@ function refreshApolloDialUi() {
       btn.dataset.mode = "connect";
       btn.disabled = false;
     }
-    if (status) status.textContent = "Connect Apollo to launch dial sessions with full contact data.";
+    if (status) status.textContent = "Add your Apollo API key in Settings to enable dial sessions.";
   } else if (!PB_CONNECTED) {
     if (btn) {
       btn.textContent = "Dial Selected Contacts";
@@ -1718,10 +1750,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Apollo CRM
   $("apollo-dial-action")?.addEventListener("click", async () => {
-    if ($("apollo-dial-action")?.dataset?.mode === "connect") return startApolloOAuth();
+    if ($("apollo-dial-action")?.dataset?.mode === "connect") {
+      activateTab("settings");
+      $("apollo-apikey-input")?.focus();
+      return;
+    }
     return launchApolloDialSession();
   });
   $("apollo-disconnect")?.addEventListener("click", disconnectApollo);
+  $("apollo-apikey-save")?.addEventListener("click", saveApolloApiKey);
   $("apollo-sequence-select")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-task-filter")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-sequence-launch")?.addEventListener("click", launchApolloFromTasks);
