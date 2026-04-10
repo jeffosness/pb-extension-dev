@@ -39,7 +39,7 @@ $params = [
     'scope'         => 'read_user_profile',
 ];
 
-$url = 'https://app.apollo.io/oauth2/authorize?' . http_build_query($params);
+$url = 'https://app.apollo.io/#/oauth/authorize?' . http_build_query($params);
 
 api_log('apollo_oauth_start.ok', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
