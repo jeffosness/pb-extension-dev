@@ -564,22 +564,14 @@
           <button id="apollo-disconnect" class="danger">Disconnect Apollo</button>
         </div>
 
-        <!-- Apollo API Key (when not connected) -->
+        <!-- Apollo Connect (when not connected) -->
         <div id="apollo-apikey-card" class="card hidden">
           <div class="card-title">Apollo Connection</div>
           <div class="help-text">
-            Connect with OAuth or paste your Apollo master API key.
+            Connect your Apollo account to launch dial sessions
+            from your contacts and sequences.
           </div>
-          <button id="apollo-oauth-connect" class="primary mt-8">Connect with Apollo OAuth</button>
-          <div class="help-text mt-10" style="text-align:center;">— or —</div>
-          <div class="help-text">
-            Get a master API key from
-            <a href="https://developer.apollo.io/#/keys" target="_blank" style="color:var(--accent);">developer.apollo.io</a>
-          </div>
-          <input type="password" id="apollo-apikey-input" placeholder="Paste Apollo API key…"
-                 autocomplete="off" style="margin-top:8px;" />
-          <div id="apollo-apikey-status" class="status"></div>
-          <button id="apollo-apikey-save" class="secondary mt-8">Save API Key</button>
+          <button id="apollo-oauth-connect" class="primary mt-8">Connect Apollo</button>
         </div>
 
         <div class="card">
