@@ -1304,36 +1304,6 @@ async function disconnectApollo() {
 }
 
 function refreshApolloDialUi() {
-  const input = $("apollo-apikey-input");
-  const status = $("apollo-apikey-status");
-  const btn = $("apollo-apikey-save");
-
-  const apiKey = (input?.value || "").trim();
-  if (!apiKey) {
-    if (status) status.textContent = "Please paste your API key.";
-    return;
-  }
-
-  if (btn) btn.disabled = true;
-  if (status) status.textContent = "Validating API key\u2026";
-
-  const resp = await hsPost("crm/apollo/save_api_key.php", { api_key: apiKey });
-
-  if (!resp || resp.ok !== true) {
-    const errorMsg = getErrorMessage(resp, "Invalid API key.");
-    if (status) status.textContent = errorMsg;
-    if (btn) btn.disabled = false;
-    return;
-  }
-
-  if (status) status.textContent = "Connected!";
-  if (input) input.value = "";
-  APOLLO_STATE.connected = true;
-  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
-  activateTab("dial");
-}
-
-function refreshApolloDialUi() {
   const btn = $("apollo-dial-action");
   const status = $("apollo-dial-status");
 
