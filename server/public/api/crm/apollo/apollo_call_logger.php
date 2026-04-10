@@ -25,9 +25,13 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     if ($clientId === '') return;
 
     $apolloTokens = load_apollo_tokens($clientId);
-    if (!is_array($apolloTokens) || empty($apolloTokens['access_token'])) return;
+    if (!is_array($apolloTokens)) return;
 
-    $accessToken = (string)$apolloTokens['access_token'];
+    $isApiKey = (($apolloTokens['auth_type'] ?? '') === 'api_key');
+    $accessToken = $isApiKey
+        ? (string)($apolloTokens['api_key'] ?? '')
+        : (string)($apolloTokens['access_token'] ?? '');
+    if ($accessToken === '') return;
 
     // -------------------------------------------------------------------------
     // Refresh token if expired (dial sessions can last > 1 hour)
@@ -94,14 +98,18 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     // -------------------------------------------------------------------------
     // HTTP helpers (self-contained, no bootstrap dependency)
     // -------------------------------------------------------------------------
-    $apolloPost = function($url, $body) use ($accessToken) {
+    $authHeader = $isApiKey
+        ? 'X-Api-Key: ' . $accessToken
+        : 'Authorization: Bearer ' . $accessToken;
+
+    $apolloPost = function($url, $body) use ($authHeader) {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => json_encode($body),
             CURLOPT_HTTPHEADER     => [
-                'Authorization: Bearer ' . $accessToken,
+                $authHeader,
                 'Content-Type: application/json',
                 'Accept: application/json',
             ],
@@ -113,14 +121,14 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
         return [$code, $raw ? json_decode($raw, true) : null, $raw];
     };
 
-    $apolloPut = function($url, $body) use ($accessToken) {
+    $apolloPut = function($url, $body) use ($authHeader) {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST  => 'PUT',
             CURLOPT_POSTFIELDS     => json_encode($body),
             CURLOPT_HTTPHEADER     => [
-                'Authorization: Bearer ' . $accessToken,
+                $authHeader,
                 'Content-Type: application/json',
                 'Accept: application/json',
             ],
@@ -139,14 +147,14 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
         // Try POST to mark task complete — Apollo may use POST /v1/tasks/{id}/complete
         // or PUT /v1/tasks/{id} with completed flag. Try both patterns.
         list($taskCode, $taskResp, $taskRaw) = $apolloPost(
-            'https://app.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId) . '/complete',
+            'https://api.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId) . '/complete',
             []
         );
 
         // If /complete endpoint doesn't exist, try PUT with status
         if ($taskCode === 404 || $taskCode === 405) {
             list($taskCode, $taskResp, $taskRaw) = $apolloPut(
-                'https://app.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId),
+                'https://api.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId),
                 ['completed' => true, 'status' => 'completed']
             );
         }
@@ -211,7 +219,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     }
 
     list($callHttpCode, $callResp, $callRaw) = $apolloPost(
-        'https://app.apollo.io/api/v1/calls',
+        'https://api.apollo.io/api/v1/calls',
         $callData
     );
 
@@ -219,7 +227,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     if ($callHttpCode === 404 || $callHttpCode === 405) {
         $callData['type'] = 'call';
         list($callHttpCode, $callResp, $callRaw) = $apolloPost(
-            'https://app.apollo.io/api/v1/activities',
+            'https://api.apollo.io/api/v1/activities',
             $callData
         );
     }
@@ -251,7 +259,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
 
     if ($shouldExitSequence && $apolloSeqId !== '') {
         list($exitCode, $exitResp, $_exitRaw) = $apolloPost(
-            'https://app.apollo.io/api/v1/emailer_campaigns/' . rawurlencode($apolloSeqId) . '/remove_or_stop_contact_ids',
+            'https://api.apollo.io/api/v1/emailer_campaigns/' . rawurlencode($apolloSeqId) . '/remove_or_stop_contact_ids',
             ['contact_ids' => [$apolloContactId]]
         );
 

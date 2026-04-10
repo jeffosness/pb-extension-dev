@@ -131,7 +131,12 @@ function apollo_auth_header(array $tokens, string $tokenOrKey): string {
  * Detects API key vs OAuth token by checking global apollo auth state.
  */
 function _apollo_auth_headers($tokenOrKey) {
-  // Apollo uses Authorization: Bearer for BOTH API keys and OAuth tokens
+  global $_apollo_auth_type;
+  if (isset($_apollo_auth_type) && $_apollo_auth_type === 'api_key') {
+    // API keys: must use X-Api-Key header (Apollo returns 422 otherwise)
+    return ['X-Api-Key: ' . $tokenOrKey, 'Cache-Control: no-cache'];
+  }
+  // OAuth tokens: use Authorization: Bearer
   return ['Authorization: Bearer ' . $tokenOrKey, 'Cache-Control: no-cache'];
 }
 
@@ -223,7 +228,7 @@ function apollo_api_put_json($accessToken, $url, array $body) {
  * Used to verify token validity.
  */
 function apollo_get_me($accessToken) {
-  return apollo_api_get_json($accessToken, 'https://app.apollo.io/api/v1/users/me');
+  return apollo_api_get_json($accessToken, 'https://api.apollo.io/api/v1/users/me');
 }
 
 // -----------------------------------------------------------------------------
@@ -271,7 +276,7 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
     foreach ($batches as $batch) {
       list($code, $json, $raw) = apollo_api_post_json(
         $accessToken,
-        'https://app.apollo.io/api/v1/contacts/search',
+        'https://api.apollo.io/api/v1/contacts/search',
         ['contact_ids' => array_values($batch), 'per_page' => count($batch)]
       );
       $diag['contacts_fetch']['last_http'] = $code;
