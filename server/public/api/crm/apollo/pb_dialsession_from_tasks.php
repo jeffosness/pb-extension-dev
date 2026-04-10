@@ -46,94 +46,72 @@ if (!in_array($filter, ['due_today', 'due_and_overdue', 'all_open'], true)) {
 
 // -----------------------------------------------------------------------------
 // Fetch open call tasks for this sequence
+// Tasks response includes full contact data (phone_numbers, email, etc.)
+// so we don't need a separate contact fetch.
 // -----------------------------------------------------------------------------
+$authType = apollo_auth_type($tokens);
 $searchBody = [
-  'per_page'             => 500,
-  'open_factor_id'       => $sequenceId,
-  'type'                 => 'make_call',
-  'is_completed'         => false,
-  'sort_by_key'          => 'due_date',
-  'sort_ascending'       => true,
+  'sort_by_field' => 'task_due_at',
+  'page'          => 1,
 ];
 
-$today = gmdate('Y-m-d');
-if ($filter === 'due_today') {
-  $searchBody['due_date_range'] = [
-    'min' => $today . 'T00:00:00Z',
-    'max' => $today . 'T23:59:59Z',
-  ];
-} elseif ($filter === 'due_and_overdue') {
-  $searchBody['due_date_range'] = [
-    'max' => $today . 'T23:59:59Z',
-  ];
-}
-
-list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody);
+list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
 
 // Retry once on 401
 if ($code === 401) {
   $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
   $accessToken = (string)($tokens['access_token'] ?? '');
-  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody);
+  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
 }
 
 if ($code !== 200 || !is_array($json)) {
   api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
-    'http_code' => $code,
+    'http_code'   => $code,
+    'raw_preview' => is_string($_raw) ? substr($_raw, 0, 500) : null,
   ]);
 }
 
-$taskItems = $json['tasks'] ?? $json['data'] ?? [];
-if (!is_array($taskItems) || empty($taskItems)) {
+// Filter tasks: call type, open, matching sequence, due date
+$taskItems = $json['tasks'] ?? [];
+$today = gmdate('Y-m-d');
+
+$filteredTasks = [];
+foreach ($taskItems as $task) {
+  if (!is_array($task)) continue;
+
+  $taskType = strtolower(trim((string)($task['type'] ?? '')));
+  if (strpos($taskType, 'call') === false) continue;
+
+  if ($task['completed_at'] !== null) continue;
+  $status = strtolower(trim((string)($task['status'] ?? '')));
+  if ($status === 'completed' || $status === 'skipped') continue;
+
+  $campaignId = (string)($task['emailer_campaign_id'] ?? '');
+  if ($sequenceId !== '' && $campaignId !== '' && $campaignId !== $sequenceId) continue;
+
+  $dueAt = (string)($task['due_at'] ?? '');
+  $dueDate = substr($dueAt, 0, 10);
+  if ($filter === 'due_today' && $dueDate !== $today) continue;
+  if ($filter === 'due_and_overdue' && $dueDate > $today) continue;
+
+  $filteredTasks[] = $task;
+}
+
+if (empty($filteredTasks)) {
   api_error('No open call tasks found for this sequence', 'bad_request', 400, [
     'filter'      => $filter,
     'sequence_id' => $sequenceId,
+    'total_tasks' => count($taskItems),
   ]);
 }
 
-// Build contact_id -> task_id mapping
-$contactTaskMap = []; // apollo_contact_id => task_id
-foreach ($taskItems as $task) {
-  if (!is_array($task)) continue;
-  $contactId = (string)($task['contact_id'] ?? $task['person_id'] ?? '');
-  $taskId    = (string)($task['id'] ?? '');
-  if ($contactId !== '' && $taskId !== '') {
-    // Keep first task per contact (earliest due)
-    if (!isset($contactTaskMap[$contactId])) {
-      $contactTaskMap[$contactId] = $taskId;
-    }
-  }
-}
-
-if (empty($contactTaskMap)) {
-  api_error('No contacts with call tasks found', 'bad_request', 400);
-}
-
-$contactIds = array_keys($contactTaskMap);
-
 // Cap at 500
-if (count($contactIds) > 500) {
-  $contactIds = array_slice($contactIds, 0, 500);
+if (count($filteredTasks) > 500) {
+  $filteredTasks = array_slice($filteredTasks, 0, 500);
 }
 
 // -----------------------------------------------------------------------------
-// Fetch full contact details from Apollo API
-// -----------------------------------------------------------------------------
-$diag = [
-  'tasks_found'  => count($taskItems),
-  'contacts_to_fetch' => count($contactIds),
-];
-
-$apolloContacts = apollo_fetch_contacts_with_refresh_retry(
-  $client_id, $tokens, $accessToken, $contactIds, $diag
-);
-
-if (empty($apolloContacts)) {
-  api_error('No contacts returned from Apollo API', 'bad_request', 400, $diag);
-}
-
-// -----------------------------------------------------------------------------
-// Normalize into PhoneBurner dialsession payload
+// Build PB contacts directly from task data (contact is embedded in response)
 // -----------------------------------------------------------------------------
 $session_token = bin2hex(random_bytes(16));
 
@@ -141,17 +119,22 @@ $pbContacts   = [];
 $contacts_map = [];
 $skipped      = 0;
 
-foreach ($apolloContacts as $c) {
+foreach ($filteredTasks as $task) {
+  $taskId    = (string)($task['id'] ?? '');
+  $contactId = (string)($task['contact_id'] ?? $task['person_id'] ?? '');
+  $contact   = $task['contact'] ?? null;
+
+  if (!is_array($contact) || $contactId === '') { $skipped++; continue; }
+
+  // Normalize contact from embedded task data
+  $c = apollo_normalize_contact($contact);
   $first    = trim((string)($c['first_name'] ?? ''));
   $last     = trim((string)($c['last_name'] ?? ''));
   $email    = trim((string)($c['email'] ?? ''));
   $phone    = trim((string)($c['phone'] ?? ''));
-  $apolloId = (string)($c['apollo_id'] ?? '');
+  $apolloId = (string)($c['apollo_id'] ?? $contactId);
 
-  if ($apolloId === '') { $skipped++; continue; }
   if ($phone === '') { $skipped++; continue; }
-
-  $taskId = $contactTaskMap[$apolloId] ?? '';
   $recordUrl = 'https://app.apollo.io/#/contacts/' . rawurlencode($apolloId);
 
   $externalCrmData = [
