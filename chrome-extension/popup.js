@@ -1332,6 +1332,24 @@ async function launchApolloDialSession() {
   const status = $("apollo-dial-status");
 
   if (btn) btn.disabled = true;
+  if (status) status.textContent = "Requesting page access\u2026";
+
+  // Best-effort permission request (required for content script injection)
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult.timeout) {
+      const continueAnyway = await showConfirm(
+        "Permission request timed out. Continue anyway?",
+        "Permission Timeout"
+      );
+      if (!continueAnyway) {
+        if (btn) btn.disabled = false;
+        if (status) status.textContent = "";
+        return;
+      }
+    }
+  } catch (e) { /* best effort */ }
+
   if (status) status.textContent = "Launching dial session\u2026";
 
   const resp = await sendToBackground({ type: "APOLLO_LAUNCH_FROM_SELECTED" });

@@ -118,7 +118,7 @@ api_log('apollo_oauth_finish.ok', [
     'ms'             => $ms,
 ]);
 
-// Success page
+// Success page — attempt auto-close, fallback to message
 echo '<!doctype html>
 <html>
   <head>
@@ -128,6 +128,9 @@ echo '<!doctype html>
   <body style="font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;">
     <h3>Apollo is connected.</h3>
     <p>You can close this tab and return to the extension popup.</p>
-    <p><a href="javascript:window.close()">Close this tab</a></p>
+    <script>
+      // Attempt to close — only works if tab was opened by JS (window.open / chrome.tabs.create)
+      try { window.close(); } catch(e) {}
+    </script>
   </body>
 </html>';

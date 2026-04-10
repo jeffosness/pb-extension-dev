@@ -204,20 +204,29 @@ function apollo_get_me($accessToken) {
  */
 function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = []) {
   $contacts = [];
-  $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
+  $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null, 'last_error' => null];
 
   foreach ($contactIds as $cid) {
     $url = 'https://api.apollo.io/v1/contacts/' . rawurlencode($cid);
 
-    list($code, $json, $_raw) = apollo_api_get_json($accessToken, $url);
+    list($code, $json, $raw) = apollo_api_get_json($accessToken, $url);
     $diag['contacts_fetch']['last_http'] = $code;
 
-    if ($code !== 200 || !is_array($json) || !isset($json['contact'])) {
+    if ($code !== 200 || !is_array($json)) {
+      $diag['contacts_fetch']['fail']++;
+      $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 300) : null;
+      continue;
+    }
+
+    // Apollo may return contact nested or flat — handle both
+    $c = isset($json['contact']) && is_array($json['contact']) ? $json['contact'] : $json;
+
+    // Must have an id to be valid
+    if (empty($c['id'])) {
       $diag['contacts_fetch']['fail']++;
       continue;
     }
 
-    $c = $json['contact'];
     $contacts[] = apollo_normalize_contact($c);
     $diag['contacts_fetch']['ok']++;
   }
