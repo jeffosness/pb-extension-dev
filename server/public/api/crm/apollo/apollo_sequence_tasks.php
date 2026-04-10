@@ -62,14 +62,23 @@ if ($filter === 'due_today') {
 }
 // 'all_open' = no date filter
 
-list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody);
+$authType = apollo_auth_type($tokens);
+list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
 
 // Retry once on 401
 if ($code === 401) {
   $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
   $accessToken = (string)($tokens['access_token'] ?? '');
-  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody);
+  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
 }
+
+api_log('apollo_sequence_tasks.debug', [
+  'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+  'http_code'      => $code,
+  'search_body'    => $searchBody,
+  'response_keys'  => is_array($json) ? array_keys($json) : null,
+  'raw_preview'    => is_string($_raw) ? substr($_raw, 0, 500) : null,
+]);
 
 if ($code !== 200 || !is_array($json)) {
   api_log('apollo_sequence_tasks.search_fail', [
