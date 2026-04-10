@@ -967,6 +967,11 @@ function isSameCrmRecord(currentUrl, targetUrl) {
       return cur.pathname === tgt.pathname;
     }
 
+    // Apollo uses hash-based routing (#/contacts/id) — compare hashes
+    if (cur.hash && tgt.hash && cur.pathname === '/' && tgt.pathname === '/') {
+      return cur.hash === tgt.hash;
+    }
+
     return cur.origin + cur.pathname === tgt.origin + tgt.pathname;
   } catch (e) {
     return false;
@@ -1562,7 +1567,13 @@ function handleSessionUpdate(state) {
   if (window.top === window && recordUrl) {
     try {
       if (!isSameCrmRecord(window.location.href, recordUrl)) {
-        window.location.href = recordUrl;
+        // For hash-based SPAs (Apollo), update the hash to trigger SPA router
+        var targetUrl = new URL(recordUrl, window.location.origin);
+        if (targetUrl.hash && targetUrl.origin === window.location.origin) {
+          window.location.hash = targetUrl.hash;
+        } else {
+          window.location.href = recordUrl;
+        }
       }
     } catch (e) {
       console.error("Failed to auto-navigate to CRM record", e);
