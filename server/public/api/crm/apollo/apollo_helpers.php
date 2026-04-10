@@ -86,11 +86,7 @@ function apollo_token_is_expired(array $tokens): bool {
  * Passes $tokens by reference so callers get the refreshed payload.
  */
 function apollo_ensure_access_token(string $client_id, array &$tokens): string {
-  global $_apollo_auth_type;
-
-  // API key auth — no expiry, no refresh
   if (($tokens['auth_type'] ?? '') === 'api_key') {
-    $_apollo_auth_type = 'api_key';
     $key = (string)($tokens['api_key'] ?? '');
     if ($key === '') {
       api_error('No Apollo API key available', 'unauthorized', 401);
@@ -98,9 +94,6 @@ function apollo_ensure_access_token(string $client_id, array &$tokens): string {
     return $key;
   }
 
-  $_apollo_auth_type = 'oauth';
-
-  // OAuth auth — check expiry
   if (apollo_token_is_expired($tokens)) {
     $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
   }
@@ -111,15 +104,9 @@ function apollo_ensure_access_token(string $client_id, array &$tokens): string {
   return $access;
 }
 
-/**
- * Build the auth header for Apollo API calls.
- * API key uses X-Api-Key, OAuth uses Authorization: Bearer.
- */
-function apollo_auth_header(array $tokens, string $tokenOrKey): string {
-  if (($tokens['auth_type'] ?? '') === 'api_key') {
-    return 'X-Api-Key: ' . $tokenOrKey;
-  }
-  return 'Authorization: Bearer ' . $tokenOrKey;
+/** Get the auth type from a tokens array. */
+function apollo_auth_type(array $tokens): string {
+  return ($tokens['auth_type'] ?? '') === 'api_key' ? 'api_key' : 'oauth';
 }
 
 // -----------------------------------------------------------------------------
@@ -128,15 +115,12 @@ function apollo_auth_header(array $tokens, string $tokenOrKey): string {
 
 /**
  * Build auth headers for Apollo API calls.
- * Detects API key vs OAuth token by checking global apollo auth state.
+ * API key uses X-Api-Key, OAuth uses Authorization: Bearer.
  */
-function _apollo_auth_headers($tokenOrKey) {
-  global $_apollo_auth_type;
-  if (isset($_apollo_auth_type) && $_apollo_auth_type === 'api_key') {
-    // API keys: must use X-Api-Key header (Apollo returns 422 otherwise)
+function _apollo_auth_headers($tokenOrKey, $authType = 'oauth') {
+  if ($authType === 'api_key') {
     return ['X-Api-Key: ' . $tokenOrKey, 'Cache-Control: no-cache'];
   }
-  // OAuth tokens: use Authorization: Bearer
   return ['Authorization: Bearer ' . $tokenOrKey, 'Cache-Control: no-cache'];
 }
 
@@ -144,12 +128,12 @@ function _apollo_auth_headers($tokenOrKey) {
  * GET request to Apollo API.
  * Returns [$httpCode, $jsonArray, $rawBody]
  */
-function apollo_api_get_json($accessToken, $url) {
+function apollo_api_get_json($accessToken, $url, $authType = 'oauth') {
   $ch = curl_init($url);
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HTTPHEADER => array_merge(
-      _apollo_auth_headers($accessToken),
+      _apollo_auth_headers($accessToken, $authType),
       ['Accept: application/json']
     ),
     CURLOPT_TIMEOUT => 20,
@@ -169,14 +153,14 @@ function apollo_api_get_json($accessToken, $url) {
  * POST JSON to Apollo API.
  * Returns [$httpCode, $jsonArray, $rawBody]
  */
-function apollo_api_post_json($accessToken, $url, array $body) {
+function apollo_api_post_json($accessToken, $url, array $body, $authType = 'oauth') {
   $ch = curl_init($url);
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_POST           => true,
     CURLOPT_POSTFIELDS     => json_encode($body),
     CURLOPT_HTTPHEADER     => array_merge(
-      _apollo_auth_headers($accessToken),
+      _apollo_auth_headers($accessToken, $authType),
       ['Content-Type: application/json', 'Accept: application/json']
     ),
     CURLOPT_TIMEOUT => 20,
@@ -196,14 +180,14 @@ function apollo_api_post_json($accessToken, $url, array $body) {
  * PUT JSON to Apollo API.
  * Returns [$httpCode, $jsonArray, $rawBody]
  */
-function apollo_api_put_json($accessToken, $url, array $body) {
+function apollo_api_put_json($accessToken, $url, array $body, $authType = 'oauth') {
   $ch = curl_init($url);
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_CUSTOMREQUEST  => 'PUT',
     CURLOPT_POSTFIELDS     => json_encode($body),
     CURLOPT_HTTPHEADER     => array_merge(
-      _apollo_auth_headers($accessToken),
+      _apollo_auth_headers($accessToken, $authType),
       ['Content-Type: application/json', 'Accept: application/json']
     ),
     CURLOPT_TIMEOUT => 20,
@@ -242,20 +226,16 @@ function apollo_get_me($accessToken) {
  *
  * Returns normalized array for PhoneBurner dial session creation.
  */
-function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = []) {
+function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [], $authType = 'oauth') {
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null, 'last_error' => null];
 
   if (empty($contactIds)) return $contacts;
 
-  global $_apollo_auth_type;
-  $isApiKey = (isset($_apollo_auth_type) && $_apollo_auth_type === 'api_key');
-
-  if ($isApiKey) {
-    // API key: fetch individually via GET /contacts/{id} (full access)
+  if ($authType === 'api_key') {
     foreach ($contactIds as $cid) {
       $url = 'https://api.apollo.io/api/v1/contacts/' . rawurlencode($cid);
-      list($code, $json, $raw) = apollo_api_get_json($accessToken, $url);
+      list($code, $json, $raw) = apollo_api_get_json($accessToken, $url, $authType);
       $diag['contacts_fetch']['last_http'] = $code;
 
       if ($code !== 200 || !is_array($json)) {
@@ -271,13 +251,14 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
       $diag['contacts_fetch']['ok']++;
     }
   } else {
-    // OAuth: batch via POST /contacts/search (may have scope restrictions)
+    // OAuth/default: batch via POST /contacts/search
     $batches = array_chunk($contactIds, 100);
     foreach ($batches as $batch) {
       list($code, $json, $raw) = apollo_api_post_json(
         $accessToken,
         'https://api.apollo.io/api/v1/contacts/search',
-        ['contact_ids' => array_values($batch), 'per_page' => count($batch)]
+        ['contact_ids' => array_values($batch), 'per_page' => count($batch)],
+        $authType
       );
       $diag['contacts_fetch']['last_http'] = $code;
 
@@ -303,13 +284,14 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
  * Fetch contacts with automatic token refresh retry on 401.
  */
 function apollo_fetch_contacts_with_refresh_retry(string $client_id, array &$tokens, string &$accessToken, array $contactIds, array &$diag = []) {
-  $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag);
+  $authType = apollo_auth_type($tokens);
+  $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag, $authType);
 
   $lastHttp = $diag['contacts_fetch']['last_http'] ?? null;
   if (empty($contacts) && $lastHttp === 401) {
     $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
     $accessToken = (string)($tokens['access_token'] ?? '');
-    $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag);
+    $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag, $authType);
   }
 
   return $contacts;

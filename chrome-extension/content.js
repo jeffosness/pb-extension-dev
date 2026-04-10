@@ -968,7 +968,7 @@ function isSameCrmRecord(currentUrl, targetUrl) {
     }
 
     // Apollo uses hash-based routing (#/contacts/id) — compare hashes
-    if (cur.hash && tgt.hash && cur.pathname === '/' && tgt.pathname === '/') {
+    if (cur.hash && tgt.hash && cur.hostname.includes('apollo.io') && cur.pathname === '/' && tgt.pathname === '/') {
       return cur.hash === tgt.hash;
     }
 
@@ -1567,9 +1567,9 @@ function handleSessionUpdate(state) {
   if (window.top === window && recordUrl) {
     try {
       if (!isSameCrmRecord(window.location.href, recordUrl)) {
-        // For hash-based SPAs (Apollo), update the hash to trigger SPA router
+        // For hash-based SPAs (e.g. Apollo), update the hash to trigger SPA router
         var targetUrl = new URL(recordUrl, window.location.origin);
-        if (targetUrl.hash && targetUrl.origin === window.location.origin) {
+        if (targetUrl.hash && targetUrl.origin === window.location.origin && window.location.hostname.includes('apollo.io')) {
           window.location.hash = targetUrl.hash;
         } else {
           window.location.href = recordUrl;

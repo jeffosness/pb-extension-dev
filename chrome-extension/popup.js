@@ -1298,11 +1298,12 @@ async function disconnectApollo() {
   }
 
   APOLLO_STATE.connected = false;
+  _apolloSequencesFetched = false;
   applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
   activateTab("dial");
 }
 
-async function saveApolloApiKey() {
+function refreshApolloDialUi() {
   const input = $("apollo-apikey-input");
   const status = $("apollo-apikey-status");
   const btn = $("apollo-apikey-save");
@@ -1402,9 +1403,12 @@ async function launchApolloDialSession() {
 // Apollo Sequences
 // ---------------------------
 
+let _apolloSequencesFetched = false;
+
 async function fetchApolloSequences() {
   const select = $("apollo-sequence-select");
   if (!select) return;
+  if (_apolloSequencesFetched) return;
 
   select.innerHTML = '<option value="">Loading sequences\u2026</option>';
   select.disabled = true;
@@ -1435,6 +1439,7 @@ async function fetchApolloSequences() {
     }
 
     select.disabled = false;
+    _apolloSequencesFetched = true;
   } catch (e) {
     select.innerHTML = '<option value="">Failed to load sequences</option>';
   }

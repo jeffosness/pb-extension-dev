@@ -54,24 +54,11 @@ if (count($contactIds) > 500) {
 // -----------------------------------------------------------------------------
 $diag = [
   'selected_contact_ids' => count($contactIds),
-  'first_ids' => array_slice($contactIds, 0, 3),
 ];
-
-api_log('apollo_selection.fetching', [
-  'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-  'contact_count' => count($contactIds),
-  'first_ids' => array_slice($contactIds, 0, 3),
-]);
 
 $apolloContacts = apollo_fetch_contacts_with_refresh_retry(
   $client_id, $tokens, $accessToken, $contactIds, $diag
 );
-
-api_log('apollo_selection.fetch_result', [
-  'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-  'contacts_returned' => count($apolloContacts),
-  'diag' => $diag,
-]);
 
 if (empty($apolloContacts)) {
   api_error('No contacts returned from Apollo API', 'bad_request', 400, $diag);

@@ -34,13 +34,9 @@ $redirect = rtrim($baseUrl, '/') . '/api/crm/apollo/oauth_apollo_finish.php';
 // Request all scopes needed for dial sessions + call logging
 $scopes = implode(' ', [
     'read_user_profile',
-    'contacts_search', 'contact_read', 'contact_update', 'contact_write',
-    'contact_stages_list', 'contact_stages_update',
-    'contact_owners_update',
+    'contacts_search', 'contact_read', 'contact_update',
     'emailer_campaigns_search', 'emailer_campaigns_remove_or_stop_contact_ids',
     'tasks_list', 'tasks_create',
-    'notes_list',
-    'users_list',
 ]);
 
 // Build URL manually (not http_build_query) to keep redirect_uri unencoded
