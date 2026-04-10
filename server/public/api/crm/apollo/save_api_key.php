@@ -19,24 +19,44 @@ if ($apiKey === '') {
   api_error('No API key provided', 'bad_request', 400);
 }
 
-// Validate by calling Apollo /users/me with the API key
-// Apollo uses Authorization: Bearer for API keys (same as OAuth)
-$ch = curl_init('https://api.apollo.io/api/v1/users/me');
-curl_setopt_array($ch, [
-  CURLOPT_RETURNTRANSFER => true,
-  CURLOPT_HTTPHEADER     => [
-    'Authorization: Bearer ' . $apiKey,
-    'Content-Type: application/json',
-    'Accept: application/json',
-    'Cache-Control: no-cache',
-  ],
-  CURLOPT_TIMEOUT => 15,
-]);
-$raw  = curl_exec($ch);
-$code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
+// Validate by calling Apollo API with the API key
+// Try multiple auth methods — Apollo docs are inconsistent
+$authMethods = [
+  // Method 1: POST with api_key in body (Apollo's traditional pattern)
+  ['method' => 'POST', 'url' => 'https://api.apollo.io/api/v1/users/me', 'body' => json_encode(['api_key' => $apiKey]), 'headers' => ['Content-Type: application/json', 'Accept: application/json']],
+  // Method 2: GET with api_key as query param
+  ['method' => 'GET', 'url' => 'https://api.apollo.io/api/v1/users/me?api_key=' . urlencode($apiKey), 'body' => null, 'headers' => ['Accept: application/json']],
+  // Method 3: Bearer auth header
+  ['method' => 'GET', 'url' => 'https://api.apollo.io/api/v1/users/me', 'body' => null, 'headers' => ['Authorization: Bearer ' . $apiKey, 'Accept: application/json']],
+];
 
-$json = $raw ? json_decode($raw, true) : null;
+$code = 0;
+$json = null;
+$raw  = '';
+$methodUsed = '';
+
+foreach ($authMethods as $attempt) {
+  $ch = curl_init($attempt['url']);
+  $opts = [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER     => $attempt['headers'],
+    CURLOPT_TIMEOUT        => 15,
+  ];
+  if ($attempt['method'] === 'POST') {
+    $opts[CURLOPT_POST] = true;
+    $opts[CURLOPT_POSTFIELDS] = $attempt['body'];
+  }
+  curl_setopt_array($ch, $opts);
+  $raw  = curl_exec($ch);
+  $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  curl_close($ch);
+
+  $json = $raw ? json_decode($raw, true) : null;
+  $methodUsed = $attempt['method'] . ' ' . parse_url($attempt['url'], PHP_URL_PATH);
+
+  // If we got 200, this method works
+  if ($code === 200 && is_array($json)) break;
+}
 
 if ($code !== 200 || !is_array($json)) {
   api_log('apollo_save_key.invalid', [
@@ -45,8 +65,9 @@ if ($code !== 200 || !is_array($json)) {
     'response'       => is_string($raw) ? substr($raw, 0, 300) : null,
   ]);
   api_error('Invalid Apollo API key (HTTP ' . $code . '). Check that you copied the full master key.', 'unauthorized', 401, [
-    'http_code' => $code,
-    'hint'      => is_string($raw) ? substr($raw, 0, 200) : null,
+    'http_code'    => $code,
+    'method_tried' => $methodUsed,
+    'hint'         => is_string($raw) ? substr($raw, 0, 300) : null,
   ]);
 }
 
