@@ -882,7 +882,7 @@ async function scanPageForContacts() {
   const crmId = CURRENT_CRM_CONTEXT?.crmId || "generic";
 
   // 🚫 L3 CRMs must NOT use generic scanning (they use selected IDs + server fetch)
-  if (crmId === "hubspot" || crmId === "close") return [];
+  if (crmId === "hubspot" || crmId === "close" || crmId === "apollo") return [];
 
   let contacts = [];
 
@@ -1928,6 +1928,57 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ids: contactIds,
         lead_ids: leadIds,
         id_type: contactIds.length > 0 ? "contact" : "lead",
+        url: window.location.href,
+        title: document.title || "",
+      });
+    } catch (e) {
+      sendResponse({ error: e && e.message ? e.message : String(e) });
+    }
+    return true;
+  }
+
+  // --- Apollo L3 contact ID extraction ---
+  if (msg && msg.type === "APOLLO_GET_SELECTED_IDS") {
+    try {
+      var ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+      if (ctx.crmId !== "apollo") {
+        sendResponse({ error: "Not on an Apollo page." });
+        return true;
+      }
+
+      // Apollo People table: rows with role="row" containing contact links
+      // Contact links: a[data-to^="/contacts/"] with 24-char hex IDs
+      var selectedIds = [];
+      var allIds = [];
+
+      var rows = document.querySelectorAll('div[role="row"][aria-rowindex]');
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var link = row.querySelector('a[data-to^="/contacts/"]');
+        if (!link) continue;
+
+        var dataTo = link.getAttribute("data-to") || "";
+        var idMatch = dataTo.match(/\/contacts\/([a-f0-9]{24})/);
+        if (!idMatch) continue;
+
+        var contactId = idMatch[1];
+        allIds.push(contactId);
+
+        // Check if row is selected via checkbox
+        var cb = row.querySelector('input[type="checkbox"][aria-label="Select current row"]');
+        if (cb && cb.checked) {
+          selectedIds.push(contactId);
+        }
+      }
+
+      // Use selected if any are checked, otherwise use all visible
+      var ids = selectedIds.length > 0 ? selectedIds : allIds;
+
+      sendResponse({
+        ids: ids,
+        id_type: "contact",
+        selected_count: selectedIds.length,
+        total_visible: allIds.length,
         url: window.location.href,
         title: document.title || "",
       });

@@ -186,9 +186,18 @@ if ($crmName === 'close') {
     }
 }
 // Future L3 providers:
-// elseif ($crmName === 'hubspot') {
+// if ($crmName === 'hubspot') {
 //     require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
 //     hs_log_call($state, $payload, $lastCall, $status);
 // }
+
+if ($crmName === 'apollo') {
+    try {
+        require_once __DIR__ . '/../api/crm/apollo/apollo_call_logger.php';
+        apollo_log_call($state, $payload, $lastCall, $status);
+    } catch (\Throwable $e) {
+        log_msg('apollo_call_log_error: ' . $e->getMessage());
+    }
+}
 
 echo 'OK';

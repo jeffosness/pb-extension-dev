@@ -829,6 +829,153 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       // -------------------------
+      // Apollo L3: launch from selected contacts on People page
+      // -------------------------
+      if (msg.type === "APOLLO_LAUNCH_FROM_SELECTED") {
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const apolloTab = (tabs || []).find((t) =>
+          (t.url || "").includes("apollo.io"),
+        );
+        if (!apolloTab || !apolloTab.id) {
+          return sendResponse({
+            ok: false,
+            error: "Open an Apollo People page with contacts visible.",
+          });
+        }
+
+        await ensureContentScript(apolloTab.id);
+
+        const selected = await new Promise((resolve) => {
+          chrome.tabs.sendMessage(
+            apolloTab.id,
+            { type: "APOLLO_GET_SELECTED_IDS" },
+            { frameId: 0 },
+            (res) => {
+              if (chrome.runtime.lastError)
+                return resolve({ error: chrome.runtime.lastError.message });
+              resolve(res);
+            },
+          );
+        });
+
+        if (!selected || selected.error) {
+          return sendResponse({
+            ok: false,
+            error: selected?.error || "Could not read Apollo contacts.",
+          });
+        }
+
+        const contactIds = Array.isArray(selected.ids) ? selected.ids : [];
+
+        if (!contactIds.length)
+          return sendResponse({
+            ok: false,
+            error: "No contacts found on this page.",
+          });
+
+        const resp = await api("crm/apollo/pb_dialsession_selection.php", {
+          contact_ids: contactIds,
+          context: {
+            url: selected.url || apolloTab.url || null,
+            title: selected.title || null,
+            selectedCount: contactIds.length,
+          },
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session.",
+            details: resp,
+          });
+        }
+
+        await registerSessionForTab(apolloTab.id, sessionToken, tempCode, BASE_URL);
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
+      // Apollo L3: launch from sequence call tasks (via popup dropdown)
+      // -------------------------
+      if (msg.type === "APOLLO_LAUNCH_FROM_TASKS") {
+        const sequenceId = msg.sequence_id || "";
+        const filter = msg.filter || "all_open";
+
+        if (!sequenceId) {
+          return sendResponse({
+            ok: false,
+            error: "No sequence selected.",
+          });
+        }
+
+        const resp = await api("crm/apollo/pb_dialsession_from_tasks.php", {
+          sequence_id: sequenceId,
+          filter: filter,
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session from tasks.",
+            details: resp,
+          });
+        }
+
+        // Try to find Apollo tab for session registration
+        const allTabs = await chrome.tabs.query({ currentWindow: true });
+        const aTab = (allTabs || []).find((t) =>
+          (t.url || "").includes("apollo.io"),
+        );
+        if (aTab && aTab.id) {
+          await registerSessionForTab(aTab.id, sessionToken, tempCode, BASE_URL);
+        }
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
       // Level 1/2: scanned -> server -> dialsession
       // -------------------------
       if (msg.type === "SCANNED_CONTACTS") {
