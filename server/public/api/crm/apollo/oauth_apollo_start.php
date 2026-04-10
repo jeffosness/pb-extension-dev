@@ -31,15 +31,26 @@ if (!$apolloClientId || !$baseUrl) {
 // Must match the actual finish endpoint path
 $redirect = rtrim($baseUrl, '/') . '/api/crm/apollo/oauth_apollo_finish.php';
 
-$params = [
-    'client_id'     => $apolloClientId,
-    'redirect_uri'  => $redirect,
-    'state'         => $client_id, // carries extension client_id through OAuth
-    'response_type' => 'code',
-    'scope'         => 'read_user_profile',
-];
+// Request all scopes needed for dial sessions + call logging
+$scopes = implode(' ', [
+    'read_user_profile',
+    'contacts_search', 'contact_read', 'contact_update', 'contact_write',
+    'contact_stages_list', 'contact_stages_update',
+    'contact_owners_update',
+    'emailer_campaigns_search', 'emailer_campaigns_remove_or_stop_contact_ids',
+    'tasks_list', 'tasks_create',
+    'notes_list',
+    'users_list',
+]);
 
-$url = 'https://app.apollo.io/#/oauth/authorize?' . http_build_query($params);
+// Build URL manually (not http_build_query) to keep redirect_uri unencoded
+// Apollo's hash-based SPA may not handle double-encoded URLs correctly
+$url = 'https://app.apollo.io/#/oauth/authorize?'
+    . 'client_id=' . urlencode($apolloClientId)
+    . '&redirect_uri=' . urlencode($redirect)
+    . '&state=' . urlencode($client_id)
+    . '&response_type=code'
+    . '&scope=' . urlencode($scopes);
 
 api_log('apollo_oauth_start.ok', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
