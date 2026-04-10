@@ -20,37 +20,23 @@ if ($apiKey === '') {
 }
 
 // Validate by calling Apollo /users/me with the API key
-// Try both known Apollo API hosts
-$apiHosts = [
-  'https://api.apollo.io/api/v1/users/me',
-  'https://app.apollo.io/api/v1/users/me',
-];
+// Apollo uses Authorization: Bearer for API keys (same as OAuth)
+$ch = curl_init('https://api.apollo.io/api/v1/users/me');
+curl_setopt_array($ch, [
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_HTTPHEADER     => [
+    'Authorization: Bearer ' . $apiKey,
+    'Content-Type: application/json',
+    'Accept: application/json',
+    'Cache-Control: no-cache',
+  ],
+  CURLOPT_TIMEOUT => 15,
+]);
+$raw  = curl_exec($ch);
+$code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
 
-$code = 0;
-$json = null;
-$raw  = '';
-
-foreach ($apiHosts as $url) {
-  $ch = curl_init($url);
-  curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER     => [
-      'X-Api-Key: ' . $apiKey,
-      'Content-Type: application/json',
-      'Accept: application/json',
-      'Cache-Control: no-cache',
-    ],
-    CURLOPT_TIMEOUT => 15,
-  ]);
-  $raw  = curl_exec($ch);
-  $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-  curl_close($ch);
-
-  $json = $raw ? json_decode($raw, true) : null;
-
-  // If we got a real response (not connection error), stop trying
-  if ($code > 0) break;
-}
+$json = $raw ? json_decode($raw, true) : null;
 
 if ($code !== 200 || !is_array($json)) {
   api_log('apollo_save_key.invalid', [
