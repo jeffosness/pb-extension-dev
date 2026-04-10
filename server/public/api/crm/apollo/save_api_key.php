@@ -20,28 +20,48 @@ if ($apiKey === '') {
 }
 
 // Validate by calling Apollo /users/me with the API key
-$ch = curl_init('https://app.apollo.io/api/v1/users/me');
-curl_setopt_array($ch, [
-  CURLOPT_RETURNTRANSFER => true,
-  CURLOPT_HTTPHEADER     => [
-    'X-Api-Key: ' . $apiKey,
-    'Accept: application/json',
-    'Cache-Control: no-cache',
-  ],
-  CURLOPT_TIMEOUT => 15,
-]);
-$raw  = curl_exec($ch);
-$code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
+// Try both known Apollo API hosts
+$apiHosts = [
+  'https://api.apollo.io/api/v1/users/me',
+  'https://app.apollo.io/api/v1/users/me',
+];
 
-$json = $raw ? json_decode($raw, true) : null;
+$code = 0;
+$json = null;
+$raw  = '';
+
+foreach ($apiHosts as $url) {
+  $ch = curl_init($url);
+  curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER     => [
+      'X-Api-Key: ' . $apiKey,
+      'Content-Type: application/json',
+      'Accept: application/json',
+      'Cache-Control: no-cache',
+    ],
+    CURLOPT_TIMEOUT => 15,
+  ]);
+  $raw  = curl_exec($ch);
+  $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  curl_close($ch);
+
+  $json = $raw ? json_decode($raw, true) : null;
+
+  // If we got a real response (not connection error), stop trying
+  if ($code > 0) break;
+}
 
 if ($code !== 200 || !is_array($json)) {
   api_log('apollo_save_key.invalid', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'http_code'      => $code,
+    'response'       => is_string($raw) ? substr($raw, 0, 300) : null,
   ]);
-  api_error('Invalid Apollo API key. Check that you copied the full key.', 'unauthorized', 401);
+  api_error('Invalid Apollo API key (HTTP ' . $code . '). Check that you copied the full master key.', 'unauthorized', 401, [
+    'http_code' => $code,
+    'hint'      => is_string($raw) ? substr($raw, 0, 200) : null,
+  ]);
 }
 
 // Save as token — reuse the same token storage, just with api_key instead of access_token
