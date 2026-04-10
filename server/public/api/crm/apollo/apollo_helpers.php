@@ -209,25 +209,43 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
 
   if (empty($contactIds)) return $contacts;
 
-  // Batch in groups of 100 (Apollo search limit)
+  // Batch in groups of 100
   $batches = array_chunk($contactIds, 100);
 
   foreach ($batches as $batch) {
-    $searchBody = [
-      'contact_ids' => array_values($batch),
-      'per_page' => count($batch),
+    // Try multiple endpoints — Apollo OAuth may restrict some
+    $endpoints = [
+      'https://app.apollo.io/api/v1/mixed_people/search',
+      'https://app.apollo.io/api/v1/contacts/search',
+      'https://app.apollo.io/api/v1/people/search',
     ];
 
-    list($code, $json, $raw) = apollo_api_post_json(
-      $accessToken,
-      'https://app.apollo.io/api/v1/contacts/search',
-      $searchBody
-    );
+    $code = 0;
+    $json = null;
+    $raw = null;
+
+    foreach ($endpoints as $endpoint) {
+      $searchBody = [
+        'contact_ids' => array_values($batch),
+        'per_page' => count($batch),
+      ];
+
+      list($code, $json, $raw) = apollo_api_post_json(
+        $accessToken,
+        $endpoint,
+        $searchBody
+      );
+
+      // If not 403, this endpoint works (or gave a real error)
+      if ($code !== 403) break;
+    }
     $diag['contacts_fetch']['last_http'] = $code;
+    $diag['contacts_fetch']['endpoint_used'] = $endpoint ?? 'none';
 
     if ($code !== 200 || !is_array($json)) {
       $diag['contacts_fetch']['fail'] += count($batch);
-      $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 300) : null;
+      $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 500) : null;
+      $diag['contacts_fetch']['all_403'] = ($code === 403);
       continue;
     }
 
