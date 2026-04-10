@@ -78,7 +78,7 @@ $redirect = rtrim($baseUrl, '/') . '/api/crm/apollo/oauth_apollo_finish.php';
 // Exchange code -> tokens (timed)
 $t0 = microtime(true);
 list($status, $resp) = http_post_form(
-    'https://app.apollo.io/api/v1/oauth/token',
+    'https://api.apollo.io/api/v1/oauth/token',
     [
         'grant_type'    => 'authorization_code',
         'client_id'     => $apolloClientId,

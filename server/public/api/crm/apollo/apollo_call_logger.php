@@ -41,7 +41,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
         $refreshToken = $apolloTokens['refresh_token'] ?? '';
         if ($refreshToken !== '') {
             $apolloCfg = cfg();
-            $ch = curl_init('https://app.apollo.io/api/v1/oauth/token');
+            $ch = curl_init('https://api.apollo.io/api/v1/oauth/token');
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_POST           => true,

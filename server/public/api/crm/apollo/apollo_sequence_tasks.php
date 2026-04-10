@@ -39,28 +39,13 @@ $accessToken = apollo_ensure_access_token($client_id, $tokens);
 // Fetch open call tasks for this sequence
 // POST /v1/tasks/search
 // -----------------------------------------------------------------------------
+// Apollo tasks/search API — start with minimal params to avoid 422
+// Docs: https://docs.apollo.io/reference/search-for-tasks
+// We fetch tasks and filter for call type + open status in PHP
 $searchBody = [
-  'per_page'             => 500,
-  'open_factor_id'       => $sequenceId,  // sequence filter
-  'type'                 => 'make_call',  // call tasks only
-  'is_completed'         => false,        // open tasks only
-  'sort_by_key'          => 'due_date',
-  'sort_ascending'       => true,
+  'sort_by_field' => 'task_due_at',
+  'page'          => 1,
 ];
-
-// Apply date filter
-$today = gmdate('Y-m-d');
-if ($filter === 'due_today') {
-  $searchBody['due_date_range'] = [
-    'min' => $today . 'T00:00:00Z',
-    'max' => $today . 'T23:59:59Z',
-  ];
-} elseif ($filter === 'due_and_overdue') {
-  $searchBody['due_date_range'] = [
-    'max' => $today . 'T23:59:59Z',
-  ];
-}
-// 'all_open' = no date filter
 
 $authType = apollo_auth_type($tokens);
 list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
@@ -90,19 +75,41 @@ if ($code !== 200 || !is_array($json)) {
   ]);
 }
 
-// Normalize results
+// Normalize and filter results
 $tasks     = [];
 $taskItems = $json['tasks'] ?? $json['data'] ?? [];
-$total     = (int)($json['pagination']['total_entries'] ?? $json['total_entries'] ?? count($taskItems));
+$totalRaw  = count($taskItems);
+$today     = gmdate('Y-m-d');
 
 if (is_array($taskItems)) {
   foreach ($taskItems as $task) {
     if (!is_array($task)) continue;
 
+    $taskType = strtolower(trim((string)($task['type'] ?? '')));
+    $taskStatus = strtolower(trim((string)($task['status'] ?? '')));
+    $completedAt = $task['completed_at'] ?? null;
+    $campaignId = (string)($task['emailer_campaign_id'] ?? '');
+    $dueAt = (string)($task['due_at'] ?? $task['due_date'] ?? '');
+
+    // Filter: only call tasks (type contains "call")
+    $isCallTask = (strpos($taskType, 'call') !== false);
+    if (!$isCallTask) continue;
+
+    // Filter: only open/incomplete tasks
+    if ($completedAt !== null) continue;
+    if ($taskStatus === 'completed' || $taskStatus === 'skipped') continue;
+
+    // Filter: match sequence if provided
+    if ($sequenceId !== '' && $campaignId !== '' && $campaignId !== $sequenceId) continue;
+
+    // Filter: by due date
+    $dueDate = substr($dueAt, 0, 10); // YYYY-MM-DD
+    if ($filter === 'due_today' && $dueDate !== $today) continue;
+    if ($filter === 'due_and_overdue' && $dueDate > $today) continue;
+
     $contactId = (string)($task['contact_id'] ?? $task['person_id'] ?? '');
     $contactName = trim((string)($task['contact_name'] ?? $task['person_name'] ?? ''));
 
-    // Some Apollo task responses nest contact info
     if ($contactName === '' && isset($task['contact'])) {
       $c = $task['contact'];
       $contactName = trim(
@@ -114,18 +121,22 @@ if (is_array($taskItems)) {
       'task_id'      => (string)($task['id'] ?? ''),
       'contact_id'   => $contactId,
       'contact_name' => $contactName,
-      'due_date'     => (string)($task['due_date'] ?? ''),
-      'type'         => (string)($task['type'] ?? ''),
+      'due_date'     => $dueAt,
+      'type'         => $taskType,
       'priority'     => (string)($task['priority'] ?? ''),
+      'campaign_id'  => $campaignId,
     ];
   }
 }
+
+$total = count($tasks);
 
 api_log('apollo_sequence_tasks.ok', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'sequence_id'    => $sequenceId,
   'filter'         => $filter,
   'tasks_found'    => count($tasks),
+  'total_raw'      => $totalRaw,
   'total'          => $total,
 ]);
 

@@ -32,7 +32,7 @@ function apollo_refresh_access_token_or_fail(string $client_id, array $tokens): 
 
   $t0 = microtime(true);
   list($status, $resp) = http_post_form(
-    'https://app.apollo.io/api/v1/oauth/token',
+    'https://api.apollo.io/api/v1/oauth/token',
     [
       'grant_type'    => 'refresh_token',
       'client_id'     => $apolloClientId,
