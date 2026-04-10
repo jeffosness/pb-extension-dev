@@ -81,13 +81,13 @@ api_log('apollo_sequence_tasks.debug', [
 ]);
 
 if ($code !== 200 || !is_array($json)) {
-  api_log('apollo_sequence_tasks.search_fail', [
-    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+  api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
+    'http_code'      => $code,
     'sequence_id'    => $sequenceId,
     'filter'         => $filter,
-    'http_code'      => $code,
+    'auth_type'      => $authType,
+    'raw_preview'    => is_string($_raw) ? substr($_raw, 0, 500) : null,
   ]);
-  api_error('Failed to fetch Apollo tasks', 'api_error', 502);
 }
 
 // Normalize results
