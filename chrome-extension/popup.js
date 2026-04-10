@@ -1758,6 +1758,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return launchApolloDialSession();
   });
   $("apollo-disconnect")?.addEventListener("click", disconnectApollo);
+  $("apollo-oauth-connect")?.addEventListener("click", startApolloOAuth);
   $("apollo-apikey-save")?.addEventListener("click", saveApolloApiKey);
   $("apollo-sequence-select")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-task-filter")?.addEventListener("change", onApolloSequenceChange);

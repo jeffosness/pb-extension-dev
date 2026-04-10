@@ -566,16 +566,20 @@
 
         <!-- Apollo API Key (when not connected) -->
         <div id="apollo-apikey-card" class="card hidden">
-          <div class="card-title">Apollo API Key</div>
+          <div class="card-title">Apollo Connection</div>
           <div class="help-text">
-            Paste your Apollo master API key to enable dial sessions.
-            Get your key from
-            <a href="https://developer.apollo.io/#/keys" target="_blank" style="color:var(--accent);">developer.apollo.io</a>.
+            Connect with OAuth or paste your Apollo master API key.
+          </div>
+          <button id="apollo-oauth-connect" class="primary mt-8">Connect with Apollo OAuth</button>
+          <div class="help-text mt-10" style="text-align:center;">— or —</div>
+          <div class="help-text">
+            Get a master API key from
+            <a href="https://developer.apollo.io/#/keys" target="_blank" style="color:var(--accent);">developer.apollo.io</a>
           </div>
           <input type="password" id="apollo-apikey-input" placeholder="Paste Apollo API key…"
                  autocomplete="off" style="margin-top:8px;" />
           <div id="apollo-apikey-status" class="status"></div>
-          <button id="apollo-apikey-save" class="primary mt-8">Save API Key</button>
+          <button id="apollo-apikey-save" class="secondary mt-8">Save API Key</button>
         </div>
 
         <div class="card">
