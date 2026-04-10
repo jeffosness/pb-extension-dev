@@ -197,8 +197,9 @@ function apollo_get_me($accessToken) {
 // -----------------------------------------------------------------------------
 
 /**
- * Fetch contacts by their Apollo contact IDs.
- * Apollo contacts have: id, first_name, last_name, email, phone_numbers[], etc.
+ * Fetch contacts by their Apollo contact IDs using the search endpoint.
+ * Uses POST /contacts/search with contact_ids filter (works with OAuth contacts_search scope).
+ * GET /contacts/{id} requires a different scope that OAuth tokens may not have.
  *
  * Returns normalized array for PhoneBurner dial session creation.
  */
@@ -206,29 +207,47 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null, 'last_error' => null];
 
-  foreach ($contactIds as $cid) {
-    $url = 'https://app.apollo.io/api/v1/contacts/' . rawurlencode($cid);
+  if (empty($contactIds)) return $contacts;
 
-    list($code, $json, $raw) = apollo_api_get_json($accessToken, $url);
+  // Batch in groups of 100 (Apollo search limit)
+  $batches = array_chunk($contactIds, 100);
+
+  foreach ($batches as $batch) {
+    $searchBody = [
+      'contact_ids' => array_values($batch),
+      'per_page' => count($batch),
+    ];
+
+    list($code, $json, $raw) = apollo_api_post_json(
+      $accessToken,
+      'https://app.apollo.io/api/v1/contacts/search',
+      $searchBody
+    );
     $diag['contacts_fetch']['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
-      $diag['contacts_fetch']['fail']++;
+      $diag['contacts_fetch']['fail'] += count($batch);
       $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 300) : null;
       continue;
     }
 
-    // Apollo may return contact nested or flat — handle both
-    $c = isset($json['contact']) && is_array($json['contact']) ? $json['contact'] : $json;
-
-    // Must have an id to be valid
-    if (empty($c['id'])) {
-      $diag['contacts_fetch']['fail']++;
-      continue;
+    // Apollo search returns contacts in a 'contacts' array
+    $results = $json['contacts'] ?? $json['people'] ?? $json['data'] ?? [];
+    if (!is_array($results)) {
+      // Maybe the response is flat (array of contacts at top level)
+      $results = isset($json[0]) ? $json : [];
     }
 
-    $contacts[] = apollo_normalize_contact($c);
-    $diag['contacts_fetch']['ok']++;
+    foreach ($results as $c) {
+      if (!is_array($c) || empty($c['id'])) {
+        $diag['contacts_fetch']['fail']++;
+        continue;
+      }
+      $contacts[] = apollo_normalize_contact($c);
+      $diag['contacts_fetch']['ok']++;
+    }
+
+    $diag['contacts_fetch']['fail'] += count($batch) - count($results);
   }
 
   return $contacts;
