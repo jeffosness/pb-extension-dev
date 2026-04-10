@@ -155,6 +155,7 @@ foreach ($closeContacts as $c) {
     'last_name'         => $last,
     'phone'             => $phone ?: null,
     'email'             => $email ?: null,
+    'external_id'       => $closeId,
     'external_crm_data' => $externalCrmData,
   ];
 
