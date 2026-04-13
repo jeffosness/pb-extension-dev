@@ -16,6 +16,14 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.6.0": {
+    title: "What's New in v0.6.0",
+    items: [
+      "Apollo.io integration \u2014 connect your Apollo account and launch dial sessions from your People page or sequence call tasks",
+      "Dial from Apollo sequences \u2014 select a sequence, filter by due tasks, and power-dial contacts with call tasks due today",
+      "Auto-navigate to Apollo contacts during calls with the Follow widget"
+    ]
+  },
   "0.5.2": {
     title: "What's New in v0.5.2",
     items: [
