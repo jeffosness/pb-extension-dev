@@ -140,36 +140,13 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
         return [$code, $raw ? json_decode($raw, true) : null, $raw];
     };
 
-    // -------------------------------------------------------------------------
-    // 1) Complete the Apollo task (advances contact to next sequence step)
-    // -------------------------------------------------------------------------
-    if ($apolloTaskId !== '') {
-        // Try POST to mark task complete — Apollo may use POST /v1/tasks/{id}/complete
-        // or PUT /v1/tasks/{id} with completed flag. Try both patterns.
-        list($taskCode, $taskResp, $taskRaw) = $apolloPost(
-            'https://api.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId) . '/complete',
-            []
-        );
-
-        // If /complete endpoint doesn't exist, try PUT with status
-        if ($taskCode === 404 || $taskCode === 405) {
-            list($taskCode, $taskResp, $taskRaw) = $apolloPut(
-                'https://api.apollo.io/api/v1/tasks/' . rawurlencode($apolloTaskId),
-                ['completed' => true, 'status' => 'completed']
-            );
-        }
-
-        log_msg('apollo_task_complete: ' . json_encode([
-            'http_code'  => $taskCode,
-            'success'    => ($taskCode >= 200 && $taskCode < 300),
-            'task_id'    => $apolloTaskId,
-            'contact_id' => $apolloContactId,
-            'pb_status'  => $status,
-        ]));
-    }
+    // Note: Apollo has no "Update Task" or "Complete Task" endpoint.
+    // Task completion is handled by linking the call record to the task via
+    // outreach_task_id in the phone_calls endpoint (see step 2 below).
 
     // -------------------------------------------------------------------------
-    // 2) Log call activity to Apollo
+    // 2) Log call record to Apollo via POST /phone_calls
+    // Docs: https://docs.apollo.io/reference/create-call-records
     // -------------------------------------------------------------------------
     $callNotes = $payload['call_notes'] ?? [];
     if (!is_array($callNotes)) $callNotes = [];
@@ -178,19 +155,17 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     $pbStatusLower = strtolower($status);
     $pbConnected = strtolower((string)($payload['connected'] ?? '0'));
 
-    // Map PB status to Apollo disposition
-    if (strpos($pbStatusLower, 'voicemail') !== false || strpos($pbStatusLower, 'left message') !== false) {
-        $apolloDisposition = 'Left Voicemail';
-    } elseif (strpos($pbStatusLower, 'busy') !== false) {
-        $apolloDisposition = 'Busy';
-    } elseif (strpos($pbStatusLower, 'bad number') !== false || strpos($pbStatusLower, 'bad_number') !== false) {
-        $apolloDisposition = 'Wrong Number';
-    } elseif (strpos($pbStatusLower, 'no answer') !== false || strpos($pbStatusLower, 'did not answer') !== false) {
-        $apolloDisposition = 'No Answer';
+    // Map PB status to Apollo call status
+    // Apollo accepts: completed, no_answer, failed, busy
+    if (strpos($pbStatusLower, 'busy') !== false) {
+        $apolloCallStatus = 'busy';
+    } elseif (strpos($pbStatusLower, 'bad number') !== false || strpos($pbStatusLower, 'bad_number') !== false
+           || strpos($pbStatusLower, 'fax') !== false) {
+        $apolloCallStatus = 'failed';
     } elseif ($pbConnected === '1') {
-        $apolloDisposition = 'Connected';
+        $apolloCallStatus = 'completed';
     } else {
-        $apolloDisposition = 'No Answer';
+        $apolloCallStatus = 'no_answer';
     }
 
     // Build note text
@@ -200,37 +175,36 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     }
     $noteText = implode(' — ', $noteParts);
 
-    // Recording URL
-    $recordingUrl = trim((string)($payload['recording_url_public'] ?? ''));
-    if ($recordingUrl !== '' && strpos($recordingUrl, 'http://') === 0) {
-        $recordingUrl = 'https://' . substr($recordingUrl, 7);
-    }
+    // Calculate start/end times from duration
+    $duration = (int)($lastCall['duration'] ?? 0);
+    $endTime = gmdate('c'); // now
+    $startTime = gmdate('c', time() - max(0, $duration));
 
     $callData = [
+        'logged'      => true,
         'contact_id'  => $apolloContactId,
-        'disposition'  => $apolloDisposition,
-        'duration'     => (int)($lastCall['duration'] ?? 0),
-        'direction'    => 'outbound',
-        'note'         => $noteText,
+        'status'      => $apolloCallStatus,
+        'duration'    => $duration,
+        'start_time'  => $startTime,
+        'end_time'    => $endTime,
+        'note'        => $noteText,
     ];
 
-    if ($recordingUrl !== '' && $pbConnected === '1') {
-        $callData['recording_url'] = $recordingUrl;
+    // Link to the sequence task — may auto-complete the task in Apollo
+    if ($apolloTaskId !== '') {
+        $callData['outreach_task_id'] = $apolloTaskId;
+    }
+
+    // Add phone number if available
+    $calledPhone = $mapEntry['phone'] ?? '';
+    if ($calledPhone !== '') {
+        $callData['to_number'] = $calledPhone;
     }
 
     list($callHttpCode, $callResp, $callRaw) = $apolloPost(
-        'https://api.apollo.io/api/v1/calls',
+        'https://api.apollo.io/api/v1/phone_calls',
         $callData
     );
-
-    // If /v1/calls doesn't exist, try /v1/activities
-    if ($callHttpCode === 404 || $callHttpCode === 405) {
-        $callData['type'] = 'call';
-        list($callHttpCode, $callResp, $callRaw) = $apolloPost(
-            'https://api.apollo.io/api/v1/activities',
-            $callData
-        );
-    }
 
     $logData = [
         'http_code'     => $callHttpCode,
@@ -238,9 +212,8 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
         'contact_id'    => $apolloContactId,
         'pb_status'     => $status,
         'pb_connected'  => $payload['connected'] ?? null,
-        'disposition'   => $apolloDisposition,
+        'apollo_status' => $apolloCallStatus,
         'has_notes'     => !empty($callNotes),
-        'has_recording' => isset($callData['recording_url']),
         'has_task'      => ($apolloTaskId !== ''),
     ];
     if ($callHttpCode >= 400 && $callRaw) {
