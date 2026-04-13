@@ -223,24 +223,35 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     log_msg('apollo_call_log: ' . json_encode($logData));
 
     // -------------------------------------------------------------------------
-    // 3) Handle sequence exit for positive outcomes
+    // 3) Update contact sequence status based on call outcome
+    // Docs: POST /emailer_campaigns/remove_or_stop_contact_ids
+    // Params are query params: emailer_campaign_ids[], contact_ids[], mode
+    // Modes: mark_as_finished, remove, stop
     // -------------------------------------------------------------------------
-    $shouldExitSequence = false;
-    if (strpos($pbStatusLower, 'appointment') !== false) $shouldExitSequence = true;
-    if (strpos($pbStatusLower, 'not interested') !== false) $shouldExitSequence = true;
-    if (strpos($pbStatusLower, 'do not call') !== false) $shouldExitSequence = true;
+    $sequenceMode = null;
+    if (strpos($pbStatusLower, 'appointment') !== false) $sequenceMode = 'mark_as_finished';
+    if (strpos($pbStatusLower, 'interested') !== false && strpos($pbStatusLower, 'not') === false) $sequenceMode = 'mark_as_finished';
+    if (strpos($pbStatusLower, 'not interested') !== false) $sequenceMode = 'stop';
+    if (strpos($pbStatusLower, 'do not call') !== false) $sequenceMode = 'remove';
 
-    if ($shouldExitSequence && $apolloSeqId !== '') {
+    if ($sequenceMode && $apolloSeqId !== '') {
+        $queryParams = http_build_query([
+            'emailer_campaign_ids[]' => $apolloSeqId,
+            'contact_ids[]'          => $apolloContactId,
+            'mode'                   => $sequenceMode,
+        ]);
+
         list($exitCode, $exitResp, $_exitRaw) = $apolloPost(
-            'https://api.apollo.io/api/v1/emailer_campaigns/' . rawurlencode($apolloSeqId) . '/remove_or_stop_contact_ids',
-            ['contact_ids' => [$apolloContactId]]
+            'https://api.apollo.io/api/v1/emailer_campaigns/remove_or_stop_contact_ids?' . $queryParams,
+            [] // params go in URL, not body
         );
 
-        log_msg('apollo_sequence_exit: ' . json_encode([
+        log_msg('apollo_sequence_update: ' . json_encode([
             'http_code'   => $exitCode,
             'success'     => ($exitCode >= 200 && $exitCode < 300),
             'sequence_id' => $apolloSeqId,
             'contact_id'  => $apolloContactId,
+            'mode'        => $sequenceMode,
             'pb_status'   => $status,
         ]));
     }
