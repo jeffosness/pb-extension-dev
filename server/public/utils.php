@@ -358,6 +358,50 @@ function clear_close_tokens($client_id)
 
 
 // -------------------------------------------------------------------------
+// Apollo token helpers (per client_id)
+// -------------------------------------------------------------------------
+
+function apollo_token_path(string $client_id): string
+{
+    $dir = tokens_base_dir() . '/apollo';
+    ensure_dir_secure($dir);
+    return $dir . '/' . $client_id . '.json';
+}
+
+function save_apollo_tokens($client_id, array $tokens)
+{
+    $client_id = (string)$client_id;
+    $path = apollo_token_path($client_id);
+
+    $tokens['saved_at'] = date('c');
+    atomic_write_json($path, $tokens);
+}
+
+function load_apollo_tokens($client_id)
+{
+    $client_id = (string)$client_id;
+    $path = apollo_token_path($client_id);
+
+    if (!is_file($path)) {
+        return null;
+    }
+
+    $data = json_decode(@file_get_contents($path), true);
+    return is_array($data) ? $data : null;
+}
+
+function clear_apollo_tokens($client_id)
+{
+    $client_id = (string)$client_id;
+    $path = apollo_token_path($client_id);
+
+    if (is_file($path)) {
+        @unlink($path);
+    }
+}
+
+
+// -------------------------------------------------------------------------
 // PhoneBurner API: create dial session (shared by all L3 providers)
 // -------------------------------------------------------------------------
 

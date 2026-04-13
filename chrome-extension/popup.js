@@ -338,6 +338,7 @@ let ACTIVE_CTX = null;
 let PB_CONNECTED = false;
 let HS_STATE = { connected: false, portalId: null };
 let CLOSE_STATE = { connected: false };
+let APOLLO_STATE = { connected: false };
 
 function setCrmHeader(context) {
   ACTIVE_CTX = context || null;
@@ -369,6 +370,10 @@ function isCloseL3(ctx) {
   return !!(ctx && ctx.crmId === "close" && ctx.level === 3);
 }
 
+function isApolloL3(ctx) {
+  return !!(ctx && ctx.crmId === "apollo" && ctx.level === 3);
+}
+
 function applyContextVisibility(ctx, pbConnected) {
   const currentPageCard = $("card-current-page");
   const hsDialCard = $("hubspot-dial-card");
@@ -377,11 +382,12 @@ function applyContextVisibility(ctx, pbConnected) {
 
   const isHS = isHubSpotL3(ctx);
   const isClose = isCloseL3(ctx);
+  const isApollo = isApolloL3(ctx);
   const pageType = ctx?.pageType || "other";
   const bothAuth = pbConnected && HS_STATE.connected;
 
   // Scan & Launch: any non-L3 page (generic scanner may work on obscure CRMs)
-  setVisible(currentPageCard, !isHS && !isClose);
+  setVisible(currentPageCard, !isHS && !isClose && !isApollo);
 
   // Selection card: HS list pages only
   setVisible(hsDialCard, isHS && pageType === "list");
@@ -420,6 +426,34 @@ function applyContextVisibility(ctx, pbConnected) {
   // Populate Close dial card
   if (isClose) {
     refreshCloseDialUi();
+  }
+
+  // Apollo CRM cards
+  const apolloDialCard = $("apollo-dial-card");
+  const apolloSequenceCard = $("apollo-sequence-card");
+  const apolloSettingsCard = $("apollo-settings-card");
+
+  // Apollo dial card: show on Apollo People pages
+  setVisible(apolloDialCard, isApollo);
+  // Apollo sequence card: show when Apollo connected + PB connected (works from any page)
+  setVisible(apolloSequenceCard, APOLLO_STATE.connected && pbConnected);
+  // Apollo settings card: show when Apollo is connected
+  const apolloApiKeyCard = $("apollo-apikey-card");
+  setVisible(apolloSettingsCard, APOLLO_STATE.connected);
+  setVisible(apolloApiKeyCard, !APOLLO_STATE.connected);
+  if (APOLLO_STATE.connected) {
+    const apolloSettingsStatus = $("apollo-settings-status");
+    const apolloDisconnectBtn = $("apollo-disconnect");
+    if (apolloSettingsStatus) apolloSettingsStatus.textContent = "Connected \u2714";
+    if (apolloDisconnectBtn) apolloDisconnectBtn.disabled = false;
+  }
+
+  // Populate Apollo cards
+  if (isApollo) {
+    refreshApolloDialUi();
+  }
+  if (APOLLO_STATE.connected && pbConnected) {
+    fetchApolloSequences();
   }
 
   // Populate active cards
@@ -1214,6 +1248,244 @@ async function launchCloseDialSession() {
 }
 
 // ---------------------------
+// Apollo CRM connection
+// ---------------------------
+
+async function checkApolloConnectionState() {
+  try {
+    const state = await hsPost("crm/apollo/state.php");
+    APOLLO_STATE.connected = !!state?.apollo_ready;
+  } catch (e) {
+    APOLLO_STATE.connected = false;
+  }
+  return APOLLO_STATE.connected;
+}
+
+async function startApolloOAuth() {
+  const status = $("apollo-dial-status");
+  if (status) status.textContent = "Starting Apollo connection\u2026";
+
+  const resp = await hsPost("crm/apollo/oauth_apollo_start.php");
+  const authUrl = resp?.auth_url;
+
+  if (!authUrl) {
+    if (status) status.textContent = "Could not start Apollo OAuth.";
+    await showAlert("Server did not return auth_url. Check server logs.");
+    return;
+  }
+
+  chrome.tabs.create({ url: authUrl });
+  window.close();
+}
+
+async function disconnectApollo() {
+  const confirmed = await showConfirm("Disconnect Apollo for this session?");
+  if (!confirmed) return;
+
+  const btn = $("apollo-disconnect");
+  const settingsStatus = $("apollo-settings-status");
+  if (btn) btn.disabled = true;
+  if (settingsStatus) settingsStatus.textContent = "Disconnecting\u2026";
+
+  const resp = await hsPost("crm/apollo/oauth_disconnect.php");
+
+  if (!resp || resp.ok !== true) {
+    const errorMsg = getErrorMessage(resp, "Failed to disconnect Apollo.");
+    if (settingsStatus) settingsStatus.textContent = "Failed to disconnect.";
+    if (btn) btn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  APOLLO_STATE.connected = false;
+  _apolloSequencesFetched = false;
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+  activateTab("dial");
+}
+
+function refreshApolloDialUi() {
+  const btn = $("apollo-dial-action");
+  const status = $("apollo-dial-status");
+
+  if (!APOLLO_STATE.connected) {
+    if (btn) {
+      btn.textContent = "Connect Apollo";
+      btn.dataset.mode = "connect";
+      btn.disabled = false;
+    }
+    if (status) status.textContent = "Connect Apollo to launch dial sessions with full contact data.";
+  } else if (!PB_CONNECTED) {
+    if (btn) {
+      btn.textContent = "Dial Selected Contacts";
+      btn.disabled = true;
+    }
+    if (status) status.textContent = "Save your PhoneBurner PAT first.";
+  } else {
+    if (btn) {
+      btn.textContent = "Dial Selected Contacts";
+      btn.dataset.mode = "launch";
+      btn.disabled = false;
+    }
+    if (status) status.textContent = "Select contacts on the People page, then click to dial.";
+  }
+}
+
+async function launchApolloDialSession() {
+  const btn = $("apollo-dial-action");
+  const status = $("apollo-dial-status");
+
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = "Requesting page access\u2026";
+
+  // Best-effort permission request (required for content script injection)
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult.timeout) {
+      const continueAnyway = await showConfirm(
+        "Permission request timed out. Continue anyway?",
+        "Permission Timeout"
+      );
+      if (!continueAnyway) {
+        if (btn) btn.disabled = false;
+        if (status) status.textContent = "";
+        return;
+      }
+    }
+  } catch (e) { /* best effort */ }
+
+  if (status) status.textContent = "Launching dial session\u2026";
+
+  const resp = await sendToBackground({ type: "APOLLO_LAUNCH_FROM_SELECTED" });
+
+  if (!resp || !resp.ok) {
+    const errorMsg = getErrorMessage(resp, "Failed to launch dial session.");
+    if (status) status.textContent = "";
+    if (btn) btn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  if (status) status.textContent = "Dial session launched!";
+  window.close();
+}
+
+// ---------------------------
+// Apollo Sequences
+// ---------------------------
+
+let _apolloSequencesFetched = false;
+
+async function fetchApolloSequences() {
+  const select = $("apollo-sequence-select");
+  if (!select) return;
+  if (_apolloSequencesFetched) return;
+
+  select.innerHTML = '<option value="">Loading sequences\u2026</option>';
+  select.disabled = true;
+
+  try {
+    const resp = await hsPost("crm/apollo/apollo_sequences.php");
+    const sequences = resp?.data?.sequences || resp?.sequences || [];
+
+    select.innerHTML = '<option value="">-- Select a sequence --</option>';
+
+    if (!sequences.length) {
+      select.innerHTML = '<option value="">No sequences found</option>';
+      select.disabled = true;
+      return;
+    }
+
+    for (const seq of sequences) {
+      const opt = document.createElement("option");
+      opt.value = seq.id;
+      let displayName = seq.name || "Unnamed";
+      if (displayName.length > 40) {
+        displayName = displayName.substring(0, 37) + "\u2026";
+      }
+      const badge = seq.status === "active" ? " \u25CF" : "";
+      opt.textContent = displayName + badge;
+      opt.title = seq.name;
+      select.appendChild(opt);
+    }
+
+    select.disabled = false;
+    _apolloSequencesFetched = true;
+  } catch (e) {
+    select.innerHTML = '<option value="">Failed to load sequences</option>';
+  }
+}
+
+async function onApolloSequenceChange() {
+  const select = $("apollo-sequence-select");
+  const filterSelect = $("apollo-task-filter");
+  const preview = $("apollo-task-preview");
+  const launchBtn = $("apollo-sequence-launch");
+
+  const sequenceId = select?.value || "";
+  if (!sequenceId) {
+    if (preview) preview.textContent = "";
+    if (launchBtn) launchBtn.disabled = true;
+    return;
+  }
+
+  const filter = filterSelect?.value || "all_open";
+  if (preview) preview.textContent = "Checking call tasks\u2026";
+  if (launchBtn) launchBtn.disabled = true;
+
+  try {
+    const resp = await hsPost("crm/apollo/apollo_sequence_tasks.php", {
+      sequence_id: sequenceId,
+      filter: filter,
+    });
+
+    const tasks = resp?.data?.tasks || resp?.tasks || [];
+    const total = resp?.data?.total || resp?.total || tasks.length;
+
+    if (total === 0) {
+      if (preview) preview.textContent = "No open call tasks found.";
+      if (launchBtn) launchBtn.disabled = true;
+    } else {
+      if (preview) preview.textContent = total + " call task" + (total !== 1 ? "s" : "") + " ready to dial";
+      if (launchBtn) launchBtn.disabled = false;
+    }
+  } catch (e) {
+    if (preview) preview.textContent = "Failed to check tasks.";
+  }
+}
+
+async function launchApolloFromTasks() {
+  const select = $("apollo-sequence-select");
+  const filterSelect = $("apollo-task-filter");
+  const launchBtn = $("apollo-sequence-launch");
+  const preview = $("apollo-task-preview");
+
+  const sequenceId = select?.value || "";
+  const filter = filterSelect?.value || "all_open";
+
+  if (!sequenceId) return;
+
+  if (launchBtn) launchBtn.disabled = true;
+  if (preview) preview.textContent = "Launching dial session\u2026";
+
+  const resp = await sendToBackground({
+    type: "APOLLO_LAUNCH_FROM_TASKS",
+    sequence_id: sequenceId,
+    filter: filter,
+  });
+
+  if (!resp || !resp.ok) {
+    const errorMsg = getErrorMessage(resp, "Failed to launch dial session from tasks.");
+    if (preview) preview.textContent = "";
+    if (launchBtn) launchBtn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  if (preview) preview.textContent = "Dial session launched!";
+  window.close();
+}
+
+// ---------------------------
 // PhoneBurner PAT UI (keep your existing handlers)
 // ---------------------------
 
@@ -1451,6 +1723,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("close-disconnect")?.addEventListener("click", disconnectClose);
 
+  // Apollo CRM
+  $("apollo-dial-action")?.addEventListener("click", async () => {
+    if ($("apollo-dial-action")?.dataset?.mode === "connect") return startApolloOAuth();
+    return launchApolloDialSession();
+  });
+  $("apollo-disconnect")?.addEventListener("click", disconnectApollo);
+  $("apollo-oauth-connect")?.addEventListener("click", startApolloOAuth);
+  $("apollo-sequence-select")?.addEventListener("change", onApolloSequenceChange);
+  $("apollo-task-filter")?.addEventListener("change", onApolloSequenceChange);
+  $("apollo-sequence-launch")?.addEventListener("click", launchApolloFromTasks);
+
   // Tabs
   $("tab-dial")?.addEventListener("click", () => activateTab("dial"));
   $("tab-settings")?.addEventListener("click", () => activateTab("settings"));
@@ -1482,6 +1765,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3b. Check Close connection
   await checkCloseConnectionState();
+  await checkApolloConnectionState();
 
   // 4. Apply context-aware visibility
   applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);

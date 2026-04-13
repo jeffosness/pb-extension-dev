@@ -447,6 +447,36 @@
           <button id="close-dial-action" class="primary" data-mode="">Loading…</button>
         </div>
 
+        <!-- Apollo (Level 3) — People selection -->
+        <div id="apollo-dial-card" class="card hidden">
+          <div class="card-title">
+            Apollo.io <span class="pill">Level 3</span>
+          </div>
+          <div id="apollo-dial-status" class="status"></div>
+          <button id="apollo-dial-action" class="primary" data-mode="">Loading…</button>
+        </div>
+
+        <!-- Apollo Sequences — call tasks (any page when connected) -->
+        <div id="apollo-sequence-card" class="card hidden">
+          <div class="card-title">Apollo Sequences</div>
+          <label for="apollo-sequence-select">Launch a dial session from sequence call tasks</label>
+          <select id="apollo-sequence-select">
+            <option value="">Select a sequence…</option>
+          </select>
+          <div style="margin-top: 6px;">
+            <label for="apollo-task-filter">Filter tasks</label>
+            <select id="apollo-task-filter">
+              <option value="due_today">Due today</option>
+              <option value="due_and_overdue">Due today + overdue</option>
+              <option value="all_open">All open</option>
+            </select>
+          </div>
+          <div id="apollo-task-preview" class="help-text mt-4"></div>
+          <button id="apollo-sequence-launch" class="primary mt-8" disabled>
+            Launch Dial Session from Tasks
+          </button>
+        </div>
+
         <!-- HubSpot Lists (any page when both PB + HS connected) -->
         <div id="hs-list-card" class="card hidden">
           <div class="card-title">HubSpot Lists</div>
@@ -521,6 +551,27 @@
             for this browser session.
           </div>
           <button id="close-disconnect" class="danger">Disconnect Close</button>
+        </div>
+
+        <!-- Apollo Settings (only when Apollo is connected) -->
+        <div id="apollo-settings-card" class="card hidden">
+          <div class="card-title">Apollo Connection</div>
+          <div id="apollo-settings-status" class="status"></div>
+          <div class="help-text mt-10">
+            Disconnecting removes the saved Apollo authorization on the server
+            for this browser session.
+          </div>
+          <button id="apollo-disconnect" class="danger">Disconnect Apollo</button>
+        </div>
+
+        <!-- Apollo Connect (when not connected) -->
+        <div id="apollo-apikey-card" class="card hidden">
+          <div class="card-title">Apollo Connection</div>
+          <div class="help-text">
+            Connect your Apollo account to launch dial sessions
+            from your contacts and sequences.
+          </div>
+          <button id="apollo-oauth-connect" class="primary mt-8">Connect Apollo</button>
         </div>
 
         <div class="card">

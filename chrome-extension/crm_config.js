@@ -38,4 +38,10 @@ const CRM_REGISTRY = [
     level: 3,
     hostMatch: "close.com",
   },
+  {
+    id: "apollo",
+    displayName: "Apollo.io",
+    level: 3,
+    hostMatch: "apollo.io",
+  },
 ];
