@@ -24,6 +24,16 @@
 
 ---
 
+## Dependency Map
+
+**[PROJECT_MAP.md](PROJECT_MAP.md)** is an auto-generated dependency map of the entire codebase. **Consult it before modifying shared code** — it shows every function, message type, endpoint, and their callers so you can trace the blast radius of any change.
+
+- **Regenerate:** `./scripts/generate-project-map.sh`
+- **Auto-updated:** A Claude Code hook regenerates and stages the map before every `git commit`
+- **Never edit manually** — it's derived from the code and will be overwritten
+
+---
+
 ## Golden Rules (Read First)
 
 ### 🚨 Critical Rules
