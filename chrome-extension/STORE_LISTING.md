@@ -106,11 +106,10 @@ This extension is ideal for:
 • Some CRMs are supported via optimized scraping when APIs are unavailable
 • HubSpot list-based launching requires connecting your HubSpot account via OAuth
 • Close integration requires connecting your Close account via OAuth
+• Apollo integration requires connecting your Apollo account via OAuth
 • PhoneBurner dial sessions support up to 500 contacts
 • Features may vary slightly by CRM platform
 
-🆕 What's New in v0.5.2
+🆕 What's New in v0.6.0
 
-✨ Close CRM Full Integration: Connect your Close account via OAuth for complete contact data including emails. Launch dial sessions with automatic phone and email fetching from the Close API. Call activities and notes are logged back to Close automatically.
-
-✨ Preferred Phone Field (HubSpot): Set which phone field is dialed first in Settings — other phone fields are still included as additional numbers.
+✨ Apollo.io Integration: Connect your Apollo account via OAuth and launch dial sessions from your People page or sequence call tasks. Pick a sequence, filter by due tasks, and power-dial contacts directly through PhoneBurner. The Follow widget auto-navigates to Apollo contact profiles during calls.
