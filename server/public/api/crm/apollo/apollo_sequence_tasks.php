@@ -39,47 +39,60 @@ $accessToken = apollo_ensure_access_token($client_id, $tokens);
 // Fetch open call tasks for this sequence
 // POST /v1/tasks/search
 // -----------------------------------------------------------------------------
-// Apollo tasks/search API — start with minimal params to avoid 422
-// Docs: https://docs.apollo.io/reference/search-for-tasks
-// We fetch tasks and filter for call type + open status in PHP
-$searchBody = [
-  'sort_by_field' => 'task_due_at',
-  'page'          => 1,
-];
-
+// Fetch all tasks with pagination (Apollo defaults to 10 per page)
+// Then filter for call type + open status + sequence match in PHP
 $authType = apollo_auth_type($tokens);
-list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+$allTaskItems = [];
+$page = 1;
+$maxPages = 50; // safety limit: 50 pages * 100 = 5000 tasks max
 
-// Retry once on 401
-if ($code === 401) {
-  $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
-  $accessToken = (string)($tokens['access_token'] ?? '');
+while ($page <= $maxPages) {
+  $searchBody = [
+    'sort_by_field' => 'task_due_at',
+    'per_page'      => 100,
+    'page'          => $page,
+  ];
+
   list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+
+  // Retry once on 401 (first page only)
+  if ($code === 401 && $page === 1) {
+    $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
+    $accessToken = (string)($tokens['access_token'] ?? '');
+    list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+  }
+
+  if ($code !== 200 || !is_array($json)) {
+    // If first page fails, error out. Otherwise use what we have.
+    if ($page === 1) {
+      api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
+        'http_code'      => $code,
+        'sequence_id'    => $sequenceId,
+        'filter'         => $filter,
+        'auth_type'      => $authType,
+        'raw_preview'    => is_string($_raw) ? substr($_raw, 0, 500) : null,
+      ]);
+    }
+    break;
+  }
+
+  $pageTasks = $json['tasks'] ?? [];
+  if (!is_array($pageTasks) || empty($pageTasks)) break;
+
+  $allTaskItems = array_merge($allTaskItems, $pageTasks);
+
+  // Check if there are more pages
+  $totalPages = (int)($json['pagination']['total_pages'] ?? 1);
+  if ($page >= $totalPages) break;
+
+  $page++;
 }
 
-api_log('apollo_sequence_tasks.debug', [
-  'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-  'http_code'      => $code,
-  'search_body'    => $searchBody,
-  'response_keys'  => is_array($json) ? array_keys($json) : null,
-  'raw_preview'    => is_string($_raw) ? substr($_raw, 0, 500) : null,
-]);
-
-if ($code !== 200 || !is_array($json)) {
-  api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
-    'http_code'      => $code,
-    'sequence_id'    => $sequenceId,
-    'filter'         => $filter,
-    'auth_type'      => $authType,
-    'raw_preview'    => is_string($_raw) ? substr($_raw, 0, 500) : null,
-  ]);
-}
-
-// Normalize and filter results
+// Filter results for call type + open + sequence + due date
 $tasks     = [];
-$taskItems = $json['tasks'] ?? $json['data'] ?? [];
-$totalRaw  = count($taskItems);
+$totalRaw  = count($allTaskItems);
 $today     = gmdate('Y-m-d');
+$taskItems = $allTaskItems;
 
 if (is_array($taskItems)) {
   foreach ($taskItems as $task) {

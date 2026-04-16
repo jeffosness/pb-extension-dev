@@ -49,30 +49,50 @@ if (!in_array($filter, ['due_today', 'due_and_overdue', 'all_open'], true)) {
 // Tasks response includes full contact data (phone_numbers, email, etc.)
 // so we don't need a separate contact fetch.
 // -----------------------------------------------------------------------------
+// Fetch all tasks with pagination (Apollo defaults to 10 per page)
 $authType = apollo_auth_type($tokens);
-$searchBody = [
-  'sort_by_field' => 'task_due_at',
-  'page'          => 1,
-];
+$allTaskItems = [];
+$page = 1;
+$maxPages = 50;
 
-list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+while ($page <= $maxPages) {
+  $searchBody = [
+    'sort_by_field' => 'task_due_at',
+    'per_page'      => 100,
+    'page'          => $page,
+  ];
 
-// Retry once on 401
-if ($code === 401) {
-  $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
-  $accessToken = (string)($tokens['access_token'] ?? '');
   list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
-}
 
-if ($code !== 200 || !is_array($json)) {
-  api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
-    'http_code'   => $code,
-    'raw_preview' => is_string($_raw) ? substr($_raw, 0, 500) : null,
-  ]);
+  if ($code === 401 && $page === 1) {
+    $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
+    $accessToken = (string)($tokens['access_token'] ?? '');
+    list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+  }
+
+  if ($code !== 200 || !is_array($json)) {
+    if ($page === 1) {
+      api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
+        'http_code'   => $code,
+        'raw_preview' => is_string($_raw) ? substr($_raw, 0, 500) : null,
+      ]);
+    }
+    break;
+  }
+
+  $pageTasks = $json['tasks'] ?? [];
+  if (!is_array($pageTasks) || empty($pageTasks)) break;
+
+  $allTaskItems = array_merge($allTaskItems, $pageTasks);
+
+  $totalPages = (int)($json['pagination']['total_pages'] ?? 1);
+  if ($page >= $totalPages) break;
+
+  $page++;
 }
 
 // Filter tasks: call type, open, matching sequence, due date
-$taskItems = $json['tasks'] ?? [];
+$taskItems = $allTaskItems;
 $today = gmdate('Y-m-d');
 
 $filteredTasks = [];
