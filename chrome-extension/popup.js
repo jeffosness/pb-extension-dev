@@ -1231,13 +1231,18 @@ async function launchCloseDialSession() {
   const status = $("close-dial-status");
 
   if (btn) btn.disabled = true;
-  if (status) status.textContent = "Launching dial session…";
+  if (status) {
+    status.textContent = "Building dial session from selected contacts\u2026";
+    status.classList.add("loading");
+  }
 
   const resp = await sendToBackground({ type: "CLOSE_LAUNCH_FROM_SELECTED" });
 
+  if (status) status.classList.remove("loading");
+
   if (!resp || !resp.ok) {
     const errorMsg = getErrorMessage(resp, "Failed to launch dial session.");
-    if (status) status.textContent = "";
+    if (status) status.textContent = errorMsg;
     if (btn) btn.disabled = false;
     await showAlert(errorMsg);
     return;
@@ -1393,13 +1398,18 @@ async function launchApolloDialSession() {
     }
   } catch (e) { /* best effort */ }
 
-  if (status) status.textContent = "Launching dial session\u2026";
+  if (status) {
+    status.textContent = "Building dial session from selected contacts\u2026";
+    status.classList.add("loading");
+  }
 
   const resp = await sendToBackground({ type: "APOLLO_LAUNCH_FROM_SELECTED" });
 
+  if (status) status.classList.remove("loading");
+
   if (!resp || !resp.ok) {
     const errorMsg = getErrorMessage(resp, "Failed to launch dial session.");
-    if (status) status.textContent = "";
+    if (status) status.textContent = errorMsg;
     if (btn) btn.disabled = false;
     await showAlert(errorMsg);
     return;
@@ -1505,7 +1515,10 @@ async function launchApolloFromTasks() {
   if (!sequenceId) return;
 
   if (launchBtn) launchBtn.disabled = true;
-  if (preview) preview.textContent = "Launching dial session\u2026";
+  if (preview) {
+    preview.textContent = "Building dial session from sequence call tasks\u2026";
+    preview.classList.add("loading");
+  }
 
   const resp = await sendToBackground({
     type: "APOLLO_LAUNCH_FROM_TASKS",
@@ -1513,9 +1526,11 @@ async function launchApolloFromTasks() {
     filter: filter,
   });
 
+  if (preview) preview.classList.remove("loading");
+
   if (!resp || !resp.ok) {
     const errorMsg = getErrorMessage(resp, "Failed to launch dial session from tasks.");
-    if (preview) preview.textContent = "";
+    if (preview) preview.textContent = errorMsg;
     if (launchBtn) launchBtn.disabled = false;
     await showAlert(errorMsg);
     return;

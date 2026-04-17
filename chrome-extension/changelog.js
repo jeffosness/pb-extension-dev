@@ -16,6 +16,13 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.6.2": {
+    title: "What's New in v0.6.2",
+    items: [
+      "Apollo phone preference \u2014 choose which phone field (Direct, Mobile, Corporate) is dialed first in Settings",
+      "Improved loading feedback when building dial sessions across all CRM integrations"
+    ]
+  },
   "0.6.0": {
     title: "What's New in v0.6.0",
     items: [
