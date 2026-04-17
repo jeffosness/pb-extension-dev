@@ -82,7 +82,13 @@
    - Prefer refactoring existing code over creating new files
    - If you change a shared utility, update ALL call sites
 
-9. **Backward compatibility is required**
+9. **Always use feature branches for new work**
+   - Create `feature/*` branches off `main` for all new features and non-trivial changes
+   - Only bug fixes, docs, and config changes go directly to `main`
+   - Merge via PR (`gh pr create` + `gh pr merge`) for clean history
+   - Never push features directly to `main`
+
+10. **Backward compatibility is required**
    - Server endpoints must work with published extension versions
    - If you must break compatibility, version the endpoint and migrate
 
@@ -669,6 +675,46 @@ if (!resp || !resp.ok) {
 ```
 
 **Rule:** ALWAYS use `getErrorMessage()` when displaying API errors. Never use `resp.error` directly in UI.
+
+### Dial Session Launch Loading State
+
+**Rule:** ALL dial session launch functions MUST show a loading animation while the session is being built. This applies to every CRM provider and every launch method (selection, list, sequence tasks, etc.).
+
+**Required pattern:**
+
+```javascript
+// 1. Disable button + show loading state BEFORE the API call
+if (btn) btn.disabled = true;
+if (status) {
+  status.textContent = "Building dial session from selected contacts…";
+  status.classList.add("loading");    // triggers CSS animation
+}
+
+// 2. Make the API call
+const resp = await sendToBackground({ type: "LAUNCH_MESSAGE" });
+
+// 3. Remove loading animation AFTER response (before checking result)
+if (status) status.classList.remove("loading");
+
+// 4. Handle error — show message in status (don't clear to empty)
+if (!resp || !resp.ok) {
+  const errorMsg = getErrorMessage(resp, "Failed to launch dial session.");
+  if (status) status.textContent = errorMsg;
+  if (btn) btn.disabled = false;
+  await showAlert(errorMsg);
+  return;
+}
+
+// 5. Success
+if (status) status.textContent = "Dial session launched!";
+window.close();
+```
+
+**Key points:**
+- `classList.add("loading")` adds a CSS pulse/spinner animation
+- Contextual message should describe what's happening ("Building dial session from 3 contacts…")
+- On error, show the error in the status element (don't clear to empty string)
+- `classList.remove("loading")` MUST be called before any return path
 
 ### CRM ID Uniqueness Across Object Types
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PhoneBurner Dial Session Companion",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Launch PhoneBurner dial sessions from CRM lists and follow calls in real time. Supports HubSpot, Close, Apollo, Salesforce & more.",
   "icons": {
     "16": "icons/icon-16.png",
