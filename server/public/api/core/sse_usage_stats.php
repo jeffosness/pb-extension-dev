@@ -184,9 +184,11 @@ function read_daily_sse_log(string $dateYmd): array {
                 $maxConcurrent = $currentCount;
             }
         } elseif ($event === 'sse.disconnect') {
-            // NO-OP: Navigation disconnects are not real session ends.
-            // The extension reconnects SSE when navigating between CRM records.
-            // Session stays in active set until timeout or explicit stop.
+            // Remove from active set. Navigation disconnects will be immediately
+            // re-added on the next sse.connect (which now re-adds on every connect,
+            // not just first). Browser-close disconnects won't reconnect and stay
+            // removed — correctly reducing the concurrent count.
+            unset($activeSessions[$session]);
         } elseif ($event === 'sse.timeout_inactive' || $event === 'sse.session_stopped') {
             // Count both timeouts and explicit stops as "truly ended" sessions
             if (!isset($endedSeen[$session])) {
