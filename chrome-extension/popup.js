@@ -1303,6 +1303,46 @@ async function disconnectApollo() {
   activateTab("dial");
 }
 
+async function loadApolloPhonePreference() {
+  const select = $("apollo-phone-pref");
+  if (!select || !APOLLO_STATE.connected) return;
+
+  const prefsResp = await sendToBackground({ type: "GET_CRM_PREFERENCES" });
+  const savedPref = prefsResp?.ok
+    ? (prefsResp.crm_preferences?.apollo?.preferred_phone_field || "")
+    : "";
+
+  if (savedPref) {
+    select.value = savedPref;
+  }
+}
+
+async function onApolloPhonePrefChange() {
+  const select = $("apollo-phone-pref");
+  const status = $("apollo-phone-pref-status");
+  if (!select) return;
+
+  const value = select.value;
+  if (status) {
+    status.textContent = "Saving\u2026";
+  }
+
+  const resp = await sendToBackground({
+    type: "SAVE_CRM_PREFERENCES",
+    provider: "apollo",
+    preferences: { preferred_phone_field: value || null },
+  });
+
+  if (resp?.ok) {
+    if (status) status.textContent = value
+      ? "Saved \u2014 dial sessions will use this field first"
+      : "Saved \u2014 using default priority (Direct > Mobile > Corporate)";
+    setTimeout(() => { if (status) status.textContent = ""; }, 3000);
+  } else {
+    if (status) status.textContent = "Failed to save preference";
+  }
+}
+
 function refreshApolloDialUi() {
   const btn = $("apollo-dial-action");
   const status = $("apollo-dial-status");
@@ -1733,6 +1773,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("apollo-sequence-select")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-task-filter")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-sequence-launch")?.addEventListener("click", launchApolloFromTasks);
+  $("apollo-phone-pref")?.addEventListener("change", onApolloPhonePrefChange);
 
   // Tabs
   $("tab-dial")?.addEventListener("click", () => activateTab("dial"));
@@ -1770,8 +1811,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 4. Apply context-aware visibility
   applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
 
-  // 5. Load L3 phone preference (if HS connected)
+  // 5. Load L3 phone preferences
   if (HS_STATE.connected) {
     loadPhonePreference();
+  }
+  if (APOLLO_STATE.connected) {
+    loadApolloPhonePreference();
   }
 });

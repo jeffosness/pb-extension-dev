@@ -32,6 +32,13 @@ if (!is_array($tokens)) {
   api_error('No Apollo tokens saved for this client_id', 'unauthorized', 401);
 }
 
+// Load user's preferred primary phone field
+$preferredPhoneField = '';
+if ($member_user_id) {
+  $userSettings = load_user_settings($member_user_id);
+  $preferredPhoneField = trim((string)($userSettings['crm_preferences']['apollo']['preferred_phone_field'] ?? ''));
+}
+
 $accessToken = apollo_ensure_access_token($client_id, $tokens);
 
 $sequenceId = trim((string)($data['sequence_id'] ?? ''));
@@ -147,7 +154,7 @@ foreach ($filteredTasks as $task) {
   if (!is_array($contact) || $contactId === '') { $skipped++; continue; }
 
   // Normalize contact from embedded task data
-  $c = apollo_normalize_contact($contact);
+  $c = apollo_normalize_contact($contact, $preferredPhoneField);
   $first    = trim((string)($c['first_name'] ?? ''));
   $last     = trim((string)($c['last_name'] ?? ''));
   $email    = trim((string)($c['email'] ?? ''));

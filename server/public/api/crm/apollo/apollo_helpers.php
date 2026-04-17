@@ -226,7 +226,7 @@ function apollo_get_me($accessToken) {
  *
  * Returns normalized array for PhoneBurner dial session creation.
  */
-function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [], $authType = 'oauth') {
+function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [], $authType = 'oauth', $preferredPhoneField = '') {
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null, 'last_error' => null];
 
@@ -247,7 +247,7 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
       $c = isset($json['contact']) && is_array($json['contact']) ? $json['contact'] : $json;
       if (empty($c['id'])) { $diag['contacts_fetch']['fail']++; continue; }
 
-      $contacts[] = apollo_normalize_contact($c);
+      $contacts[] = apollo_normalize_contact($c, $preferredPhoneField);
       $diag['contacts_fetch']['ok']++;
     }
   } else {
@@ -283,15 +283,15 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
 /**
  * Fetch contacts with automatic token refresh retry on 401.
  */
-function apollo_fetch_contacts_with_refresh_retry(string $client_id, array &$tokens, string &$accessToken, array $contactIds, array &$diag = []) {
+function apollo_fetch_contacts_with_refresh_retry(string $client_id, array &$tokens, string &$accessToken, array $contactIds, array &$diag = [], string $preferredPhoneField = '') {
   $authType = apollo_auth_type($tokens);
-  $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag, $authType);
+  $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag, $authType, $preferredPhoneField);
 
   $lastHttp = $diag['contacts_fetch']['last_http'] ?? null;
   if (empty($contacts) && $lastHttp === 401) {
     $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
     $accessToken = (string)($tokens['access_token'] ?? '');
-    $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag, $authType);
+    $contacts = apollo_fetch_contacts_by_ids($accessToken, $contactIds, $diag, $authType, $preferredPhoneField);
   }
 
   return $contacts;
@@ -303,36 +303,45 @@ function apollo_fetch_contacts_with_refresh_retry(string $client_id, array &$tok
 
 /**
  * Normalize an Apollo contact object to our standard format.
- * Apollo phone priority: direct_phone > mobile_phone > corporate_phone > phone_numbers[0]
+ * @param string $preferredPhoneField Optional: 'direct_phone', 'mobile_phone', or 'corporate_phone'
+ *        When set, that field is checked first for the primary number.
+ *        Default priority: direct_phone > mobile_phone > corporate_phone > phone_numbers[0]
  */
-function apollo_normalize_contact(array $c): array {
+function apollo_normalize_contact(array $c, string $preferredPhoneField = ''): array {
   $firstName = trim((string)($c['first_name'] ?? ''));
   $lastName  = trim((string)($c['last_name'] ?? ''));
 
-  // Phone priority: direct > mobile > corporate > phone_numbers array
-  $phone = trim((string)($c['direct_phone'] ?? ''));
-  if ($phone === '') $phone = trim((string)($c['mobile_phone'] ?? ''));
-  if ($phone === '') $phone = trim((string)($c['corporate_phone'] ?? ''));
-  if ($phone === '' && !empty($c['phone_numbers']) && is_array($c['phone_numbers'])) {
-    foreach ($c['phone_numbers'] as $pn) {
-      $num = trim((string)($pn['sanitized_number'] ?? $pn['raw_number'] ?? ''));
-      if ($num !== '') { $phone = $num; break; }
-    }
-  }
-
-  // Additional phones beyond the primary
-  $additionalPhones = [];
+  // Build all available phones in order
   $allPhones = [];
-  if (!empty($c['direct_phone']))    $allPhones[] = ['number' => $c['direct_phone'],    'type' => 'direct'];
-  if (!empty($c['mobile_phone']))    $allPhones[] = ['number' => $c['mobile_phone'],    'type' => 'mobile'];
-  if (!empty($c['corporate_phone'])) $allPhones[] = ['number' => $c['corporate_phone'], 'type' => 'work'];
+  if (!empty($c['direct_phone']))    $allPhones[] = ['number' => trim((string)$c['direct_phone']),    'type' => 'direct',  'field' => 'direct_phone'];
+  if (!empty($c['mobile_phone']))    $allPhones[] = ['number' => trim((string)$c['mobile_phone']),    'type' => 'mobile',  'field' => 'mobile_phone'];
+  if (!empty($c['corporate_phone'])) $allPhones[] = ['number' => trim((string)$c['corporate_phone']), 'type' => 'work',    'field' => 'corporate_phone'];
   if (!empty($c['phone_numbers']) && is_array($c['phone_numbers'])) {
     foreach ($c['phone_numbers'] as $pn) {
       $num = trim((string)($pn['sanitized_number'] ?? $pn['raw_number'] ?? ''));
-      if ($num !== '') $allPhones[] = ['number' => $num, 'type' => (string)($pn['type'] ?? 'other')];
+      if ($num !== '') $allPhones[] = ['number' => $num, 'type' => (string)($pn['type'] ?? 'other'), 'field' => 'phone_numbers'];
     }
   }
-  // Dedupe and skip primary
+
+  // Pick primary: preferred field first, then default order
+  $phone = '';
+  if ($preferredPhoneField !== '') {
+    foreach ($allPhones as $ap) {
+      if (($ap['field'] ?? '') === $preferredPhoneField && $ap['number'] !== '') {
+        $phone = $ap['number'];
+        break;
+      }
+    }
+  }
+  // Fallback to default priority if preferred not found
+  if ($phone === '') {
+    foreach ($allPhones as $ap) {
+      if ($ap['number'] !== '') { $phone = $ap['number']; break; }
+    }
+  }
+
+  // Build additional phones (everything except primary, deduped)
+  $additionalPhones = [];
   $seen = [$phone => true];
   foreach ($allPhones as $ap) {
     $num = trim((string)($ap['number'] ?? ''));

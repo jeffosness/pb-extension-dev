@@ -27,6 +27,13 @@ if (!is_array($tokens)) {
   api_error('No Apollo tokens saved for this client_id', 'unauthorized', 401);
 }
 
+// Load user's preferred primary phone field
+$preferredPhoneField = '';
+if ($member_user_id) {
+  $userSettings = load_user_settings($member_user_id);
+  $preferredPhoneField = trim((string)($userSettings['crm_preferences']['apollo']['preferred_phone_field'] ?? ''));
+}
+
 $accessToken = apollo_ensure_access_token($client_id, $tokens);
 
 $contactIds = $data['contact_ids'] ?? [];
@@ -57,7 +64,7 @@ $diag = [
 ];
 
 $apolloContacts = apollo_fetch_contacts_with_refresh_retry(
-  $client_id, $tokens, $accessToken, $contactIds, $diag
+  $client_id, $tokens, $accessToken, $contactIds, $diag, $preferredPhoneField
 );
 
 if (empty($apolloContacts)) {

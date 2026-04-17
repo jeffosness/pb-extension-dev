@@ -557,6 +557,23 @@
         <div id="apollo-settings-card" class="card hidden">
           <div class="card-title">Apollo Connection</div>
           <div id="apollo-settings-status" class="status"></div>
+
+          <!-- Primary Phone Field preference -->
+          <div class="list-section mt-10">
+            <label for="apollo-phone-pref">Primary Phone Field</label>
+            <div class="help-text">
+              Choose which phone field to dial first. Other numbers will
+              be added as additional numbers.
+            </div>
+            <select id="apollo-phone-pref" class="mt-6">
+              <option value="">Default (Direct > Mobile > Corporate)</option>
+              <option value="direct_phone">Direct Phone</option>
+              <option value="mobile_phone">Mobile Phone</option>
+              <option value="corporate_phone">Corporate / HQ Phone</option>
+            </select>
+            <div id="apollo-phone-pref-status" class="status mt-4"></div>
+          </div>
+
           <div class="help-text mt-10">
             Disconnecting removes the saved Apollo authorization on the server
             for this browser session.
