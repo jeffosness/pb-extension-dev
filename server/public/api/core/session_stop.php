@@ -63,6 +63,7 @@ $log_entry = [
     'duration_sec' => $duration_sec,
     'client_id_hash' => substr(hash('sha256', $client_id), 0, 12),
     'reason' => 'user_stop',
+    'crm_name' => $session_state['crm_name'] ?? 'unknown',
 ];
 
 @file_put_contents(

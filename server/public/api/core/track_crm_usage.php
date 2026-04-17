@@ -2,7 +2,7 @@
 // server/public/api/core/track_crm_usage.php
 //
 // Receives lightweight usage pings from the extension and appends a JSON line
-// to server/public/metrics/crm_usage.log for reporting in crm_usage_stats.php.
+// to server/public/metrics/crm_usage-YYYY-MM-DD.log for reporting in crm_usage_stats.php.
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/../../utils.php';
@@ -27,7 +27,7 @@ $normalizeMap = ['contact' => 'contacts', 'company' => 'companies', 'deal' => 'd
 $objectType = $normalizeMap[$objectType] ?? $objectType;
 
 // Whitelist launch_source values
-$allowedSources = ['selection', 'list', 'scan', ''];
+$allowedSources = ['selection', 'list', 'scan', 'record', 'sequence-tasks', ''];
 if (!in_array($launchSource, $allowedSources, true)) {
     $launchSource = '';
 }
@@ -39,7 +39,10 @@ $publicDir  = dirname(__DIR__, 2); // core -> api -> public
 $metricsDir = $publicDir . '/metrics';
 ensure_dir($metricsDir);
 
-$logFile = $metricsDir . '/crm_usage.log';
+$logFile = safe_file_path($metricsDir, 'crm_usage-' . date('Y-m-d') . '.log');
+if (!$logFile) {
+    api_error('Unable to construct log path', 'server_error', 500);
+}
 
 $entry = [
     'ts'             => date('c'),

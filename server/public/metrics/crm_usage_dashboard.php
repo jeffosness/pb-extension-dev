@@ -192,6 +192,12 @@ api_log('crm_usage_dashboard.view', [
       Data source: <code>../api/core/sse_usage_stats.php</code>
     </div>
 
+    <h2 class="section-title">Sessions by CRM</h2>
+    <table id="by-crm-session-table">
+      <thead><tr><th>CRM</th><th>Sessions</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
     <div class="alert alert-info" id="summary" style="margin-top:20px;"></div>
 
     <h2 class="section-title">By CRM ID</h2>
@@ -341,12 +347,30 @@ document.addEventListener("DOMContentLoaded", () => {
       sseGridEl.appendChild(statCard("Active dial sessions now (SSE)", String(activeNow)));
       sseGridEl.appendChild(statCard("Max concurrent estimate", String(totalMaxConcurrent)));
       sseGridEl.appendChild(statCard("Sessions started (" + dateRange.label + ")", String(totalConnects)));
-      sseGridEl.appendChild(statCard("Sessions ended (" + dateRange.label + ")", String(totalDisconnects)));
+
+      const endedCard = statCard("Sessions properly ended (" + dateRange.label + ")", String(totalDisconnects));
+      endedCard.setAttribute('title', 'Sessions ended via Stop button or 60-min inactivity timeout');
+      sseGridEl.appendChild(endedCard);
+
+      const abandoned = Math.max(0, totalConnects - totalDisconnects);
+      const abandonedCard = statCard("Sessions abandoned (" + dateRange.label + ")", String(abandoned));
+      abandonedCard.setAttribute('title', 'Sessions where user closed the browser tab instead of clicking Stop. The SSE process exits so the inactivity timeout never fires.');
+      sseGridEl.appendChild(abandonedCard);
+
       sseGridEl.appendChild(statCard("Avg session duration", secondsToFriendly(totalAvgDur)));
       const p95Card = statCard("P95 duration (95th percentile)", secondsToFriendly(totalP95Dur));
       p95Card.setAttribute('title', '95% of sessions lasted this long or less');
       sseGridEl.appendChild(p95Card);
       sseGridEl.appendChild(statCard("Unique users (" + dateRange.label + ")", String(uniqueUsers)));
+
+      // Sessions by CRM breakdown (from SSE connect logs)
+      const byCrmSessions = sse.by_crm_sessions || {};
+      if (Object.keys(byCrmSessions).length > 0) {
+        fillTable("by-crm-session-table", byCrmSessions);
+      } else {
+        const tbody = document.querySelector("#by-crm-session-table tbody");
+        tbody.innerHTML = "<tr><td colspan='2' class='muted'>No session data yet for this period</td></tr>";
+      }
 
       // CRM summary + tables
       if (!crm.total_events || crm.total_events === 0) {
@@ -476,6 +500,8 @@ document.addEventListener("DOMContentLoaded", () => {
       "selection": "Selection (record list)",
       "list": "List (HubSpot list)",
       "scan": "Scan (page scrape)",
+      "record": "Record (single record)",
+      "sequence-tasks": "Sequence Tasks (Apollo)",
     };
     return map[key] || key;
   }

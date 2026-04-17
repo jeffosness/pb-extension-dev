@@ -104,6 +104,7 @@ function read_daily_sse_log(string $dateYmd): array {
             'avg_duration_sec' => 0,
             'p95_duration_sec' => 0,
             'max_concurrent_est' => 0,
+            'by_crm' => [],
         ];
     }
 
@@ -117,6 +118,7 @@ function read_daily_sse_log(string $dateYmd): array {
         'avg_duration_sec' => 0,
         'p95_duration_sec' => 0,
         'max_concurrent_est' => 0,
+        'by_crm' => [],
     ];
 
     if (!is_file($logFile)) {
@@ -140,8 +142,10 @@ function read_daily_sse_log(string $dateYmd): array {
     $durations = [];
     $uniqueUsers = [];  // member_user_id_hash => true
 
-    // Track currently active unique sessions (not connections)
-    // Use set-based approach to deduplicate reconnects and multi-tab connections
+    // Track currently active dial sessions (not individual SSE connections).
+    // A session is "active" from its first sse.connect until sse.timeout_inactive
+    // or sse.session_stopped. Navigation disconnects (sse.disconnect) do NOT end
+    // the session — the extension reconnects SSE on every CRM page change.
     $activeSessions = [];  // session_hash => true
     $maxConcurrent = 0;
 
@@ -162,21 +166,27 @@ function read_daily_sse_log(string $dateYmd): array {
             if (!isset($connectSeen[$session])) {
                 $connectSeen[$session] = true;
                 $stats['connects']++;
+
+                // Track sessions by CRM (only on first connect per session)
+                $crmName = $j['crm_name'] ?? 'unknown';
+                $stats['by_crm'][$crmName] = ($stats['by_crm'][$crmName] ?? 0) + 1;
             }
             // Track unique users by member_user_id_hash
             $userHash = $j['member_user_id_hash'] ?? null;
             if (is_string($userHash) && $userHash !== '') {
                 $uniqueUsers[$userHash] = true;
             }
-            // Add to active set (deduplicates by session hash)
+            // Add to active set on every connect (not just first).
+            // This handles reconnects after a timeout/stop correctly.
             $activeSessions[$session] = true;
             $currentCount = count($activeSessions);
             if ($currentCount > $maxConcurrent) {
                 $maxConcurrent = $currentCount;
             }
         } elseif ($event === 'sse.disconnect') {
-            // Remove from active set (not just decrement counter)
-            unset($activeSessions[$session]);
+            // NO-OP: Navigation disconnects are not real session ends.
+            // The extension reconnects SSE when navigating between CRM records.
+            // Session stays in active set until timeout or explicit stop.
         } elseif ($event === 'sse.timeout_inactive' || $event === 'sse.session_stopped') {
             // Count both timeouts and explicit stops as "truly ended" sessions
             if (!isset($endedSeen[$session])) {
@@ -186,7 +196,7 @@ function read_daily_sse_log(string $dateYmd): array {
                 $dur = isset($j['duration_sec']) ? (int)$j['duration_sec'] : 0;
                 if ($dur > 0) $durations[] = $dur;
             }
-            // Remove from active set
+            // Remove from active set — session truly ended
             unset($activeSessions[$session]);
         }
     }
@@ -244,6 +254,7 @@ $totalConnects = 0;
 $totalDisconnects = 0;
 $totalUnique = 0;
 $allUniqueUsers = [];  // union of member_user_id_hash across all days
+$allByCrm = [];        // crm_name => session count across all days
 
 foreach ($dates as $d) {
     $day = read_daily_sse_log($d);
@@ -253,6 +264,11 @@ foreach ($dates as $d) {
         $allUniqueUsers[$hash] = true;
     }
     unset($day['_user_hashes']);  // strip internal field from API output
+
+    // Aggregate per-CRM session counts across all days
+    foreach ($day['by_crm'] ?? [] as $crm => $count) {
+        $allByCrm[$crm] = ($allByCrm[$crm] ?? 0) + $count;
+    }
 
     $perDay[] = $day;
 
@@ -319,4 +335,5 @@ api_ok([
     ],
     'per_day' => $perDay,
     'overall_p95' => $overallP95,
+    'by_crm_sessions' => $allByCrm,
 ]);

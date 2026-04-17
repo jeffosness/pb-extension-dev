@@ -1434,6 +1434,7 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 **2c. `background.js`** — Add `{PROVIDER}_LAUNCH_FROM_SELECTED` handler:
 - Find active CRM tab
 - Send `{PROVIDER}_GET_SELECTED_IDS` to content script
+- **Track usage** — call `core/track_crm_usage.php` before the dial session API call (fire-and-forget, wrapped in `try/catch`). Include `crm_id`, `host` (from `deriveHostPathFromTabUrl()`), `level: 3`, `object_type`, `selected_count`, `launch_source`. This is how the dashboard tracks CRM usage — without it the provider won't appear in metrics.
 - POST IDs to server's `pb_dialsession_selection.php`
 - Register follow session + open PB dial window
 
@@ -1513,6 +1514,7 @@ Parameters available:
 | **Recording links** | PB `call_done` payload includes `recording_url_public` — include as clickable link in CRM call activities. Plan for a user setting to toggle this per CRM. |
 | **Close HTML is strict** | No `<br>`, no multiple root elements without `<body>`. Always use `<body><p>...</p></body>`. Test HTML in the API before assuming standard HTML works. |
 | **Close ignores disposition on external calls** | API-created calls (`call_method: "external"`) always show `disposition: answered` regardless of what you send. PUT updates are also ignored. PB call status is preserved in `note_html` as the workaround. |
+| **`track_crm_usage.php` in every launch handler** | Every L3 launch handler in `background.js` must call `core/track_crm_usage.php` (fire-and-forget, `try/catch`) before the dial session API call. Without this, the CRM won't appear in the usage dashboard. Close and Apollo missed this initially. |
 
 ---
 

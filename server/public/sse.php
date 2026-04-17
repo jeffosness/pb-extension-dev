@@ -189,6 +189,7 @@ sse_log_activity('sse.connect', [
   'session_token_hash'   => $sessionHash,
   'ip_hash'              => $ipHash,
   'member_user_id_hash'  => $memberUserIdHash,
+  'crm_name'             => $sessionState['crm_name'] ?? 'unknown',
 ]);
 
 sse_presence_write($sessionHash, $connectionStart, $connectionStart);

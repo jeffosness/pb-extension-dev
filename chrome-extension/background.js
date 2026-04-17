@@ -786,6 +786,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             error: "No contacts or leads found on this page.",
           });
 
+        // Track usage (best effort)
+        try {
+          const hp = deriveHostPathFromTabUrl(closeTab.url || "");
+          await api("core/track_crm_usage.php", {
+            crm_id: "close",
+            host: hp.host || "app.close.com",
+            path: hp.path || "",
+            level: 3,
+            object_type: "contacts",
+            selected_count: contactIds.length || leadIds.length,
+            launch_source: "selection",
+          });
+        } catch (e) {}
+
         const resp = await api("crm/close/pb_dialsession_selection.php", {
           contact_ids: contactIds,
           lead_ids: leadIds,
@@ -876,6 +890,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             error: "No contacts found on this page.",
           });
 
+        // Track usage (best effort)
+        try {
+          const hp = deriveHostPathFromTabUrl(apolloTab.url || "");
+          await api("core/track_crm_usage.php", {
+            crm_id: "apollo",
+            host: hp.host || "app.apollo.io",
+            path: hp.path || "",
+            level: 3,
+            object_type: "contacts",
+            selected_count: contactIds.length,
+            launch_source: "selection",
+          });
+        } catch (e) {}
+
         const resp = await api("crm/apollo/pb_dialsession_selection.php", {
           contact_ids: contactIds,
           context: {
@@ -930,6 +958,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             error: "No sequence selected.",
           });
         }
+
+        // Track usage (best effort)
+        try {
+          await api("core/track_crm_usage.php", {
+            crm_id: "apollo",
+            host: "app.apollo.io",
+            path: "",
+            level: 3,
+            object_type: "contacts",
+            launch_source: "sequence-tasks",
+          });
+        } catch (e) {}
 
         const resp = await api("crm/apollo/pb_dialsession_from_tasks.php", {
           sequence_id: sequenceId,
