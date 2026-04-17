@@ -1534,9 +1534,7 @@ When creating a PR that includes **user-facing changes** (new features, UI chang
 
 **How it works:** On popup open, `checkChangelog()` compares the current manifest version against `pb_last_seen_version` in `chrome.storage.local`. First install shows the welcome modal. Version upgrades show the latest changelog entry. Same version = no modal.
 
-**Web Store zip archive:** After bumping the version, create a zip of the `chrome-extension/` directory and save it to:
-`D:\Camtasia Studio\Phone Burner\PhoneBurner 2025\Integrations\Extension\webstore resources\version X.Y.Z.zip`
-This folder contains one zip per published version for historical reference.
+**Web Store zip archive:** After bumping the version, create a zip of the `chrome-extension/` directory and save it to the webstore resources folder as `version X.Y.Z.zip`. The folder location varies by machine — check the `WEBSTORE_ZIP_DIR` setting in the project's Claude Code memory, or ask the user if not set. On Jeff's primary machine: `D:\Camtasia Studio\Phone Burner\PhoneBurner 2025\Integrations\Extension\webstore resources\`
 
 ### Pre-Deployment Security Review
 
