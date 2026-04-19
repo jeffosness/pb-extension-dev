@@ -87,6 +87,43 @@ function read_presence_active_now(int $activeWindowSec = 180): array {
     ];
 }
 
+/**
+ * Build a session_hash → crm_name lookup from session state files on disk.
+ * Used as fallback for SSE log entries that predate the crm_name field.
+ * Cached in a static var so it's only built once per request.
+ */
+function get_session_crm_lookup(): array {
+    static $lookup = null;
+    if ($lookup !== null) return $lookup;
+
+    $lookup = [];
+    $publicDir = dirname(__DIR__, 2);
+    $sessionsDir = $publicDir . '/sessions';
+    if (!is_dir($sessionsDir)) return $lookup;
+
+    $files = @glob($sessionsDir . '/*.json') ?: [];
+    foreach ($files as $file) {
+        // Filename is the session token (e.g., "abc123def456.json")
+        $token = basename($file, '.json');
+        if ($token === '') continue;
+
+        $hash = substr(hash('sha256', $token), 0, 12);
+
+        $raw = @file_get_contents($file);
+        if ($raw === false || $raw === '') continue;
+
+        $state = json_decode($raw, true);
+        if (!is_array($state)) continue;
+
+        $crm = $state['crm_name'] ?? null;
+        if ($crm) {
+            $lookup[$hash] = $crm;
+        }
+    }
+
+    return $lookup;
+}
+
 function read_daily_sse_log(string $dateYmd): array {
     $publicDir = dirname(__DIR__, 2); // core -> api -> public
     $metricsDir = $publicDir . '/metrics';
@@ -168,7 +205,12 @@ function read_daily_sse_log(string $dateYmd): array {
                 $stats['connects']++;
 
                 // Track sessions by CRM (only on first connect per session)
-                $crmName = $j['crm_name'] ?? 'unknown';
+                // Fall back to session state files for entries that predate the crm_name field
+                $crmName = $j['crm_name'] ?? null;
+                if (!$crmName || $crmName === 'unknown') {
+                    $sessionLookup = get_session_crm_lookup();
+                    $crmName = $sessionLookup[$session] ?? 'unknown';
+                }
                 $stats['by_crm'][$crmName] = ($stats['by_crm'][$crmName] ?? 0) + 1;
             }
             // Track unique users by member_user_id_hash
