@@ -8,6 +8,7 @@
 # This script scans all PHP and JS source files and produces a machine-readable
 # dependency map at the project root. It traces function definitions and callers,
 # Chrome extension message flows, server endpoint usage, and shared helper usage.
+# It resolves callers to the function level (not just file) and traces call chains.
 #
 # Run before every PR to keep the map current. Integrated via Claude Code hook.
 #
@@ -26,7 +27,6 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-# Convert absolute path to relative from project root
 relpath() {
   local abs="$1"
   abs="${abs//\\//}"
@@ -34,10 +34,66 @@ relpath() {
   echo "${abs#"$root"/}"
 }
 
-# grep -oE wrapper that silences errors
-ogrep() {
-  grep -oE "$@" 2>/dev/null || true
+# Build function range index: file|funcname|start|end for every PHP function
+# Also outputs top-level ranges for code outside functions
+build_function_ranges() {
+  find "$SERVER_DIR" -name '*.php' -not -path '*/vendor/*' | sort | while read -r f; do
+    awk '
+    BEGIN { depth=0; in_func=0; funcname="(top-level)"; start=1 }
+    /^\s*function [a-zA-Z_]/ {
+      if (in_func == 0 && funcname == "(top-level)" && NR > start) {
+        print FILENAME "|" funcname "|" start "|" NR-1
+      }
+      funcname=$0
+      sub(/.*function /, "", funcname)
+      sub(/\(.*/, "", funcname)
+      start=NR
+      in_func=1
+      depth=0
+    }
+    in_func {
+      n = gsub(/{/, "{")
+      depth += n
+      n = gsub(/}/, "}")
+      depth -= n
+      if (depth <= 0 && NR > start) {
+        print FILENAME "|" funcname "|" start "|" NR
+        in_func=0
+        funcname="(top-level)"
+        start=NR+1
+      }
+    }
+    END {
+      if (funcname != "") {
+        print FILENAME "|" funcname "|" start "|" NR
+      }
+    }
+    ' "$f"
+  done
 }
+
+# Resolve which function contains a call to $target_func in $file at $line
+# Uses the pre-built ranges file
+resolve_caller_func() {
+  local file="$1" line="$2"
+  # Normalize file path
+  file="${file//\\//}"
+  awk -F'|' -v f="$file" -v l="$line" '
+  {
+    gsub(/\\/, "/", $1)
+    if ($1 == f && l >= $3 && l <= $4 && $2 != "(top-level)") {
+      print $2
+      exit
+    }
+  }
+  ' "$TMP_DIR/func_ranges.txt"
+}
+
+# ── Pre-compute function ranges ──────────────────────────────────────────
+
+echo "Building function range index..." >&2
+build_function_ranges > "$TMP_DIR/func_ranges.txt"
+echo "  $(wc -l < "$TMP_DIR/func_ranges.txt") ranges indexed" >&2
 
 # ── Header ────────────────────────────────────────────────────────────────
 
@@ -100,23 +156,17 @@ BG="$EXT_DIR/background.js"
 POP="$EXT_DIR/popup.js"
 CS="$EXT_DIR/content.js"
 
-# 1. Get all handled types from background.js (msg.type === "TYPE")
 grep -oE 'msg\.type === "[A-Z_]+"' "$BG" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u > "$TMP_DIR/bg_handled.txt"
-
-# 2. Get all types sent from popup.js (type: "TYPE")
 grep -oE 'type: "[A-Z_]+"' "$POP" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u > "$TMP_DIR/popup_sent.txt"
-
-# 3. Get all types sent from content.js
 grep -oE 'type: "[A-Z_]+"' "$CS" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u > "$TMP_DIR/content_sent.txt"
-
-# 4. Get all types handled by content.js
 grep -oE 'msg\.type === "[A-Z_]+"' "$CS" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u > "$TMP_DIR/content_handled.txt"
 
-# For each handled type in background.js, trace the flow
+# Also extract ALL api() endpoints per message type for cross-boundary chains later
+> "$TMP_DIR/msg_to_endpoints.txt"
+
 while read -r msgtype; do
   [ -z "$msgtype" ] && continue
 
-  # Determine sender(s)
   senders=""
   if grep -qx "$msgtype" "$TMP_DIR/popup_sent.txt" 2>/dev/null; then
     senders="popup.js"
@@ -129,15 +179,20 @@ while read -r msgtype; do
 
   handler="background.js"
 
-  # Find associated server endpoint: look within 30 lines after msg.type match
-  endpoint=$(grep -A 30 "msg.type === \"$msgtype\"" "$BG" 2>/dev/null \
-    | grep -oE 'api\("[^"]+"' | head -1 | grep -oE '"[^"]+"' | tr -d '"' || true)
-  [ -z "$endpoint" ] && endpoint="—"
+  # Collect ALL api() endpoints within this handler block
+  endpoints=$(grep -A 50 "msg.type === \"$msgtype\"" "$BG" 2>/dev/null \
+    | grep -oE 'api\("[^"]+"' | grep -oE '"[^"]+"' | tr -d '"' | tr '\n' ',' | sed 's/,$//' || true)
+  display_endpoint=$(echo "$endpoints" | cut -d',' -f1)
+  [ -z "$display_endpoint" ] && display_endpoint="—"
 
-  echo "| \`$msgtype\` | $senders | $handler | \`$endpoint\` |"
+  # Save for cross-boundary chains
+  if [ -n "$endpoints" ]; then
+    echo "$msgtype|$senders|$endpoints" >> "$TMP_DIR/msg_to_endpoints.txt"
+  fi
+
+  echo "| \`$msgtype\` | $senders | $handler | \`$display_endpoint\` |"
 done < "$TMP_DIR/bg_handled.txt" >> "$OUTPUT"
 
-# Add content.js-only handled types
 while read -r msgtype; do
   [ -z "$msgtype" ] && continue
   if ! grep -qx "$msgtype" "$TMP_DIR/bg_handled.txt" 2>/dev/null; then
@@ -162,7 +217,6 @@ echo "|---|---|" >> "$OUTPUT"
 grep -n 'api("' "$BG" 2>/dev/null | while IFS=: read -r lineno rest; do
   endpoint=$(echo "$rest" | grep -oE 'api\("[^"]+"' | head -1 | grep -oE '"[^"]+"' | tr -d '"')
   [ -z "$endpoint" ] && continue
-  # Search backwards for nearest msg.type
   msgtype=$(head -n "$lineno" "$BG" | grep -oE 'msg\.type === "[^"]+"' | tail -1 | grep -oE '"[^"]+"' | tr -d '"' || true)
   [ -z "$msgtype" ] && msgtype="(top-level)"
   echo "| \`api/$endpoint\` | $msgtype handler |"
@@ -174,13 +228,16 @@ echo "" >> "$OUTPUT"
 echo "| Server Endpoint | Context (nearby function) |" >> "$OUTPUT"
 echo "|---|---|" >> "$OUTPUT"
 
+# Also save popup direct calls for cross-boundary chains
+> "$TMP_DIR/popup_direct_calls.txt"
+
 grep -n 'hsPost("' "$POP" 2>/dev/null | while IFS=: read -r lineno rest; do
   endpoint=$(echo "$rest" | grep -oE 'hsPost\("[^"]+"' | head -1 | grep -oE '"[^"]+"' | tr -d '"')
   [ -z "$endpoint" ] && continue
-  # Find nearest function name above
   context=$(head -n "$lineno" "$POP" | grep -oE '(async )?function [a-zA-Z0-9_]+' | tail -1 | sed 's/async //' | sed 's/function //' || true)
   [ -z "$context" ] && context="—"
   echo "| \`api/$endpoint\` | $context() |"
+  echo "$context|$endpoint" >> "$TMP_DIR/popup_direct_calls.txt"
 done >> "$OUTPUT"
 echo "" >> "$OUTPUT"
 
@@ -203,11 +260,11 @@ find "$SERVER_DIR" -name '*.php' -not -path '*/vendor/*' | sort | while read -r 
   fi
 done >> "$OUTPUT"
 
-# ── Phase 5: PHP Function Definitions ────────────────────────────────────
+# ── Phase 5: PHP Function Registry (Enhanced: function-level callers) ────
 
 echo "## PHP Function Registry" >> "$OUTPUT"
 echo "" >> "$OUTPUT"
-echo "Every function defined in the codebase, where it lives, and where it's called from." >> "$OUTPUT"
+echo "Every function, where it lives, and which **functions** call it (not just files)." >> "$OUTPUT"
 echo "" >> "$OUTPUT"
 
 # Build function -> file map
@@ -218,7 +275,44 @@ grep -rnE '^\s*function [a-zA-Z_][a-zA-Z0-9_]*\s*\(' "$SERVER_DIR" --include='*.
   echo "$funcname|$rel|$lineno"
 done | sort > "$TMP_DIR/func_defs.txt"
 
-# Group by file
+# Pre-build a caller map: for each function, find which functions call it
+# Output: callee|caller_func|caller_file
+echo "Building function-level call graph..." >&2
+
+> "$TMP_DIR/call_graph.txt"
+
+while IFS='|' read -r funcname filepath defline; do
+  [ -z "$funcname" ] && continue
+
+  # Find all call sites across all PHP files
+  grep -rnE "${funcname}\s*\(" "$SERVER_DIR" --include='*.php' 2>/dev/null | while IFS=: read -r cf clineno crest; do
+    # Skip the definition line itself
+    crel=$(relpath "$cf")
+    if [ "$crel" = "$filepath" ] && [ "$clineno" = "$defline" ]; then
+      continue
+    fi
+
+    # Resolve which function this call site is inside of
+    cf_normalized="${cf//\\//}"
+    caller_func=$(awk -F'|' -v f="$cf_normalized" -v l="$clineno" '
+    {
+      gsub(/\\/, "/", $1)
+      if ($1 == f && l+0 >= $3+0 && l+0 <= $4+0 && $2 != "(top-level)") {
+        print $2
+        found=1
+        exit
+      }
+    }
+    END { if (!found) print "(top-level)" }
+    ' "$TMP_DIR/func_ranges.txt")
+
+    echo "$funcname|$caller_func|$crel"
+  done
+done < "$TMP_DIR/func_defs.txt" >> "$TMP_DIR/call_graph.txt"
+
+echo "  $(wc -l < "$TMP_DIR/call_graph.txt") call edges found" >&2
+
+# Now output the registry grouped by file, with function-level callers
 current_file=""
 while IFS='|' read -r funcname filepath lineno; do
   [ -z "$funcname" ] && continue
@@ -227,23 +321,26 @@ while IFS='|' read -r funcname filepath lineno; do
     [ -n "$current_file" ] && echo "" >> "$OUTPUT"
     echo "### $filepath" >> "$OUTPUT"
     echo "" >> "$OUTPUT"
-    echo "| Function | Line | Called From |" >> "$OUTPUT"
+    echo "| Function | Line | Called By |" >> "$OUTPUT"
     echo "|---|---|---|" >> "$OUTPUT"
     current_file="$filepath"
   fi
 
-  # Find callers — files that contain funcname( but aren't just the definition
-  callers=$(grep -rlE "${funcname}\s*\(" "$SERVER_DIR" --include='*.php' 2>/dev/null | while read -r cf; do
-    crel=$(relpath "$cf")
-    if [ "$crel" = "$filepath" ]; then
-      count=$(grep -cE "${funcname}\s*\(" "$cf" 2>/dev/null || echo 0)
-      if [ "$count" -gt 1 ]; then
-        echo "$crel"
-      fi
+  # Get function-level callers from the call graph
+  callers=""
+  while IFS='|' read -r _ caller_func caller_file; do
+    entry=""
+    if [ "$caller_func" = "(top-level)" ]; then
+      entry="$caller_file"
     else
-      echo "$crel"
+      entry="\`${caller_func}()\` in $caller_file"
     fi
-  done | sort -u | tr '\n' ', ' | sed 's/, $//')
+    if [ -n "$callers" ]; then
+      callers="$callers, $entry"
+    else
+      callers="$entry"
+    fi
+  done < <(grep "^${funcname}|" "$TMP_DIR/call_graph.txt" 2>/dev/null | sort -t'|' -k2,3 -u || true)
 
   [ -z "$callers" ] && callers="—"
 
@@ -448,6 +545,157 @@ done >> "$OUTPUT"
 
 echo "" >> "$OUTPUT"
 
+# ── Phase 11: Call Chains for Critical Functions ─────────────────────────
+# Disable pipefail for this section — nested grep pipelines produce benign
+# SIGPIPE when one side closes early
+set +o pipefail
+
+echo "## Call Chains — Critical Functions" >> "$OUTPUT"
+echo "" >> "$OUTPUT"
+echo "Multi-level call chains for high-impact functions. Read bottom-up: the" >> "$OUTPUT"
+echo "lowest level is the utility, each line above is a caller of the line below." >> "$OUTPUT"
+echo "" >> "$OUTPUT"
+
+# For each critical utility function, trace up 3 levels using pre-built graph
+# Trace chains for functions with moderate fan-out (not api_error/api_ok which
+# are called everywhere — those are already in the Danger Zone section)
+CRITICAL_FUNCS=(
+  "atomic_write_json"
+  "temp_code_store"
+  "pb_call_dialsession"
+  "save_session_state"
+  "http_post_form"
+  "safe_file_path"
+  "temp_code_retrieve_and_delete"
+)
+
+for root_func in "${CRITICAL_FUNCS[@]}"; do
+  echo "### \`$root_func()\`" >> "$OUTPUT"
+  echo "" >> "$OUTPUT"
+  echo '```' >> "$OUTPUT"
+
+  # Build chain file for this function — avoids nested subshells with head/pipe
+  > "$TMP_DIR/chain_out.txt"
+
+  # Level 1: direct callers of root_func
+  grep "^${root_func}|" "$TMP_DIR/call_graph.txt" 2>/dev/null | sort -t'|' -k2,3 -u | while IFS='|' read -r _ l1_func l1_file; do
+    [ "$l1_func" = "(top-level)" ] && l1_func="(script)"
+    l1_short=$(basename "$l1_file")
+    echo "L1|${l1_func}|${l1_short}|${l1_file}" >> "$TMP_DIR/chain_out.txt"
+
+    # Level 2: callers of l1_func (skip if script-level)
+    if [ "$l1_func" != "(script)" ]; then
+      grep "^${l1_func}|" "$TMP_DIR/call_graph.txt" 2>/dev/null | sort -t'|' -k2,3 -u | while IFS='|' read -r _ l2_func l2_file; do
+        [ "$l2_func" = "(top-level)" ] && l2_func="(script)"
+        l2_short=$(basename "$l2_file")
+        echo "L2|${l1_func}|${l2_func}|${l2_short}" >> "$TMP_DIR/chain_out.txt"
+
+        # Level 3: callers of l2_func
+        if [ "$l2_func" != "(script)" ]; then
+          grep "^${l2_func}|" "$TMP_DIR/call_graph.txt" 2>/dev/null | sort -t'|' -k2,3 -u | while IFS='|' read -r _ l3_func l3_file; do
+            [ "$l3_func" = "(top-level)" ] && l3_func="(script)"
+            l3_short=$(basename "$l3_file")
+            echo "L3|${l2_func}|${l3_func}|${l3_short}" >> "$TMP_DIR/chain_out.txt"
+          done
+        fi
+      done
+    fi
+  done
+
+  # Format the chain output
+  {
+    # Show L3 → L2 → L1 → root
+    grep '^L3|' "$TMP_DIR/chain_out.txt" 2>/dev/null | sort -u | while IFS='|' read -r _ parent func file; do
+      echo "  ${func}() ← ${file}"
+    done
+    grep '^L2|' "$TMP_DIR/chain_out.txt" 2>/dev/null | sort -u | while IFS='|' read -r _ parent func file; do
+      echo "    → ${func}() ← ${file}"
+    done
+    grep '^L1|' "$TMP_DIR/chain_out.txt" 2>/dev/null | sort -u | while IFS='|' read -r _ func file _; do
+      echo "      → ${func}() ← ${file}"
+    done
+    echo "        → ${root_func}()"
+  } >> "$OUTPUT"
+
+  echo '```' >> "$OUTPUT"
+  echo "" >> "$OUTPUT"
+done
+
+# ── Phase 12: Cross-Boundary Chains (UI → JS → PHP → Utility) ───────────
+
+echo "## Cross-Boundary Chains — Full Stack Traces" >> "$OUTPUT"
+echo "" >> "$OUTPUT"
+echo "End-to-end flow from UI action through extension JS to server PHP to utility functions." >> "$OUTPUT"
+echo "Each chain shows: popup/content.js → background.js handler → server endpoint → PHP functions called." >> "$OUTPUT"
+echo "" >> "$OUTPUT"
+
+# For each message type that hits a server endpoint, trace the full chain
+while IFS='|' read -r msgtype senders endpoints; do
+  [ -z "$msgtype" ] && continue
+
+  echo "### \`$msgtype\`" >> "$OUTPUT"
+  echo "" >> "$OUTPUT"
+  echo '```' >> "$OUTPUT"
+  echo "$senders" >> "$OUTPUT"
+  echo "  → background.js ($msgtype handler)" >> "$OUTPUT"
+
+  # For each endpoint this handler calls
+  IFS=',' read -ra ep_array <<< "$endpoints"
+  for ep in "${ep_array[@]}"; do
+    ep=$(echo "$ep" | tr -d ' ')
+    [ -z "$ep" ] && continue
+    echo "    → api/$ep" >> "$OUTPUT"
+
+    # Find which functions this endpoint file calls (top-level calls)
+    ep_file="$SERVER_DIR/api/$ep"
+    if [ -f "$ep_file" ]; then
+      # Get all function calls in this endpoint (top-level, not inside a function def)
+      ep_rel=$(relpath "$ep_file")
+      # Find functions called from this endpoint at top level
+      # Find functions called from this endpoint at top level
+      {
+        grep "|(top-level)|${ep_rel}$" "$TMP_DIR/call_graph.txt" 2>/dev/null | while IFS='|' read -r called_func _ _; do
+          echo "      → $called_func()"
+
+          # One more level: what does that function call?
+          grep "^.*|${called_func}|" "$TMP_DIR/call_graph.txt" 2>/dev/null | sort -t'|' -k1,1 -u | while IFS='|' read -r subcall _ _; do
+            echo "        → $subcall()"
+          done
+        done
+      } | sort -u >> "$OUTPUT"
+    fi
+  done
+
+  echo '```' >> "$OUTPUT"
+  echo "" >> "$OUTPUT"
+done < "$TMP_DIR/msg_to_endpoints.txt" >> "$OUTPUT"
+
+# Also trace popup.js direct calls (hsPost)
+if [ -s "$TMP_DIR/popup_direct_calls.txt" ]; then
+  echo "### popup.js → Direct Server Calls" >> "$OUTPUT"
+  echo "" >> "$OUTPUT"
+
+  while IFS='|' read -r popup_func endpoint; do
+    [ -z "$endpoint" ] && continue
+    echo "**\`$popup_func()\`** → \`api/$endpoint\`" >> "$OUTPUT"
+
+    ep_file="$SERVER_DIR/api/$endpoint"
+    if [ -f "$ep_file" ]; then
+      ep_rel=$(relpath "$ep_file")
+      calls=$(grep "|(top-level)|${ep_rel}$" "$TMP_DIR/call_graph.txt" 2>/dev/null | while IFS='|' read -r called_func _ _; do
+        echo "$called_func()"
+      done | sort -u | tr '\n' ' → ' | sed 's/ → $//')
+      if [ -n "$calls" ]; then
+        echo "  → $calls" >> "$OUTPUT"
+      fi
+    fi
+    echo "" >> "$OUTPUT"
+  done < "$TMP_DIR/popup_direct_calls.txt" >> "$OUTPUT"
+fi
+
+# Re-enable pipefail for the rest
+set -o pipefail
+
 # ── Footer ────────────────────────────────────────────────────────────────
 
 cat >> "$OUTPUT" << 'FOOTER'
@@ -457,4 +705,5 @@ cat >> "$OUTPUT" << 'FOOTER'
 *Integrated into the PR workflow via Claude Code hook.*
 FOOTER
 
-echo "PROJECT_MAP.md generated successfully ($TIMESTAMP)"
+LINES=$(wc -l < "$OUTPUT")
+echo "PROJECT_MAP.md generated successfully — $LINES lines ($TIMESTAMP)" >&2
