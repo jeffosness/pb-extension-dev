@@ -89,6 +89,15 @@ resolve_caller_func() {
   ' "$TMP_DIR/func_ranges.txt"
 }
 
+# Boilerplate functions to filter from cross-boundary chains.
+# These appear in virtually every endpoint and add noise, not signal.
+BOILERPLATE="api_error|api_ok|api_ok_flat|api_log|json_input|get_client_id_or_fail|rate_limit_or_fail|rate_limit_check|cfg|log_msg|json_response|redact_pii_recursive|ensure_dir"
+
+# Check if a function name is boilerplate
+is_boilerplate() {
+  echo "$1" | grep -qE "^(${BOILERPLATE})$"
+}
+
 # ── Pre-compute function ranges ──────────────────────────────────────────
 
 echo "Building function range index..." >&2
@@ -273,7 +282,7 @@ grep -rnE '^\s*function [a-zA-Z_][a-zA-Z0-9_]*\s*\(' "$SERVER_DIR" --include='*.
   [ -z "$funcname" ] && continue
   rel=$(relpath "$filepath")
   echo "$funcname|$rel|$lineno"
-done | sort > "$TMP_DIR/func_defs.txt"
+done | sort -t'|' -k2,2 -k1,1 > "$TMP_DIR/func_defs.txt"
 
 # Pre-build a caller map: for each function, find which functions call it
 # Output: callee|caller_func|caller_file
@@ -349,67 +358,8 @@ done < "$TMP_DIR/func_defs.txt" >> "$OUTPUT"
 
 echo "" >> "$OUTPUT"
 
-# ── Phase 6: Shared Helper Usage Matrix ──────────────────────────────────
-
-echo "## Shared Helper Usage Matrix" >> "$OUTPUT"
-echo "" >> "$OUTPUT"
-echo "Critical utility functions and every file that calls them." >> "$OUTPUT"
-echo "" >> "$OUTPUT"
-
-HELPERS=(
-  "cfg"
-  "json_input"
-  "get_client_id_or_fail"
-  "rate_limit_or_fail"
-  "rate_limit_check"
-  "api_ok"
-  "api_ok_flat"
-  "api_error"
-  "api_log"
-  "safe_file_path"
-  "atomic_write_json"
-  "ensure_dir_secure"
-  "temp_code_store"
-  "temp_code_retrieve_and_delete"
-  "redact_pii_recursive"
-  "load_pb_token"
-  "save_pb_token"
-  "clear_pb_token"
-  "load_hs_tokens"
-  "save_hs_tokens"
-  "clear_hs_tokens"
-  "load_close_tokens"
-  "save_close_tokens"
-  "clear_close_tokens"
-  "load_apollo_tokens"
-  "save_apollo_tokens"
-  "clear_apollo_tokens"
-  "pb_call_dialsession"
-  "save_session_state"
-  "load_session_state"
-  "log_msg"
-  "http_post_form"
-  "pb_api_call"
-  "save_user_settings"
-  "load_user_settings"
-  "save_user_profile"
-  "resolve_member_user_id_for_client"
-)
-
-echo "| Helper | Used By (files) |" >> "$OUTPUT"
-echo "|---|---|" >> "$OUTPUT"
-
-for helper in "${HELPERS[@]}"; do
-  files=$(grep -rlE "${helper}\s*\(" "$SERVER_DIR" --include='*.php' 2>/dev/null | while read -r f; do
-    relpath "$f"
-  done | sort -u | tr '\n' ', ' | sed 's/, $//')
-  [ -z "$files" ] && files="—"
-  echo "| \`$helper()\` | $files |"
-done >> "$OUTPUT"
-
-echo "" >> "$OUTPUT"
-
-# ── Phase 7: API Endpoint Details ────────────────────────────────────────
+# ── Phase 6: API Endpoint Details ────────────────────────────────────────
+# (Shared Helper Usage Matrix removed — redundant with function-level callers in Phase 5)
 
 echo "## API Endpoint Details" >> "$OUTPUT"
 echo "" >> "$OUTPUT"
@@ -649,16 +599,16 @@ while IFS='|' read -r msgtype senders endpoints; do
     # Find which functions this endpoint file calls (top-level calls)
     ep_file="$SERVER_DIR/api/$ep"
     if [ -f "$ep_file" ]; then
-      # Get all function calls in this endpoint (top-level, not inside a function def)
+      # Get domain-specific function calls (filter out boilerplate)
       ep_rel=$(relpath "$ep_file")
-      # Find functions called from this endpoint at top level
-      # Find functions called from this endpoint at top level
       {
         grep "|(top-level)|${ep_rel}$" "$TMP_DIR/call_graph.txt" 2>/dev/null | while IFS='|' read -r called_func _ _; do
+          is_boilerplate "$called_func" && continue
           echo "      → $called_func()"
 
           # One more level: what does that function call?
           grep "^.*|${called_func}|" "$TMP_DIR/call_graph.txt" 2>/dev/null | sort -t'|' -k1,1 -u | while IFS='|' read -r subcall _ _; do
+            is_boilerplate "$subcall" && continue
             echo "        → $subcall()"
           done
         done
@@ -683,8 +633,9 @@ if [ -s "$TMP_DIR/popup_direct_calls.txt" ]; then
     if [ -f "$ep_file" ]; then
       ep_rel=$(relpath "$ep_file")
       calls=$(grep "|(top-level)|${ep_rel}$" "$TMP_DIR/call_graph.txt" 2>/dev/null | while IFS='|' read -r called_func _ _; do
+        is_boilerplate "$called_func" && continue
         echo "$called_func()"
-      done | sort -u | tr '\n' ' → ' | sed 's/ → $//')
+      done | sort -u | tr '\n' ', ' | sed 's/,$//' | sed 's/, $//')
       if [ -n "$calls" ]; then
         echo "  → $calls" >> "$OUTPUT"
       fi
