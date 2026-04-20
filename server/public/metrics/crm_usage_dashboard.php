@@ -622,8 +622,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // ====================================================================
       const execGrid = document.getElementById("exec-grid");
       execGrid.innerHTML = "";
-      const totalDialSessions = crm.total_events || 0;
-      execGrid.appendChild(statCardLg("Dial Sessions", String(totalDialSessions), ""));
+      execGrid.appendChild(statCardLg("Dial Sessions", String(totalConnects), ""));
       execGrid.appendChild(statCardLg("Unique Users", String(uniqueUsers), "green"));
       execGrid.appendChild(statCardLg("Total Calls", String(totalCalls), "orange"));
       execGrid.appendChild(statCardLg("Connect Rate", totalCalls > 0 ? connectRate.toFixed(1) + "%" : "N/A", "purple"));
@@ -698,8 +697,8 @@ document.addEventListener("DOMContentLoaded", () => {
       // ====================================================================
       const prodGrid = document.getElementById("productivity-grid");
       prodGrid.innerHTML = "";
-      const callsPerSession = totalDialSessions > 0 && totalCalls > 0
-        ? (totalCalls / totalDialSessions).toFixed(1) : "N/A";
+      const callsPerSession = totalConnects > 0 && totalCalls > 0
+        ? (totalCalls / totalConnects).toFixed(1) : "N/A";
       prodGrid.appendChild(statCard("Total Calls", String(totalCalls)));
       prodGrid.appendChild(statCard("Connected", String(totalConn)));
       prodGrid.appendChild(statCard("Connect Rate", totalCalls > 0 ? connectRate.toFixed(1) + "%" : "N/A"));
@@ -1039,7 +1038,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const dr = getDateRange(currentRange);
     let csv = "Metric,Value\n";
     csv += "Date Range," + dr.start + " to " + dr.end + "\n";
-    csv += "Dial Sessions," + (lastCrm.total_events || 0) + "\n";
+    csv += "Dial Sessions," + (lastSse.totals?.connects || 0) + "\n";
     csv += "Unique Users," + (lastSse.totals?.unique_users || 0) + "\n";
 
     if (lastAgent) {
