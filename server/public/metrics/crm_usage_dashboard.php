@@ -407,7 +407,7 @@ api_log('crm_usage_dashboard.view', [
       </div>
       <div>
         <table id="crm-combined-table">
-          <thead><tr><th>CRM</th><th>Events</th><th>Sessions</th></tr></thead>
+          <thead><tr><th>CRM</th><th>Sessions</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -622,7 +622,8 @@ document.addEventListener("DOMContentLoaded", () => {
       // ====================================================================
       const execGrid = document.getElementById("exec-grid");
       execGrid.innerHTML = "";
-      execGrid.appendChild(statCardLg("Total Sessions", String(totalConnects), ""));
+      const totalDialSessions = crm.total_events || 0;
+      execGrid.appendChild(statCardLg("Dial Sessions", String(totalDialSessions), ""));
       execGrid.appendChild(statCardLg("Unique Users", String(uniqueUsers), "green"));
       execGrid.appendChild(statCardLg("Total Calls", String(totalCalls), "orange"));
       execGrid.appendChild(statCardLg("Connect Rate", totalCalls > 0 ? connectRate.toFixed(1) + "%" : "N/A", "purple"));
@@ -670,8 +671,6 @@ document.addEventListener("DOMContentLoaded", () => {
       // Section 3: CRM Distribution
       // ====================================================================
       const byCrmId = crm.by_crm_id || {};
-      const byCrmSessions = sse.by_crm_sessions || {};
-
       if (hasChartJs && Object.keys(byCrmId).length > 0) {
         const crmLabels = Object.keys(byCrmId).sort((a, b) => byCrmId[b] - byCrmId[a]);
         const crmValues = crmLabels.map(k => byCrmId[k]);
@@ -681,19 +680,17 @@ document.addEventListener("DOMContentLoaded", () => {
         destroyChart("chart-crm-dist");
       }
 
-      // Combined CRM table (events + sessions)
-      const allCrms = new Set([...Object.keys(byCrmId), ...Object.keys(byCrmSessions)]);
+      // CRM table (dial sessions per CRM from usage tracking)
       const crmTableBody = document.querySelector("#crm-combined-table tbody");
       crmTableBody.innerHTML = "";
-      if (allCrms.size > 0) {
-        [...allCrms].sort((a, b) => (byCrmId[b] || 0) - (byCrmId[a] || 0)).forEach(crm => {
+      if (Object.keys(byCrmId).length > 0) {
+        Object.entries(byCrmId).sort((a, b) => b[1] - a[1]).forEach(([crm, count]) => {
           const tr = document.createElement("tr");
-          tr.innerHTML = '<td>' + esc(crm) + '</td><td class="num">' + (byCrmId[crm] || 0) +
-            '</td><td class="num">' + (byCrmSessions[crm] || 0) + '</td>';
+          tr.innerHTML = '<td>' + esc(crm) + '</td><td class="num">' + count + '</td>';
           crmTableBody.appendChild(tr);
         });
       } else {
-        crmTableBody.innerHTML = '<tr><td colspan="3" class="empty-msg">No data</td></tr>';
+        crmTableBody.innerHTML = '<tr><td colspan="2" class="empty-msg">No data</td></tr>';
       }
 
       // ====================================================================
@@ -701,8 +698,8 @@ document.addEventListener("DOMContentLoaded", () => {
       // ====================================================================
       const prodGrid = document.getElementById("productivity-grid");
       prodGrid.innerHTML = "";
-      const callsPerSession = totalConnects > 0 && totalCalls > 0
-        ? (totalCalls / totalConnects).toFixed(1) : "N/A";
+      const callsPerSession = totalDialSessions > 0 && totalCalls > 0
+        ? (totalCalls / totalDialSessions).toFixed(1) : "N/A";
       prodGrid.appendChild(statCard("Total Calls", String(totalCalls)));
       prodGrid.appendChild(statCard("Connected", String(totalConn)));
       prodGrid.appendChild(statCard("Connect Rate", totalCalls > 0 ? connectRate.toFixed(1) + "%" : "N/A"));
@@ -1042,9 +1039,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const dr = getDateRange(currentRange);
     let csv = "Metric,Value\n";
     csv += "Date Range," + dr.start + " to " + dr.end + "\n";
-    csv += "Total Sessions," + (lastSse.totals?.connects || 0) + "\n";
+    csv += "Dial Sessions," + (lastCrm.total_events || 0) + "\n";
     csv += "Unique Users," + (lastSse.totals?.unique_users || 0) + "\n";
-    csv += "Total CRM Events," + (lastCrm.total_events || 0) + "\n";
 
     if (lastAgent) {
       csv += "Total Calls," + (lastAgent.total_calls || 0) + "\n";
@@ -1053,7 +1049,7 @@ document.addEventListener("DOMContentLoaded", () => {
       csv += "Connect Rate," + (lastAgent.connect_rate || 0) + "%\n";
     }
 
-    csv += "\nCRM,Events\n";
+    csv += "\nCRM,Sessions\n";
     Object.entries(lastCrm.by_crm_id || {}).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => {
       csv += k + "," + v + "\n";
     });
