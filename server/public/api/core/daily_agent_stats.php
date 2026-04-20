@@ -54,6 +54,79 @@ if (count($dates) > 31) {
     api_error('Date range too large (max 31 days)', 'bad_request', 400);
 }
 
+/**
+ * Normalize a call status string for consistent dashboard grouping.
+ * PhoneBurner lets users create custom dispositions, so we:
+ *  1. Merge a small set of known synonyms (case-insensitive)
+ *  2. Title-case everything else so "left voicemail" = "Left Voicemail"
+ * Custom statuses pass through with just title-casing applied.
+ */
+function normalize_status(string $status): string {
+    $status = trim($status);
+    if ($status === '') return '';
+
+    $lower = strtolower($status);
+
+    // Known synonym merges (lowercase key => canonical display name).
+    // Be conservative — only merge statuses that clearly mean the same thing.
+    static $mergeMap = [
+        // Voicemail variants
+        'voicemail'          => 'Voicemail',
+        'left voicemail'     => 'Voicemail',
+        'left a voicemail'   => 'Voicemail',
+        'left vm'            => 'Voicemail',
+        'vm'                 => 'Voicemail',
+
+        // Busy variants
+        'busy'               => 'Busy',
+        'busy phone'         => 'Busy',
+        'busy signal'        => 'Busy',
+
+        // No answer variants
+        'no answer'          => 'No Answer',
+        'no-answer'          => 'No Answer',
+        'noanswer'           => 'No Answer',
+        'no ans'             => 'No Answer',
+
+        // Appointment variants
+        'set appointment'    => 'Appointment',
+        'appointment'        => 'Appointment',
+        'appointment set'    => 'Appointment',
+
+        // Wrong number variants
+        'wrong number'       => 'Wrong Number',
+        'wrong #'            => 'Wrong Number',
+        'wrong num'          => 'Wrong Number',
+
+        // Do not call variants
+        'do not call'        => 'Do Not Call',
+        'dnc'                => 'Do Not Call',
+        'do not contact'     => 'Do Not Call',
+
+        // Disconnected variants
+        'disconnected'       => 'Disconnected',
+        'disconnected number'=> 'Disconnected',
+        'disconnected phone' => 'Disconnected',
+
+        // Follow up variants
+        'follow up'          => 'Follow Up',
+        'follow-up'          => 'Follow Up',
+        'followup'           => 'Follow Up',
+        'call back'          => 'Follow Up',
+        'callback'           => 'Follow Up',
+
+        // Not interested (explicit — never merged with "interested")
+        'not interested'     => 'Not Interested',
+    ];
+
+    if (isset($mergeMap[$lower])) {
+        return $mergeMap[$lower];
+    }
+
+    // Default: title-case so custom statuses display consistently
+    return ucwords($lower);
+}
+
 $publicDir     = dirname(__DIR__, 2); // core -> api -> public
 $dailyStatsDir = $publicDir . '/daily_stats';
 
@@ -111,7 +184,9 @@ foreach ($dates as $d) {
         $dayStats['appointments'] += $appt;
 
         foreach (($stats['by_status'] ?? []) as $status => $count) {
-            $byStatus[$status] = ($byStatus[$status] ?? 0) + (int)$count;
+            $normalized = normalize_status($status);
+            if ($normalized === '') continue;
+            $byStatus[$normalized] = ($byStatus[$normalized] ?? 0) + (int)$count;
         }
     }
 
