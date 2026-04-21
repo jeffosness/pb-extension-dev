@@ -323,13 +323,32 @@ function apollo_normalize_contact(array $c, string $preferredPhoneField = ''): a
     }
   }
 
+  // Map preferred field names to phone_numbers type values
+  // (task-embedded contacts only have phone_numbers[], not top-level fields)
+  $preferredTypeMap = [
+    'direct_phone'    => ['direct', 'work_direct'],
+    'mobile_phone'    => ['mobile'],
+    'corporate_phone' => ['work', 'work_hq', 'corporate'],
+  ];
+
   // Pick primary: preferred field first, then default order
   $phone = '';
   if ($preferredPhoneField !== '') {
+    // First try matching by field name (contacts API has top-level fields)
     foreach ($allPhones as $ap) {
       if (($ap['field'] ?? '') === $preferredPhoneField && $ap['number'] !== '') {
         $phone = $ap['number'];
         break;
+      }
+    }
+    // Then try matching by type (task-embedded contacts use phone_numbers array)
+    if ($phone === '' && isset($preferredTypeMap[$preferredPhoneField])) {
+      $matchTypes = $preferredTypeMap[$preferredPhoneField];
+      foreach ($allPhones as $ap) {
+        if (in_array(strtolower($ap['type'] ?? ''), $matchTypes, true) && $ap['number'] !== '') {
+          $phone = $ap['number'];
+          break;
+        }
       }
     }
   }
