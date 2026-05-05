@@ -44,9 +44,14 @@ if (!$logFile) {
     api_error('Unable to construct log path', 'server_error', 500);
 }
 
+// Resolve the PhoneBurner member_user_id for this client (null if no PAT saved yet).
+// Indexed lookup: O(1) for known clients, falls back to a one-time file scan otherwise.
+$memberUserId = resolve_member_user_id_for_client($client_id);
+
 $entry = [
     'ts'             => date('c'),
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    'member_user_id' => $memberUserId,
     'crm_id'         => $crmId,
     'host'           => $host,
     'path'           => $path,

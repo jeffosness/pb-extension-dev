@@ -425,13 +425,101 @@ function get_user_settings_dir()
 }
 
 /**
- * Find the PhoneBurner member_user_id for a given client_id by scanning
- * user_settings/*.json and looking for a matching client_ids entry.
+ * Path to the client_id -> member_user_id index file.
+ * Lives inside the user_settings dir but is filtered out of file scans
+ * by the leading underscore.
+ */
+function client_index_file_path()
+{
+    $dir = get_user_settings_dir();
+    ensure_dir($dir);
+    return $dir . '/_client_index.json';
+}
+
+/**
+ * Load the client_id -> member_user_id index. Returns [] if missing/unreadable.
+ */
+function load_client_index()
+{
+    $path = client_index_file_path();
+    if (!file_exists($path)) {
+        return [];
+    }
+    $json = @file_get_contents($path);
+    if ($json === false || $json === '') {
+        return [];
+    }
+    $data = json_decode($json, true);
+    return is_array($data) ? $data : [];
+}
+
+/**
+ * Insert/update a single client_id -> member_user_id mapping in the index.
+ * Uses flock for read-modify-write safety. Best-effort: failures are logged
+ * but never thrown (lookups self-heal via fallback scan).
+ */
+function update_client_index($client_id, $memberUserId)
+{
+    $client_id = (string)$client_id;
+    $memberUserId = (string)$memberUserId;
+    if ($client_id === '' || $memberUserId === '') {
+        return;
+    }
+
+    $path = client_index_file_path();
+    $fh = @fopen($path, 'c+');
+    if ($fh === false) {
+        log_msg("update_client_index: failed to open $path");
+        return;
+    }
+    if (!flock($fh, LOCK_EX)) {
+        fclose($fh);
+        log_msg("update_client_index: failed to lock $path");
+        return;
+    }
+
+    $raw = stream_get_contents($fh);
+    $idx = ($raw !== false && $raw !== '') ? json_decode($raw, true) : [];
+    if (!is_array($idx)) {
+        $idx = [];
+    }
+
+    if (!isset($idx[$client_id]) || $idx[$client_id] !== $memberUserId) {
+        $idx[$client_id] = $memberUserId;
+        ftruncate($fh, 0);
+        rewind($fh);
+        fwrite($fh, json_encode($idx, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        fflush($fh);
+    }
+
+    flock($fh, LOCK_UN);
+    fclose($fh);
+}
+
+/**
+ * Find the PhoneBurner member_user_id for a given client_id.
+ *
+ * Strategy:
+ *   1. O(1) lookup in _client_index.json (the cache).
+ *   2. On miss, fall back to scanning user_settings/*.json (legacy / first call
+ *      before the index is populated) and self-heal the index with the result.
  *
  * Returns member_user_id (string) or null if not found.
  */
 function resolve_member_user_id_for_client($client_id)
 {
+    $client_id = (string)$client_id;
+    if ($client_id === '') {
+        return null;
+    }
+
+    // 1) Fast path: index lookup
+    $idx = load_client_index();
+    if (isset($idx[$client_id]) && $idx[$client_id] !== '') {
+        return (string)$idx[$client_id];
+    }
+
+    // 2) Fallback: scan user_settings files
     $dir = get_user_settings_dir();
     if (!is_dir($dir)) {
         return null;
@@ -443,6 +531,11 @@ function resolve_member_user_id_for_client($client_id)
     }
 
     foreach ($files as $file) {
+        // Skip internal files (e.g. _client_index.json)
+        if (strpos(basename($file), '_') === 0) {
+            continue;
+        }
+
         $json = file_get_contents($file);
         if ($json === false || $json === '') {
             continue;
@@ -458,10 +551,15 @@ function resolve_member_user_id_for_client($client_id)
         }
 
         if (in_array($client_id, $clientIds, true)) {
-            // Found the matching user
-            return isset($data['member_user_id'])
+            $memberUserId = isset($data['member_user_id'])
                 ? (string)$data['member_user_id']
                 : null;
+
+            // Self-heal the index so the next call is O(1)
+            if ($memberUserId !== null && $memberUserId !== '') {
+                update_client_index($client_id, $memberUserId);
+            }
+            return $memberUserId;
         }
     }
 
@@ -567,6 +665,9 @@ function save_user_profile($client_id, $memberUserId, $memberData)
     $settings['updated_at'] = $now;
 
     file_put_contents($path, json_encode($settings, JSON_PRETTY_PRINT));
+
+    // Maintain the client_id -> member_user_id index for O(1) reverse lookups.
+    update_client_index($client_id, $memberUserId);
 }
 
 
