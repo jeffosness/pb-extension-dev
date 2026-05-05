@@ -413,6 +413,31 @@ api_log('crm_usage_dashboard.view', [
       </div>
     </div>
 
+    <!-- Section 3.5: Activity by User -->
+    <h2 class="section-title">Activity by User</h2>
+    <div class="alert alert-info" style="margin: 0 0 12px;">
+      <strong>Privacy note:</strong> Only the PhoneBurner <code>member_user_id</code> is shown here.
+      Names and email addresses are intentionally omitted &mdash; if you need to identify a specific
+      user, look the ID up in the PhoneBurner admin. We may surface richer profile data in the
+      future once we&rsquo;ve formalized access controls for it.
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin: 8px 0 12px;">
+      <input type="text" id="user-search"
+             placeholder="Filter by member_user_id&hellip;"
+             style="flex:1; max-width:300px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+      <span class="muted" id="user-search-count"></span>
+    </div>
+    <table id="by-user-table">
+      <thead>
+        <tr>
+          <th>Member User ID</th>
+          <th style="text-align:right;">Launches</th>
+          <th>CRMs Used</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
     <!-- Section 4: Dial Session Productivity -->
     <h2 class="section-title">Dial Session Productivity</h2>
     <div class="grid-3" id="productivity-grid"></div>
@@ -499,6 +524,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Last loaded data (for CSV export)
   let lastSse = null, lastCrm = null, lastAgent = null;
+
+  // Cached "by user" rows for live filter without re-fetching
+  let lastByUserRows = [];
 
   // --- CRM color map ---
   const CRM_COLORS = {
@@ -693,6 +721,19 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       // ====================================================================
+      // Section 3.5: Activity by User (member_user_id only — see privacy note)
+      // ====================================================================
+      const byUser = crm.by_user || {};
+      lastByUserRows = Object.entries(byUser)
+        .map(([uid, info]) => ({
+          uid,
+          total: info.total || 0,
+          byCrm: info.by_crm || {},
+        }))
+        .sort((a, b) => b.total - a.total);
+      renderByUser(document.getElementById("user-search").value || "");
+
+      // ====================================================================
       // Section 4: Productivity
       // ====================================================================
       const prodGrid = document.getElementById("productivity-grid");
@@ -856,6 +897,45 @@ document.addEventListener("DOMContentLoaded", () => {
       tr.innerHTML = '<td>' + esc(key) + '</td><td class="num">' + count + '</td>';
       tbody.appendChild(tr);
     });
+  }
+
+  function renderByUser(filterText) {
+    const tbody = document.querySelector("#by-user-table tbody");
+    const countEl = document.getElementById("user-search-count");
+    tbody.innerHTML = "";
+
+    const q = (filterText || "").trim().toLowerCase();
+    const filtered = q
+      ? lastByUserRows.filter(r => r.uid.toLowerCase().indexOf(q) !== -1)
+      : lastByUserRows;
+
+    if (lastByUserRows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">No identified users for this period (entries without a saved PAT are excluded)</td></tr>';
+      countEl.textContent = "";
+      return;
+    }
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">No users match &ldquo;' + esc(filterText) + '&rdquo;</td></tr>';
+      countEl.textContent = "0 of " + lastByUserRows.length;
+      return;
+    }
+
+    filtered.forEach(row => {
+      const crmList = Object.entries(row.byCrm)
+        .sort((a, b) => b[1] - a[1])
+        .map(([crm, n]) => esc(crm) + " (" + n + ")")
+        .join(", ");
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td><code>' + esc(row.uid) + '</code></td>' +
+        '<td class="num">' + row.total + '</td>' +
+        '<td>' + crmList + '</td>';
+      tbody.appendChild(tr);
+    });
+
+    countEl.textContent = q
+      ? filtered.length + " of " + lastByUserRows.length
+      : lastByUserRows.length + " user" + (lastByUserRows.length === 1 ? "" : "s");
   }
 
   function fillTableFriendly(tableId, obj, labelFn) {
@@ -1103,6 +1183,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (document.getElementById("auto-refresh-toggle").checked) {
     startAutoRefresh();
   }
+
+  // Live filter for the "Activity by User" table (no re-fetch)
+  document.getElementById("user-search").addEventListener("input", function() {
+    renderByUser(this.value);
+  });
 
   // Initial load
   loadDashboard();

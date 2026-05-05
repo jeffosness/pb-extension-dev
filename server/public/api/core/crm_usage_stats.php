@@ -59,6 +59,7 @@ function aggregate_log_file(
     int &$selectedCountTotal,
     int &$selectedCountEntries,
     array &$selectedCountBuckets,
+    array &$byUser,
     bool $filterByDate = false,
     int $startTs = 0,
     int $endTs = 0
@@ -115,6 +116,24 @@ function aggregate_log_file(
             $bucket = selected_count_bucket($selCount);
             $selectedCountBuckets[$bucket] = ($selectedCountBuckets[$bucket] ?? 0) + 1;
         }
+
+        // Per-user aggregation (only for entries with a known PhoneBurner identity).
+        // We deliberately do NOT include name/email here — see crm_usage_dashboard.php
+        // for the rationale. Use the ID to look up the agent on the PB side when needed.
+        $memberUserId = isset($entry['member_user_id']) && $entry['member_user_id'] !== ''
+            ? (string)$entry['member_user_id']
+            : '';
+        if ($memberUserId !== '') {
+            if (!isset($byUser[$memberUserId])) {
+                $byUser[$memberUserId] = [
+                    'total'  => 0,
+                    'by_crm' => [],
+                ];
+            }
+            $byUser[$memberUserId]['total']++;
+            $byUser[$memberUserId]['by_crm'][$crm] =
+                ($byUser[$memberUserId]['by_crm'][$crm] ?? 0) + 1;
+        }
     }
 
     fclose($fh);
@@ -163,6 +182,7 @@ $allUniqueUsers     = [];
 $allSelCountTotal   = 0;
 $allSelCountEntries = 0;
 $allSelCountBuckets = [];
+$byUser             = [];
 
 // Per-day breakdown
 $perDay = [];
@@ -185,13 +205,14 @@ foreach ($dates as $d) {
     $daySelTotal = 0;
     $daySelEntries = 0;
     $daySelBuckets = [];
+    $dayByUser = [];
 
     if ($dailyFile && is_file($dailyFile)) {
         $datesWithDailyFile[$d] = true;
         aggregate_log_file(
             $dailyFile,
             $dayCrm, $dayHost, $dayLevel, $dayObjType, $dayLaunchSrc, $dayTotal,
-            $dayUsers, $daySelTotal, $daySelEntries, $daySelBuckets
+            $dayUsers, $daySelTotal, $daySelEntries, $daySelBuckets, $dayByUser
         );
     }
 
@@ -206,6 +227,17 @@ foreach ($dates as $d) {
     $allSelCountTotal += $daySelTotal;
     $allSelCountEntries += $daySelEntries;
     foreach ($daySelBuckets as $k => $v) $allSelCountBuckets[$k] = ($allSelCountBuckets[$k] ?? 0) + $v;
+
+    foreach ($dayByUser as $uid => $info) {
+        if (!isset($byUser[$uid])) {
+            $byUser[$uid] = ['total' => 0, 'by_crm' => []];
+        }
+        $byUser[$uid]['total'] += $info['total'];
+        foreach ($info['by_crm'] as $crmKey => $crmCount) {
+            $byUser[$uid]['by_crm'][$crmKey] =
+                ($byUser[$uid]['by_crm'][$crmKey] ?? 0) + $crmCount;
+        }
+    }
 
     $perDay[] = [
         'date'               => $d,
@@ -232,6 +264,7 @@ if (count($datesNeedingLegacy) > 0 && file_exists($legacyFile)) {
         $legacyFile,
         $byCrm, $byHost, $byLevel, $byObjectType, $byLaunchSource, $total,
         $allUniqueUsers, $allSelCountTotal, $allSelCountEntries, $allSelCountBuckets,
+        $byUser,
         true, $legacyStart, $legacyEnd
     );
 }
@@ -247,6 +280,7 @@ if ($total === 0 && count($datesWithDailyFile) === 0 && !file_exists($legacyFile
         'unique_users'     => 0,
         'selected_count'   => ['total' => 0, 'entries' => 0, 'avg' => 0, 'buckets' => (object)[]],
         'per_day'          => $perDay,
+        'by_user'          => (object)[],
         'note'             => 'No CRM usage log files found',
     ]);
 }
@@ -273,4 +307,5 @@ api_ok([
         'buckets' => $allSelCountBuckets ?: (object)[],
     ],
     'per_day'          => $perDay,
+    'by_user'          => $byUser ?: (object)[],
 ]);
