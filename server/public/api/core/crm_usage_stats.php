@@ -131,8 +131,21 @@ function aggregate_log_file(
                 ];
             }
             $byUser[$memberUserId]['total']++;
-            $byUser[$memberUserId]['by_crm'][$crm] =
-                ($byUser[$memberUserId]['by_crm'][$crm] ?? 0) + 1;
+
+            // For generic / unknown CRM launches the crm_id alone ("generic") is
+            // useless for spotting emerging integrations — substitute the hostname
+            // so each unrecognized CRM shows as its own bucket. Known CRMs keep
+            // their crm_id (hubspot, close, apollo, etc).
+            $perUserCrmKey = $crm;
+            if ($crm === 'generic' || $crm === 'unknown') {
+                $hostKey = preg_replace('/^www\./i', '', (string)$host);
+                if ($hostKey !== '' && $hostKey !== 'unknown') {
+                    $perUserCrmKey = $hostKey;
+                }
+            }
+
+            $byUser[$memberUserId]['by_crm'][$perUserCrmKey] =
+                ($byUser[$memberUserId]['by_crm'][$perUserCrmKey] ?? 0) + 1;
         }
     }
 
