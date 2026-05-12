@@ -88,7 +88,18 @@ function aggregate_log_file(
         $host  = $entry['host']   ?? 'unknown';
         $level = (string)($entry['level'] ?? 'unknown');
 
-        $byCrm[$crm]     = ($byCrm[$crm]     ?? 0) + 1;
+        // For generic / unknown CRM launches the crm_id alone ("generic") collapses
+        // every emerging CRM into one bucket — substitute the hostname so each shows
+        // as its own slice. Known CRMs (hubspot, close, apollo, etc.) keep their crm_id.
+        $crmKey = $crm;
+        if ($crm === 'generic' || $crm === 'unknown') {
+            $hostKey = preg_replace('/^www\./i', '', (string)$host);
+            if ($hostKey !== '' && $hostKey !== 'unknown') {
+                $crmKey = $hostKey;
+            }
+        }
+
+        $byCrm[$crmKey]  = ($byCrm[$crmKey]  ?? 0) + 1;
         $byHost[$host]   = ($byHost[$host]   ?? 0) + 1;
         $byLevel[$level] = ($byLevel[$level] ?? 0) + 1;
 
@@ -131,21 +142,8 @@ function aggregate_log_file(
                 ];
             }
             $byUser[$memberUserId]['total']++;
-
-            // For generic / unknown CRM launches the crm_id alone ("generic") is
-            // useless for spotting emerging integrations — substitute the hostname
-            // so each unrecognized CRM shows as its own bucket. Known CRMs keep
-            // their crm_id (hubspot, close, apollo, etc).
-            $perUserCrmKey = $crm;
-            if ($crm === 'generic' || $crm === 'unknown') {
-                $hostKey = preg_replace('/^www\./i', '', (string)$host);
-                if ($hostKey !== '' && $hostKey !== 'unknown') {
-                    $perUserCrmKey = $hostKey;
-                }
-            }
-
-            $byUser[$memberUserId]['by_crm'][$perUserCrmKey] =
-                ($byUser[$memberUserId]['by_crm'][$perUserCrmKey] ?? 0) + 1;
+            $byUser[$memberUserId]['by_crm'][$crmKey] =
+                ($byUser[$memberUserId]['by_crm'][$crmKey] ?? 0) + 1;
         }
     }
 
