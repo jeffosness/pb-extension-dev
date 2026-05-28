@@ -231,13 +231,18 @@ foreach ($hsContacts as $c) {
     'crm_name' => ($callTarget === 'companies') ? 'hubspotcompany' : 'hubspot',
   ];
 
-  // OPTIONAL: include originating deal/company IDs as additional external_crm_data entries
-  // - deals => crm_name = hubspotdeal, crm_id = dealId
-  // - companies => crm_name = hubspotcompany, crm_id = companyId
+  // OPTIONAL: include originating deal/company IDs as additional external_crm_data entries.
+  // IMPORTANT: these are *breadcrumb* references on a CONTACT record, not the primary identity.
+  // Use a distinct crm_name so PB does NOT match-and-overwrite a direct-dial company/deal record
+  // that shares the same numeric ID. PB matches by (crm_id + crm_name) on ANY external_crm_data
+  // entry, so reusing 'hubspotcompany' here would cause the next direct company dial to update
+  // this contact's PB record instead of creating a fresh company record.
+  // - deals => crm_name = hubspotrelateddeal, crm_id = dealId
+  // - companies => crm_name = hubspotrelatedcompany, crm_id = companyId
   if (($mode === 'deals' || $mode === 'companies') && !empty($sourceObjectType)) {
     $srcIds = $sourceObjectIdsByContact[$hsId] ?? [];
     if (is_array($srcIds) && !empty($srcIds)) {
-      $crmName = ($sourceObjectType === 'deals') ? 'hubspotdeal' : 'hubspotcompany';
+      $crmName = ($sourceObjectType === 'deals') ? 'hubspotrelateddeal' : 'hubspotrelatedcompany';
 
       foreach ($srcIds as $srcId) {
         $srcId = trim((string)$srcId);
