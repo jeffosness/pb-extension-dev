@@ -223,38 +223,15 @@ foreach ($hsContacts as $c) {
   // REQUIRED: external_crm_data must be an ARRAY of objects with crm_id + crm_name
   $externalCrmData = [];
 
-  // Include the HubSpot identity (contact or company). PhoneBurner's HubSpot
-  // integration disambiguates record type by crm_name, so the raw HubSpot ID
-  // is sent unprefixed for both contacts and companies.
+  // Include ONLY the HubSpot identity of the entity being dialed. We intentionally
+  // do NOT add parent company/deal breadcrumbs here — PB matches records on
+  // (crm_id + crm_name) against ANY entry in external_crm_data, so breadcrumbs
+  // can collide with future direct-dial records and cause PB to match-and-update
+  // (overwrite) the wrong PB record. Keep this array to one entry: the primary.
   $externalCrmData[] = [
     'crm_id'   => $hsId,
     'crm_name' => ($callTarget === 'companies') ? 'hubspotcompany' : 'hubspot',
   ];
-
-  // OPTIONAL: include originating deal/company IDs as additional external_crm_data entries.
-  // IMPORTANT: these are *breadcrumb* references on a CONTACT record, not the primary identity.
-  // Use a distinct crm_name so PB does NOT match-and-overwrite a direct-dial company/deal record
-  // that shares the same numeric ID. PB matches by (crm_id + crm_name) on ANY external_crm_data
-  // entry, so reusing 'hubspotcompany' here would cause the next direct company dial to update
-  // this contact's PB record instead of creating a fresh company record.
-  // - deals => crm_name = hubspotrelateddeal, crm_id = dealId
-  // - companies => crm_name = hubspotrelatedcompany, crm_id = companyId
-  if (($mode === 'deals' || $mode === 'companies') && !empty($sourceObjectType)) {
-    $srcIds = $sourceObjectIdsByContact[$hsId] ?? [];
-    if (is_array($srcIds) && !empty($srcIds)) {
-      $crmName = ($sourceObjectType === 'deals') ? 'hubspotrelateddeal' : 'hubspotrelatedcompany';
-
-      foreach ($srcIds as $srcId) {
-        $srcId = trim((string)$srcId);
-        if ($srcId === '') continue;
-
-        $externalCrmData[] = [
-          'crm_id'   => $srcId,
-          'crm_name' => $crmName,
-        ];
-      }
-    }
-  }
 
   // Build PB contact WITHOUT external_id
   $pbContact = [

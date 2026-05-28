@@ -737,25 +737,23 @@ $contacts_map[$externalId] = [
 ];
 ```
 
-**Rule for HubSpot object types — primary vs. related entries:**
+**Rule for HubSpot object types — one entry per PB record:**
 
-A PB contact's `external_crm_data` array can contain multiple entries. The FIRST entry is the **primary** identity (the entity being dialed). Subsequent entries are **related** breadcrumbs (e.g., the parent company of a contact dialed from a company list view). Primary and related entries MUST use different `crm_name` values, even when they point to the same kind of HubSpot object — otherwise PB will match a related entry against a future direct-dial record and overwrite it.
+Each PB contact's `external_crm_data` array MUST contain exactly ONE entry: the identity of the entity being dialed. Do NOT add parent company/deal breadcrumbs as additional entries.
 
-| Role | Object | `crm_id` | `crm_name` |
-|------|--------|----------|------------|
-| Primary | Contact | raw HubSpot ID (`"12345"`) | `"hubspot"` |
-| Primary | Company | raw HubSpot ID (`"12345"`) | `"hubspotcompany"` |
-| Primary | Deal | raw HubSpot ID (`"12345"`) | `"hubspotdeal"` |
-| Related | Parent Company (on a contact dialed from a company list view) | raw HubSpot ID | `"hubspotrelatedcompany"` |
-| Related | Parent Deal (on a contact dialed from a deal list view) | raw HubSpot ID | `"hubspotrelateddeal"` |
+| Object being dialed | `crm_id` | `crm_name` |
+|--------------------|----------|------------|
+| Contact | raw HubSpot ID (`"12345"`) | `"hubspot"` |
+| Company | raw HubSpot ID (`"12345"`) | `"hubspotcompany"` |
+| Deal | raw HubSpot ID (`"12345"`) | `"hubspotdeal"` |
 
-**Why related entries need their own `crm_name`:** PB matches records on `(crm_id, crm_name)` against ANY entry in `external_crm_data`, not just the primary. If a contact's PB record has `{crm_id: companyId, crm_name: "hubspotcompany"}` as a related breadcrumb, then dialing that company directly later would cause PB to match-and-update that same contact record instead of creating a fresh company record — overwriting the contact's name and phone with the company's. Using `hubspotrelatedcompany` for the breadcrumb keeps the two records cleanly separate.
+**Why no breadcrumbs:** PB matches records on `(crm_id, crm_name)` against ANY entry in `external_crm_data`, not just the first one. If a contact's PB record carries a `{crm_id: companyId, crm_name: "hubspotcompany"}` breadcrumb pointing to its parent company, then dialing that company directly later would cause PB to match-and-update that contact record — overwriting the contact's name and phone with the company's. Even renaming the breadcrumb to a distinct `crm_name` (e.g., `hubspotrelatedcompany`) avoids the immediate overwrite but still creates a long-term dedup landmine if naming conventions ever shift or if PB later adds matching logic that looks at breadcrumb names. Safest is to keep the array to one entry per PB record and rely on the launch context (which HubSpot object list / sequence the dial came from) for any "related-to-what" reporting we need.
 
 **Historical notes:**
 - Prior to 2026-05, company `crm_id` values were prefixed with `"HS Company "` as a defensive measure. PB's HubSpot integration was confirmed by John Congdon (PB team) to disambiguate via `crm_name`, so the prefix was removed.
-- The first prefix-removal pass missed that the related breadcrumb on contacts also used `crm_name: "hubspotcompany"`, which reintroduced the overwrite bug. The fix was to rename the related breadcrumb to `hubspotrelatedcompany` (and `hubspotrelateddeal`) instead of restoring the ID prefix.
+- After removing the prefix, the same overwrite bug surfaced via the related-company breadcrumb that was attached to contacts dialed from a company list view. We first tried renaming that breadcrumb to `hubspotrelatedcompany` (PR #85), then decided to remove the breadcrumb entirely to eliminate the dedup risk class altogether.
 
-**Critical:** The `contacts_map` key MUST match the `crm_id` sent to PhoneBurner for the PRIMARY entry, otherwise webhook matching will fail.
+**Critical:** The `contacts_map` key MUST match the `crm_id` sent to PhoneBurner, otherwise webhook matching will fail.
 
 ### Testing with Real CRM Data
 
