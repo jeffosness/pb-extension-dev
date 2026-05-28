@@ -239,8 +239,9 @@ foreach ($hsRecords as $c) {
       : null;
   }
 
-  // CRM ID uniqueness: companies get prefixed to prevent merging with contacts
-  $externalId = $isCompanyList ? ('HS Company ' . $hsId) : $hsId;
+  // PhoneBurner disambiguates record type by crm_name (hubspot vs hubspotcompany),
+  // so the raw HubSpot ID is sent unprefixed for both.
+  $externalId = $hsId;
 
   $externalCrmData = [];
   $externalCrmData[] = [

@@ -218,16 +218,16 @@ foreach ($hsContacts as $c) {
   }
 
   // We will use this as our internal key (NOT sent to PB as external_id)
-  // For companies, use prefixed format to match the crm_id we send to PhoneBurner
-  $externalId = ($callTarget === 'companies') ? ('HS Company ' . $hsId) : $hsId;
+  $externalId = $hsId;
 
   // REQUIRED: external_crm_data must be an ARRAY of objects with crm_id + crm_name
   $externalCrmData = [];
 
-  // Include the HubSpot identity (contact or company)
-  // For companies, prefix ID with "HS Company " to prevent matching with existing contact records
+  // Include the HubSpot identity (contact or company). PhoneBurner's HubSpot
+  // integration disambiguates record type by crm_name, so the raw HubSpot ID
+  // is sent unprefixed for both contacts and companies.
   $externalCrmData[] = [
-    'crm_id'   => ($callTarget === 'companies') ? ('HS Company ' . $hsId) : $hsId,
+    'crm_id'   => $hsId,
     'crm_name' => ($callTarget === 'companies') ? 'hubspotcompany' : 'hubspot',
   ];
 
@@ -378,6 +378,17 @@ if (!$launch_url) {
     'pb_ms' => $pb_ms,
   ]);
 }
+
+// Success — log the dial-session breakdown so we can see how often
+// companies are dialed directly vs. contacts-related-to-companies.
+api_log('hubspot_selection.ok', [
+  'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+  'mode'           => $mode,
+  'call_target'    => $callTarget,
+  'pb_contacts'    => count($pbContacts),
+  'skipped'        => $skipped,
+  'pb_ms'          => $pb_ms,
+]);
 
 // -------------------------
 // Save initial session state (match dialsession_from_scan.php shape)

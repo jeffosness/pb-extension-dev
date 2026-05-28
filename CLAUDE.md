@@ -718,59 +718,34 @@ window.close();
 
 ### CRM ID Uniqueness Across Object Types
 
-**Problem:** PhoneBurner uses `crm_id` in `external_crm_data` to match and update records. If companies and contacts use the same HubSpot ID format, PhoneBurner will incorrectly merge them.
-
-**Example Issue:**
-
-```javascript
-// Contact record
-{
-  first_name: "John",
-  external_crm_data: [
-    { crm_id: "12345", crm_name: "hubspot" }
-  ]
-}
-
-// Company record (WRONG - same ID!)
-{
-  first_name: "Acme Corp",
-  external_crm_data: [
-    { crm_id: "12345", crm_name: "hubspotcompany" }  // ❌ PhoneBurner merges!
-  ]
-}
-```
-
-**Solution: Prefix CRM IDs by object type**
+**Disambiguate by `crm_name`, not by prefixing the ID.** PhoneBurner's HubSpot integration uses the `crm_name` field in `external_crm_data` to determine the object type when matching records, so a contact and a company that share the same numeric HubSpot ID are kept as separate PhoneBurner records via distinct `crm_name` values.
 
 ```php
 // In pb_dialsession_selection.php
 $externalCrmData[] = [
-  'crm_id'   => ($callTarget === 'companies')
-    ? ('HS Company ' . $hsId)  // Prefix for uniqueness
-    : $hsId,                    // Raw ID for contacts
-  'crm_name' => ($callTarget === 'companies')
-    ? 'hubspotcompany'
-    : 'hubspot',
+  'crm_id'   => $hsId,
+  'crm_name' => ($callTarget === 'companies') ? 'hubspotcompany' : 'hubspot',
 ];
 
-// Also update contacts_map key to match for webhook lookups
-$externalId = ($callTarget === 'companies')
-  ? ('HS Company ' . $hsId)
-  : $hsId;
+// contacts_map key MUST match the crm_id sent to PB so webhook lookups resolve
+$externalId = $hsId;
 
 $contacts_map[$externalId] = [
-  'crm_identifier' => $externalId,  // Matches webhook crm_id
-  'record_url'     => $recordUrl,   // Still uses raw HubSpot ID
+  'crm_identifier' => $externalId,  // matches incoming webhook crm_id
+  'record_url'     => $recordUrl,
   // ...
 ];
 ```
 
-**Rule for New Object Types:**
+**Rule for HubSpot object types:**
 
-- **Contacts:** Use raw HubSpot ID (`"12345"`)
-- **Companies:** Prefix with `"HS Company "` (`"HS Company 12345"`)
-- **Deals:** Prefix with `"HS Deal "` (`"HS Deal 12345"`)
-- **Custom Objects:** Prefix with `"HS {ObjectType} "` (`"HS Ticket 12345"`)
+| Object | `crm_id` | `crm_name` |
+|--------|----------|------------|
+| Contact | raw HubSpot ID (`"12345"`) | `"hubspot"` |
+| Company | raw HubSpot ID (`"12345"`) | `"hubspotcompany"` |
+| Deal | raw HubSpot ID (`"12345"`) | `"hubspotdeal"` |
+
+**Historical note:** Prior to 2026-05, company `crm_id` values were prefixed with `"HS Company "` as a defensive measure against PB merging company and contact records with overlapping numeric IDs. PB's HubSpot integration was confirmed by the PB team (John Congdon) to disambiguate via `crm_name`, so the prefix was removed. The previous behavior may still appear in old PhoneBurner records created before this change.
 
 **Critical:** The `contacts_map` key MUST match the `crm_id` sent to PhoneBurner, otherwise webhook matching will fail.
 
@@ -931,7 +906,7 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
 
 4. **Object Type Matters**: Lists can be for contacts (`0-1`) or companies (`0-2`). Use different normalization:
    - **Contact lists**: Send `object_type: "contacts"`, use contact fields
-   - **Company lists**: Send `object_type: "companies"`, use company normalization with `"HS Company "` ID prefix
+   - **Company lists**: Send `object_type: "companies"`, use company normalization with `crm_name: "hubspotcompany"` (no ID prefix — disambiguated by `crm_name`)
 
 **Files Involved:**
 - `server/public/api/crm/hubspot/hs_lists.php` - Fetches lists
