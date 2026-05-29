@@ -1547,6 +1547,29 @@ Parameters available:
 
 ## Deployment Checklist
 
+### Pre-PR Checklist (KB Impact — required on every PR)
+
+**Every** PR must declare its KB impact. CI (`.github/workflows/kb-impact-check.yml`) enforces this against the `## KB Impact` section of the PR body — PRs cannot merge without a checked box.
+
+Before opening any PR, ask: **would a customer or support rep notice this change?**
+
+- **No customer-visible change** → check the "No customer-visible change" box. Examples: refactors, build/CI tweaks, internal docs, server log format changes, etc.
+- **Customer-visible change** → update `KB_EXTENSION_TROUBLESHOOTING.md` in the same PR (preferred), OR open a follow-up issue/PR and link it in the checkbox.
+
+Customer-visible doesn't just mean UI:
+- New CRM provider, new launch path, new setting, renamed button, new error message.
+- Behavior changes in dial session creation, call logging, OAuth flows, follow-me.
+- **Server-only changes that affect what shows up in the customer's CRM or PhoneBurner records** — e.g., PR #86 silently changed `external_crm_data` and would have warranted a KB note even though no extension code changed.
+- New permissions, new domains, changes to data handling or privacy.
+
+If unsure, treat it as customer-visible.
+
+**The KB renders publicly at:**
+- `https://extension.phoneburner.biz/kb.php` — HTML (humans)
+- `https://extension.phoneburner.biz/kb.php?format=md` — raw markdown (PB's AI agent)
+
+Both read directly from `KB_EXTENSION_TROUBLESHOOTING.md` in the repo, so merging to main auto-publishes via the existing deploy pipeline.
+
 ### Pre-PR Checklist (Version & Changelog)
 
 When creating a PR that includes **user-facing changes** (new features, UI changes, new settings):
