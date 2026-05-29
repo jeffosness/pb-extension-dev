@@ -1,0 +1,127 @@
+name: KB Impact Check
+
+# Enforces the KB Impact section of the PR template.
+# Every PR must declare whether it has customer-visible impact, and if so,
+# either include a KB edit or link a tracked follow-up.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  kb-impact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out PR with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify KB Impact declaration
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const KB_FILE = 'KB_EXTENSION_TROUBLESHOOTING.md';
+            const body = context.payload.pull_request.body || '';
+
+            // Extract the KB Impact section (between "## KB Impact" and the next "## " or end).
+            const sectionMatch = body.match(/##\s+KB Impact[\s\S]*?(?=\n##\s|$)/i);
+            if (!sectionMatch) {
+              core.setFailed(
+                'PR body is missing the "## KB Impact" section. ' +
+                'Reset your PR description from the template and fill out the KB Impact section.'
+              );
+              return;
+            }
+            const section = sectionMatch[0];
+
+            // Parse checkboxes within the section.
+            // GitHub renders "- [x]" or "- [X]" as checked, "- [ ]" as unchecked.
+            const lines = section.split(/\r?\n/);
+            const checkboxes = lines
+              .map(l => l.match(/^\s*-\s*\[([ xX])\]\s*\*\*(.+?)\*\*/))
+              .filter(Boolean)
+              .map(m => ({ checked: m[1].toLowerCase() === 'x', label: m[2].trim() }));
+
+            if (checkboxes.length === 0) {
+              core.setFailed(
+                'No KB Impact checkboxes found in the PR body. ' +
+                'Reset your PR description from the template — the checkboxes must use "- [ ] **Label**" format.'
+              );
+              return;
+            }
+
+            const checked = checkboxes.filter(c => c.checked);
+            if (checked.length === 0) {
+              core.setFailed(
+                'No KB Impact box is checked. ' +
+                'Edit the PR description and check exactly one option in the "## KB Impact" section.'
+              );
+              return;
+            }
+            if (checked.length > 1) {
+              core.setFailed(
+                `Multiple KB Impact boxes are checked (${checked.map(c => `"${c.label}"`).join(', ')}). ` +
+                'Edit the PR description and check exactly one option.'
+              );
+              return;
+            }
+
+            const choice = checked[0].label.toLowerCase();
+            core.info(`KB Impact choice: "${checked[0].label}"`);
+
+            // Case 1: No customer-visible change — pass.
+            if (choice.startsWith('no customer-visible change')) {
+              core.info('Declared no customer-visible change. KB update not required.');
+              return;
+            }
+
+            // Case 2: Customer-visible change with KB updated in this PR.
+            if (choice.includes('kb updated in this pr')) {
+              const { data: files } = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+              const kbChanged = files.some(f => f.filename === KB_FILE);
+              if (!kbChanged) {
+                core.setFailed(
+                  `You checked "Customer-visible change — KB updated in this PR" but ${KB_FILE} ` +
+                  'is not modified in this PR. Either edit the KB file or switch the checkbox to a follow-up link.'
+                );
+                return;
+              }
+              core.info(`${KB_FILE} is modified in this PR. ✔`);
+              return;
+            }
+
+            // Case 3: Customer-visible change with KB follow-up tracked.
+            if (choice.includes('kb follow-up tracked')) {
+              // Extract the follow-up link from the same checkbox line or the line(s) below.
+              const followupLineIdx = lines.findIndex(l => /kb follow-up tracked/i.test(l));
+              const searchWindow = lines.slice(followupLineIdx, followupLineIdx + 3).join(' ');
+              const linkMatch =
+                searchWindow.match(/https?:\/\/\S+/) ||
+                searchWindow.match(/#\d+/);
+              if (!linkMatch) {
+                core.setFailed(
+                  'You checked "Customer-visible change — KB follow-up tracked" but no follow-up link ' +
+                  '(URL or #issue-number) was provided. Paste the link on the same line as the checkbox.'
+                );
+                return;
+              }
+              core.info(`KB follow-up link: ${linkMatch[0]} ✔`);
+              return;
+            }
+
+            core.setFailed(
+              `Could not match the checked KB Impact option ("${checked[0].label}") to a known choice. ` +
+              'Reset your PR description from the template.'
+            );
