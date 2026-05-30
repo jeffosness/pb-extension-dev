@@ -4,7 +4,7 @@
 
 **Product:** PhoneBurner Dial Session Companion (Chrome extension)
 **Latest released version (at time of writing):** 0.6.2 — verify against the Chrome Web Store listing for the current published version. Some features described here may be unavailable in older installed versions; the extension auto-updates by default in Chrome.
-**Chrome Web Store:** Search "PhoneBurner Dial Session Companion"
+**Chrome Web Store:** [PhoneBurner Dial Session Companion](https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj)
 
 ---
 
@@ -76,7 +76,7 @@ The extension supports two integration levels. The level determines which featur
 **Symptom:** Customer can't find or install the extension.
 
 **Resolution:**
-1. Direct them to the Chrome Web Store and search for "PhoneBurner Dial Session Companion."
+1. Direct them to the Chrome Web Store listing: [PhoneBurner Dial Session Companion](https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj).
 2. Click **Add to Chrome**.
 3. Pin the extension to the toolbar (puzzle-piece icon → pin).
 4. Open a CRM page (e.g., HubSpot, Close, Apollo) and click the PhoneBurner icon.
@@ -488,7 +488,7 @@ A: Yes — but **disconnect before uninstalling** for a complete cleanup:
 3. **Disable and re-enable** the extension (Chrome → puzzle-piece icon → Manage Extensions → toggle off, then on).
 4. **Reload the extension** (chrome://extensions → "Reload" arrow on the extension card).
 5. **Disconnect everything** (extension Settings → Disconnect PhoneBurner, Disconnect HubSpot/Close/Apollo) and reconnect fresh.
-6. **Uninstall and reinstall** (chrome://extensions → Remove → reinstall from Chrome Web Store). The customer will need to re-enter their PAT and reconnect OAuth providers, but no CRM data is lost.
+6. **Uninstall and reinstall** (chrome://extensions → Remove → [reinstall from the Chrome Web Store](https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj)). The customer will need to re-enter their PAT and reconnect OAuth providers, but no CRM data is lost.
 
 **Escalate if:** Even a fresh reinstall doesn't work. Ask for: Chrome version, OS, the CRM URL, screenshots of the extension popup, and any errors visible in Chrome DevTools console.
 
