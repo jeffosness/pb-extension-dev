@@ -17,7 +17,7 @@
 
 ## What the Extension Does (1-line summary)
 
-It lets a PhoneBurner customer start a PhoneBurner dial session directly from a CRM (HubSpot, Close, Apollo, Salesforce, Pipedrive, Zoho, monday.com, and others) without exporting CSVs, and shows a "Follow" widget on the CRM page that tracks the live call and auto-navigates to the active contact's record.
+It lets a PhoneBurner customer start a PhoneBurner dial session directly from a CRM (HubSpot, Close, Apollo, Salesforce, Pipedrive) without exporting CSVs, and shows a "Follow" widget on the CRM page that tracks the live call and auto-navigates to the active contact's record.
 
 **Requires:** An active PhoneBurner account. Sign up at https://phoneburner.biz/
 
@@ -25,7 +25,7 @@ It lets a PhoneBurner customer start a PhoneBurner dial session directly from a 
 
 ## Supported CRMs and Integration Levels
 
-The extension supports three integration levels. The level determines which features are available.
+The extension supports two integration levels. The level determines which features are available.
 
 | CRM | Level | Auth Method | Launch Methods |
 |-----|-------|-------------|----------------|
@@ -34,13 +34,12 @@ The extension supports three integration levels. The level determines which feat
 | Apollo.io | 3 (Full API) | OAuth | People Selection, Sequence Call Tasks |
 | Salesforce | 2 (Optimized) | None (scrapes page) | Selected rows only (must check at least one) |
 | Pipedrive | 2 (Optimized) | None (scrapes page) | All visible person rows on the Persons list |
-| Zoho CRM | 1 (Generic) | None (scrapes page) | Selected rows if any are checked, otherwise all visible rows |
-| monday.com | 1 (Generic) | None (scrapes page) | Selected rows if any are checked, otherwise all visible rows |
-| Other CRMs | 1 (Generic) | None (scrapes page) | Best-effort table scraping — selected rows if checked, otherwise all visible rows |
+
+**Other CRMs (e.g., Zoho, monday.com):** Not supported by this extension. PhoneBurner has separate integrations for those — point customers to https://www.phoneburner.com/integrations or their PhoneBurner admin's integrations page.
 
 **Key differences:**
 - **Level 3** integrations use OAuth and fetch data via the CRM's API. They support call logging back to the CRM (Close, Apollo). They are the most reliable.
-- **Level 1 and 2** read contact info from the page DOM. They require you to be on a list view with visible contacts. Quality depends on the CRM's page layout.
+- **Level 2** reads contact info from the page DOM. Customers must be on a list view with visible contacts. Quality depends on the CRM's page layout.
 
 ---
 
@@ -209,7 +208,7 @@ The extension supports three integration levels. The level determines which feat
 4. If "X records skipped" is shown, those records lack any usable phone. Customer can either:
    - Add phone numbers to those records in the CRM, or
    - Select different records that have phones.
-5. For Level 1/2 (Salesforce, Zoho, monday.com, etc.): verify phones are **visible on the current page**. The extension can only read what's rendered. Add a Phone column to the list view if missing.
+5. For Level 2 (Salesforce, Pipedrive): verify phones are **visible on the current page**. The extension can only read what's rendered. Add a Phone column to the list view if missing.
 
 **Escalate if:** Customer confirms records have phones but the extension can't find any. Ask them to send: (a) screenshot of the CRM page with phone column visible, (b) screenshot of the extension error, (c) which CRM and which fields contain the phone.
 
@@ -383,7 +382,7 @@ The extension supports three integration levels. The level determines which feat
 2. Choose: Direct Phone, Mobile Phone, or Corporate/HQ Phone.
 3. Default behavior tries Direct → Mobile → Corporate in that order.
 
-**For other CRMs (Close, Salesforce, Pipedrive, Zoho, monday.com):**
+**For other CRMs (Close, Salesforce, Pipedrive):**
 - The extension uses whichever phone number is detected first or marked primary in the CRM. No per-field preference is available in the current version.
 
 **Escalate if:** Customer's CRM has a phone number that the extension consistently ignores. Likely a custom field the extension doesn't read — engineering can add support if the field name is provided.
