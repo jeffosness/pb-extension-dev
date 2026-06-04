@@ -274,6 +274,61 @@ async function saveFollowWidgetPrefs() {
 }
 
 // ---------------------------
+// Goal Dispositions (Settings tab)
+// ---------------------------
+// Storage keys mirror what content.js reads in loadGoalConfig(). Defaults
+// ("Set Appointment", "Follow Up") live in content.js — empty inputs here
+// just mean "use the defaults", surfaced via placeholder text in popup.html.
+
+const GOAL_STORAGE_KEYS = {
+  primary: "pb_goal_primary",
+  secondary: "pb_goal_secondary",
+};
+
+function loadGoalDispositions() {
+  const primaryInput = $("goal-primary");
+  const secondaryInput = $("goal-secondary");
+  if (!primaryInput || !secondaryInput) return;
+
+  chrome.storage.local.get(
+    [GOAL_STORAGE_KEYS.primary, GOAL_STORAGE_KEYS.secondary],
+    (res) => {
+      if (res?.[GOAL_STORAGE_KEYS.primary]) {
+        primaryInput.value = res[GOAL_STORAGE_KEYS.primary];
+      }
+      if (res?.[GOAL_STORAGE_KEYS.secondary]) {
+        secondaryInput.value = res[GOAL_STORAGE_KEYS.secondary];
+      }
+    },
+  );
+}
+
+async function saveGoalDispositions() {
+  const primaryInput = $("goal-primary");
+  const secondaryInput = $("goal-secondary");
+  const statusEl = $("goals-status");
+  if (!primaryInput || !secondaryInput) return;
+
+  const primary = (primaryInput.value || "").trim();
+  const secondary = (secondaryInput.value || "").trim();
+
+  chrome.storage.local.set(
+    {
+      [GOAL_STORAGE_KEYS.primary]: primary,
+      [GOAL_STORAGE_KEYS.secondary]: secondary,
+    },
+    () => {
+      if (statusEl) {
+        statusEl.textContent = "Saved ✔";
+        setTimeout(() => {
+          statusEl.textContent = "";
+        }, 2500);
+      }
+    },
+  );
+}
+
+// ---------------------------
 // Permission on start (best-effort)
 // ---------------------------
 // We request permission ONLY when user clicks to start a dial session.
@@ -1720,6 +1775,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Follow Widget prefs
   loadFollowWidgetPrefs();
   $("follow-auto-collapse")?.addEventListener("change", saveFollowWidgetPrefs);
+
+  // Goal Dispositions
+  loadGoalDispositions();
+  $("save-goals")?.addEventListener("click", saveGoalDispositions);
 
   // Get PB
   $("get-pb-btn")?.addEventListener("click", () =>
