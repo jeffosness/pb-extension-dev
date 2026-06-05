@@ -36,5 +36,9 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
+          # Invoke via `bash <path>` so the script doesn't need the executable
+          # bit. Git tracks the script as mode 100644, and `core.filemode false`
+          # doesn't preserve +x across pulls, so direct execution would break
+          # whenever the script content changes. `bash <path>` works regardless.
           ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            'sudo -n /opt/pb-extension-dev/scripts/deploy-on-server.sh'
+            'sudo -n bash /opt/pb-extension-dev/scripts/deploy-on-server.sh'
