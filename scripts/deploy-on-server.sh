@@ -57,9 +57,14 @@ else
   git pull --ff-only origin "$BRANCH"
 fi
 
-echo "[deploy] HEAD after:  $(git rev-parse --short HEAD)"
+DEPLOYED_COMMIT=$(git rev-parse --short HEAD)
+echo "[deploy] HEAD after:  $DEPLOYED_COMMIT"
 
 # Determine the deployed version string for the stamp.
+# "version" tracks the EXTENSION version (from manifest.json or the tag), which
+# can be the same across many server-only deploys. "commit" uniquely identifies
+# the actual deployed code, so consecutive server-only deploys are always
+# distinguishable in version.php and health.php.
 if [[ "$BRANCH" == prod-* ]]; then
   # Strip "prod-v" or "prod-" prefix from the tag
   # e.g., "prod-v0.6.3" → "0.6.3"; "prod-hotfix" → "hotfix"
@@ -70,7 +75,7 @@ else
   DEPLOYED_VERSION=$(grep -oP '"version"\s*:\s*"\K[^"]+' "$REPO_DIR/chrome-extension/manifest.json" 2>/dev/null || echo "unknown")
 fi
 
-# Stamp version.php with the deployed version, env, and build timestamp.
+# Stamp version.php with the deployed version, commit, env, and build timestamp.
 # This file is tracked in git but always overwritten here; the `git checkout`
 # above ensures the previous deploy's stamp doesn't conflict with pull/checkout.
 cat > "$REPO_DIR/server/public/version.php" <<PHP_EOF
@@ -80,10 +85,11 @@ cat > "$REPO_DIR/server/public/version.php" <<PHP_EOF
 
 return [
   'version'  => '$DEPLOYED_VERSION',
+  'commit'   => '$DEPLOYED_COMMIT',
   'env'      => '$ENV',
   'built_at' => '$(date -u +%FT%TZ)',
 ];
 PHP_EOF
 
-echo "[deploy] stamped version.php: version=$DEPLOYED_VERSION env=$ENV"
+echo "[deploy] stamped version.php: version=$DEPLOYED_VERSION commit=$DEPLOYED_COMMIT env=$ENV"
 echo "[deploy] done"
