@@ -63,5 +63,7 @@ jobs:
         run: |
           # The script lives in dev's checkout (always up-to-date due to auto-deploy)
           # and is invoked with overrides to target the prod directory + tag mode.
+          # Invoke via `bash <path>` so the script doesn't need the executable
+          # bit — git tracks it as mode 100644 and pulls don't preserve +x.
           ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo -n REPO_DIR=/opt/pb-extension BRANCH=$TAG ENV=prod /opt/pb-extension-dev/scripts/deploy-on-server.sh"
+            "sudo -n REPO_DIR=/opt/pb-extension BRANCH=$TAG ENV=prod bash /opt/pb-extension-dev/scripts/deploy-on-server.sh"
