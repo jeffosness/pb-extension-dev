@@ -1,9 +1,28 @@
-name: Deploy to production VPS
+name: Deploy to PROD VPS (on prod-* tag)
+
+# Deploys when a tag matching "prod-*" is pushed (e.g., "prod-v0.6.3" or
+# "prod-v0.6.5-rollback") → /opt/pb-extension/ on the VPS, which serves
+# extension.phoneburner.biz.
+#
+# Also supports manual trigger via workflow_dispatch with a tag input.
+#
+# Promotion process:
+#   git tag prod-v0.6.5 main
+#   git push origin prod-v0.6.5
+#
+# Rollback:
+#   git tag prod-v0.6.4-rollback <previous-good-commit>
+#   git push origin prod-v0.6.4-rollback
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch: {}
+    tags:
+      - 'prod-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to deploy (e.g., prod-v0.6.5). Must exist on the repo.'
+        required: true
 
 concurrency:
   group: deploy-prod
@@ -14,6 +33,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Determine tag to deploy
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Resolved tag: $TAG"
+
       - name: Install SSH key and known_hosts
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -25,10 +55,13 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Run deploy script on server
+      - name: Run deploy script on server (prod env)
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # The script lives in dev's checkout (always up-to-date due to auto-deploy)
+          # and is invoked with overrides to target the prod directory + tag mode.
           ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            'sudo -n /opt/pb-extension-dev/scripts/deploy-on-server.sh'
+            "sudo -n REPO_DIR=/opt/pb-extension BRANCH=$TAG ENV=prod /opt/pb-extension-dev/scripts/deploy-on-server.sh"
