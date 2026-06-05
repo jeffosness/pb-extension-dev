@@ -2,7 +2,37 @@
 
 importScripts("crm_config.js");
 
-const BASE_URL = "https://extension-dev.phoneburner.biz";
+// -----------------------------------------------------------------------------
+// Backend env — runtime toggle support.
+// Each extension version pins a DEFAULT_ENV. A user-set value in
+// chrome.storage.local.pb_env_override overrides the default for that profile.
+// In v0.6.3 the default is "dev" because all live customers are still on the
+// extension-dev backend; this will flip to "prod" in a future version once the
+// prod backend is stood up and validated.
+//
+// BASE_URL stays as a mutable module-level variable so existing call sites work
+// unchanged. The value is eager-loaded from storage on service worker wake-up
+// and live-updated by a storage.onChanged listener if the user toggles.
+// -----------------------------------------------------------------------------
+const BASE_URLS = {
+  dev: "https://extension-dev.phoneburner.biz",
+  prod: "https://extension.phoneburner.biz",
+};
+const DEFAULT_ENV = "dev";
+let BASE_URL = BASE_URLS[DEFAULT_ENV];
+
+chrome.storage.local.get(["pb_env_override"]).then((res) => {
+  const env = res?.pb_env_override;
+  if (env === "prod" || env === "dev") {
+    BASE_URL = BASE_URLS[env];
+  }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.pb_env_override) return;
+  const env = changes.pb_env_override.newValue;
+  BASE_URL = BASE_URLS[env] || BASE_URLS[DEFAULT_ENV];
+});
 
 // Content script files (crm_config.js must be first — defines CRM_REGISTRY)
 const CONTENT_SCRIPT_FILES = ["crm_config.js", "content.js"];
