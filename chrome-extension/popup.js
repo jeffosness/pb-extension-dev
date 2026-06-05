@@ -1,5 +1,29 @@
 // popup.js — DROP-IN (Permission-on-start, no Follow Me toggle UI)
-const BASE_URL = "https://extension-dev.phoneburner.biz";
+
+// -----------------------------------------------------------------------------
+// Backend env — runtime toggle support.
+// See background.js for the full explanation. Default for v0.6.3 is "dev"; users
+// can opt into "prod" via Settings → Developer Options once that backend exists.
+// -----------------------------------------------------------------------------
+const BASE_URLS = {
+  dev: "https://extension-dev.phoneburner.biz",
+  prod: "https://extension.phoneburner.biz",
+};
+const DEFAULT_ENV = "dev";
+let BASE_URL = BASE_URLS[DEFAULT_ENV];
+
+chrome.storage.local.get(["pb_env_override"]).then((res) => {
+  const env = res?.pb_env_override;
+  if (env === "prod" || env === "dev") {
+    BASE_URL = BASE_URLS[env];
+  }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.pb_env_override) return;
+  const env = changes.pb_env_override.newValue;
+  BASE_URL = BASE_URLS[env] || BASE_URLS[DEFAULT_ENV];
+});
 
 function $(id) {
   return document.getElementById(id);
@@ -326,6 +350,98 @@ async function saveGoalDispositions() {
       }
     },
   );
+}
+
+// ---------------------------
+// Developer Options (Settings tab) — backend env toggle
+// ---------------------------
+// Hidden behind a "Show developer options" reveal so normal users don't see it.
+// The env-badge in the header shows DEV or PROD whenever the user has deviated
+// from this version's default env (in v0.6.3 default is "dev", so the badge
+// appears only when someone has manually toggled to "prod"). This is the
+// internal-team-visible signal that the user is on an unusual backend, useful
+// for support screenshots.
+
+function getEnvOverride() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["pb_env_override"], (res) => {
+      const env = res?.pb_env_override;
+      resolve(env === "prod" || env === "dev" ? env : DEFAULT_ENV);
+    });
+  });
+}
+
+function refreshEnvBadge(currentEnv) {
+  const badge = $("env-badge");
+  if (!badge) return;
+  if (currentEnv === DEFAULT_ENV) {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+  } else {
+    badge.classList.remove("hidden");
+    badge.textContent = currentEnv.toUpperCase();
+    // Subtle visual emphasis when off-default. Inline styling so we don't
+    // depend on adding a new CSS class for this Phase 1 work.
+    badge.style.background = "rgba(255, 91, 110, 0.15)";
+    badge.style.borderColor = "rgba(255, 91, 110, 0.4)";
+    badge.style.color = "#ff8d9a";
+  }
+}
+
+async function initDevOptions() {
+  const showCheckbox = $("show-dev-options");
+  const devCard = $("dev-options-card");
+  const radioDev = $("env-dev");
+  const radioProd = $("env-prod");
+  const defaultLabelDev = $("env-dev-default");
+  const defaultLabelProd = $("env-prod-default");
+  const statusEl = $("env-status");
+
+  // Mark which env is the default for this extension version.
+  if (DEFAULT_ENV === "dev" && defaultLabelDev) defaultLabelDev.classList.remove("hidden");
+  if (DEFAULT_ENV === "prod" && defaultLabelProd) defaultLabelProd.classList.remove("hidden");
+
+  // Read current env + reveal-state from storage.
+  chrome.storage.local.get(["pb_env_override", "pb_show_dev_options"], (res) => {
+    const currentEnv = res?.pb_env_override === "prod" || res?.pb_env_override === "dev"
+      ? res.pb_env_override
+      : DEFAULT_ENV;
+
+    if (currentEnv === "prod" && radioProd) radioProd.checked = true;
+    else if (radioDev) radioDev.checked = true;
+
+    refreshEnvBadge(currentEnv);
+
+    // Auto-reveal the dev card if the user has previously enabled it OR if they
+    // are currently on a non-default env (so they can switch back).
+    const shouldShow = !!res?.pb_show_dev_options || currentEnv !== DEFAULT_ENV;
+    if (showCheckbox) showCheckbox.checked = shouldShow;
+    if (devCard) devCard.classList.toggle("hidden", !shouldShow);
+  });
+
+  if (showCheckbox) {
+    showCheckbox.addEventListener("change", () => {
+      const show = !!showCheckbox.checked;
+      if (devCard) devCard.classList.toggle("hidden", !show);
+      chrome.storage.local.set({ pb_show_dev_options: show });
+    });
+  }
+
+  const onEnvChange = (env) => {
+    chrome.storage.local.set({ pb_env_override: env }, () => {
+      refreshEnvBadge(env);
+      if (statusEl) {
+        const label = env === DEFAULT_ENV ? "default" : env.toUpperCase();
+        statusEl.textContent = `Switched to ${label}. New API requests will use ${BASE_URLS[env]}.`;
+        setTimeout(() => {
+          if (statusEl) statusEl.textContent = "";
+        }, 4000);
+      }
+    });
+  };
+
+  if (radioDev) radioDev.addEventListener("change", () => { if (radioDev.checked) onEnvChange("dev"); });
+  if (radioProd) radioProd.addEventListener("change", () => { if (radioProd.checked) onEnvChange("prod"); });
 }
 
 // ---------------------------
@@ -1779,6 +1895,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Goal Dispositions
   loadGoalDispositions();
   $("save-goals")?.addEventListener("click", saveGoalDispositions);
+
+  // Developer Options (backend env toggle)
+  initDevOptions();
 
   // Get PB
   $("get-pb-btn")?.addEventListener("click", () =>

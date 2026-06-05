@@ -348,6 +348,7 @@
 
       <div class="subtle">
         <strong>PhoneBurner:</strong> <span id="pb-status">Checking...</span>
+        <span id="env-badge" class="pill hidden" title="You are using a non-default backend environment."></span>
         <span id="ext-version" class="version-tag"></span>
       </div>
     </div>
@@ -624,6 +625,35 @@
             Default: On. The widget will briefly expand, then collapse to a
             small view.
           </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Advanced</div>
+          <label class="label-inline" for="show-dev-options">
+            <input type="checkbox" id="show-dev-options" />
+            Show developer options
+          </label>
+        </div>
+
+        <div id="dev-options-card" class="card hidden">
+          <div class="card-title">Developer Options</div>
+          <div class="help-text">
+            Switch between the dev and production backend environments. For
+            internal testing only — most users should leave this on the default.
+          </div>
+
+          <label class="label-inline" for="env-dev">
+            <input type="radio" name="pb-env" id="env-dev" value="dev" />
+            <span>Dev <span class="muted" style="color: rgba(255,255,255,0.55);">— extension-dev.phoneburner.biz</span></span>
+            <span id="env-dev-default" class="muted hidden" style="font-size:11px;color:rgba(255,255,255,0.55);margin-left:4px;">(default)</span>
+          </label>
+          <label class="label-inline" for="env-prod">
+            <input type="radio" name="pb-env" id="env-prod" value="prod" />
+            <span>Prod <span class="muted" style="color: rgba(255,255,255,0.55);">— extension.phoneburner.biz</span></span>
+            <span id="env-prod-default" class="muted hidden" style="font-size:11px;color:rgba(255,255,255,0.55);margin-left:4px;">(default)</span>
+          </label>
+
+          <div id="env-status" class="status mt-4"></div>
         </div>
       </div>
     </div>

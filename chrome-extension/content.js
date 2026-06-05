@@ -2,7 +2,31 @@
 //  content.js – Unified CRM extension (L1/L2 generic + L3 HubSpot standalone parity)
 // ============================================================================
 
-const BASE_URL = "https://extension-dev.phoneburner.biz";
+// -----------------------------------------------------------------------------
+// Backend env — runtime toggle support.
+// See background.js for the full explanation. Content scripts re-run on every
+// page load, so we eager-load the env preference from storage and keep BASE_URL
+// in sync via storage.onChanged.
+// -----------------------------------------------------------------------------
+const BASE_URLS = {
+  dev: "https://extension-dev.phoneburner.biz",
+  prod: "https://extension.phoneburner.biz",
+};
+const DEFAULT_ENV = "dev";
+let BASE_URL = BASE_URLS[DEFAULT_ENV];
+
+chrome.storage.local.get(["pb_env_override"]).then((res) => {
+  const env = res?.pb_env_override;
+  if (env === "prod" || env === "dev") {
+    BASE_URL = BASE_URLS[env];
+  }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.pb_env_override) return;
+  const env = changes.pb_env_override.newValue;
+  BASE_URL = BASE_URLS[env] || BASE_URLS[DEFAULT_ENV];
+});
 
 // CRM_REGISTRY is defined in crm_config.js (injected before this script)
 
