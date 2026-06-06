@@ -31,15 +31,28 @@
  * @param string $status   PB disposition status text (e.g., "No Answer", "Appointment")
  */
 function hubspot_log_call(array $state, array $payload, array $lastCall, string $status): void {
+    // Granular logging at each early-return so we can debug missing auto-completes
+    // by grepping app.log for 'hs_call_log:'.
+    log_msg('hs_call_log: invoked launch_source=' . ($state['launch_source'] ?? '(none)'));
+
     // Gate: only fire for Task Queue dial sessions. Selection/list flows have
     // no hs_task_ids in contacts_map and never set launch_source.
-    if (($state['launch_source'] ?? '') !== 'queue-tasks') return;
+    if (($state['launch_source'] ?? '') !== 'queue-tasks') {
+        log_msg('hs_call_log: skipping — launch_source is not queue-tasks');
+        return;
+    }
 
     $clientId = $state['client_id'] ?? '';
-    if ($clientId === '') return;
+    if ($clientId === '') {
+        log_msg('hs_call_log: skipping — no client_id in state');
+        return;
+    }
 
     $hsTokens = load_hs_tokens($clientId);
-    if (!is_array($hsTokens)) return;
+    if (!is_array($hsTokens)) {
+        log_msg('hs_call_log: skipping — no HubSpot tokens for client');
+        return;
+    }
 
     // -------------------------------------------------------------------------
     // Refresh token if expired (dial sessions can last > 30 min).
@@ -57,7 +70,10 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
     }
 
     $accessToken = (string)($hsTokens['access_token'] ?? '');
-    if ($accessToken === '') return;
+    if ($accessToken === '') {
+        log_msg('hs_call_log: skipping — empty access_token after load/refresh');
+        return;
+    }
 
     // -------------------------------------------------------------------------
     // Find the CALLED contact from the payload (not $state['current']).
@@ -71,10 +87,20 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
     $contactsMap = $state['contacts_map'] ?? [];
     $mapEntry = ($calledExternalId !== '' && isset($contactsMap[$calledExternalId]))
         ? $contactsMap[$calledExternalId] : null;
-    if (!$mapEntry) return;
+    if (!$mapEntry) {
+        $contactsMapKeys = is_array($contactsMap) ? array_slice(array_keys($contactsMap), 0, 5) : [];
+        log_msg('hs_call_log: skipping — called external_id "' . $calledExternalId
+            . '" not in contacts_map (first 5 keys: ' . implode(',', $contactsMapKeys) . ')');
+        return;
+    }
 
     $taskIds = $mapEntry['hs_task_ids'] ?? [];
-    if (!is_array($taskIds) || empty($taskIds)) return;
+    if (!is_array($taskIds) || empty($taskIds)) {
+        log_msg('hs_call_log: skipping — no hs_task_ids on map entry for contact ' . $calledExternalId);
+        return;
+    }
+
+    log_msg('hs_call_log: completing ' . count($taskIds) . ' task(s) for contact ' . $calledExternalId);
 
     // -------------------------------------------------------------------------
     // PATCH each associated task to COMPLETED.

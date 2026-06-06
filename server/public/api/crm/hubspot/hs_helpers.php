@@ -183,7 +183,10 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
     );
     $diag['tasks_fetch']['last_http'] = $code;
 
-    if ($code !== 200 || !is_array($json)) {
+    // HubSpot batch endpoints return 200 for full success and 207
+    // (Multi-Status) for partial success. Both responses include a 'results'
+    // array we should parse — only 4xx/5xx are total failures.
+    if (($code !== 200 && $code !== 207) || !is_array($json)) {
       $diag['tasks_fetch']['fail'] += count($batch);
       continue;
     }
@@ -229,7 +232,14 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
     );
     $diag['associations_fetch']['last_http'] = $code;
 
-    if ($code !== 200 || !is_array($json)) {
+    // HubSpot's v4 associations batch endpoint returns 207 (Multi-Status) when
+    // ANY of the input task IDs has no associations attached — that's most
+    // batches in practice, since not every task has an associated contact.
+    // The response body still includes a `results` array with the tasks that
+    // DO have associations, plus a `numErrors` / `errors` block for the
+    // ones that don't (or that the API couldn't resolve). We parse `results`
+    // regardless; the "errors" are informational and expected.
+    if (($code !== 200 && $code !== 207) || !is_array($json)) {
       $diag['associations_fetch']['fail'] += count($batch);
       continue;
     }
