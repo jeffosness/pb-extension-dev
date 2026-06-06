@@ -22,11 +22,25 @@ $hsTokens = load_hs_tokens($client_id);
 // Used by the extension's Task Queue UI to decide between "launch" and
 // "reconnect to enable" prompts. Customers on legacy demo-org tokens won't
 // have this scope until they reconnect via the new PB-portal app.
+//
+// HubSpot's token response stores granted scopes as an ARRAY under the
+// 'scopes' (plural) key. We also defensively check 'scope' (singular,
+// space-separated string) in case any old token files use that shape.
 $hasTaskScope = false;
 if (is_array($hsTokens)) {
-    $scopeStr = (string)($hsTokens['scope'] ?? '');
-    // Scopes come back from HubSpot as a space-separated string
-    $hasTaskScope = $scopeStr !== '' && in_array('crm.objects.contacts.write', preg_split('/\s+/', $scopeStr), true);
+    $scopesArr = $hsTokens['scopes'] ?? null;
+    if (is_array($scopesArr)) {
+        $hasTaskScope = in_array('crm.objects.contacts.write', $scopesArr, true);
+    } else {
+        $scopeStr = (string)($hsTokens['scope'] ?? '');
+        if ($scopeStr !== '') {
+            $hasTaskScope = in_array(
+                'crm.objects.contacts.write',
+                preg_split('/\s+/', $scopeStr),
+                true
+            );
+        }
+    }
 }
 
 api_log('hubspot_state.ok', [
