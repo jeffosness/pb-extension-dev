@@ -1509,11 +1509,17 @@ Parameters available:
 
 1. **Self-contained curl** — use direct curl, not `{provider}_helpers.php`. The webhook doesn't include `bootstrap.php`, so `api_error()` is unavailable. Exception: `cfg()`, `log_msg()`, `load_{provider}_tokens()`, `save_{provider}_tokens()` ARE available via `utils.php`.
 
-2. **Identify the called contact via the same external_crm_data lookup `webhooks/contact_displayed.php` uses** — iterate `payload.external_crm[]` (with fallbacks to `payload.contact.external_crm[]`, `payload.external_crm_data[]`, etc.) collecting `crm_id` candidates, then find the first one that's a key in `state.contacts_map`. **Do NOT just use `payload.contact.external_id`** — that's PB's own internal identifier (often a Salesforce-style ID like `00Q8c000010sMczEAE` from PB's existing Salesforce sync) and doesn't necessarily round-trip with what your CRM sent in `external_crm_data`. **Do NOT use `$state['current']` either** — the `contact_displayed` webhook for the NEXT contact fires BEFORE `call_done`, so `current` points to the wrong person at this moment.
+2. **Identify the called contact via this three-tier lookup** (PB's `call_done` payload does NOT include `external_crm_data`, unlike `contact_displayed` — so the iteration pattern alone is not enough):
 
-   Exception: if your provider explicitly sets `external_id` on each PB contact at session creation (Apollo does), PB's `payload.contact.external_id` round-trips correctly and the simpler lookup works. But the robust `external_crm_data` iteration always works, so prefer it unconditionally.
+   1. **Iterate any `external_crm` / `external_crm_data` in the payload** (forward-compat — if PB ever starts including it in `call_done`).
+   2. **Try `payload.contact.external_id`** as a candidate. Works ONLY if your provider's session-creation code explicitly set `external_id` on each PB contact (e.g., Apollo, Close). Don't add this for HubSpot — see warning below.
+   3. **Canonical fallback: fetch the PB contact by `user_id`.** Call `pb_api_call($pat, 'GET', '/contacts/' . $payload['contact']['user_id'])`. The response carries `external_crm_data` on the contact record — **nested under `response.contacts.contacts[0]`, not at the top level**. Walk that, find the `crm_id` that's a key in `state.contacts_map`.
 
-   See [hs_call_logger.php](server/public/api/crm/hubspot/hs_call_logger.php) for the reference implementation.
+   **Do NOT use `$state['current']`** — the `contact_displayed` webhook for the NEXT contact fires BEFORE `call_done`, so `current` points to the wrong person.
+
+   **For HubSpot specifically: do NOT add `external_id` to PB contacts at session creation as a shortcut.** Many customers run the HubSpot Data Sync app + PB's native HubSpot activity logger + our extension in parallel; setting `external_id` ourselves disturbs PB dedup/merge and risks duplicates and conflicts with those integrations. The user_id fallback recovers the same identity from PB's contact record without touching the contact-creation path.
+
+   See [hs_call_logger.php](server/public/api/crm/hubspot/hs_call_logger.php) for the reference implementation (PR #105). The PB-lookup fallback in [close_call_logger.php](server/public/api/crm/close/close_call_logger.php) was the original pattern but accesses `external_crm_data` at the top level — that's a latent bug; port the nested-shape walk back if Close ever falls through to it.
 
 3. **Handle token refresh inline** for long dial sessions (>1 hour).
 
