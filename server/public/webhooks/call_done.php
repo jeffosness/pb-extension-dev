@@ -185,11 +185,15 @@ if ($crmName === 'close') {
         log_msg('close_call_log_error: ' . $e->getMessage());
     }
 }
-// Future L3 providers:
-// if ($crmName === 'hubspot') {
-//     require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
-//     hs_log_call($state, $payload, $lastCall, $status);
-// }
+
+if ($crmName === 'hubspot') {
+    try {
+        require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
+        hubspot_log_call($state, $payload, $lastCall, $status);
+    } catch (\Throwable $e) {
+        log_msg('hubspot_call_log_error: ' . $e->getMessage());
+    }
+}
 
 if ($crmName === 'apollo') {
     try {
