@@ -128,6 +128,82 @@ function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, str
   return $contacts;
 }
 
+/**
+ * Fetch HubSpot task objects with contact associations.
+ * Uses the v3 batch read endpoint (POST /crm/v3/objects/tasks/batch/read).
+ * Each result includes `associations.contacts.results[]` listing associated contact IDs.
+ *
+ * Batches input in groups of 100 (HubSpot's batch endpoint limit).
+ * Returns an array of task objects.
+ */
+function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) {
+  $tasks = [];
+  $diag['tasks_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
+
+  if (empty($taskIds)) return $tasks;
+
+  // Task properties we surface — useful for diagnostics and (later) for the
+  // call_done handler to construct a meaningful task-completion note if needed.
+  $properties = [
+    'hs_task_subject',
+    'hs_task_status',
+    'hs_task_type',
+    'hs_timestamp',
+    'hubspot_owner_id',
+    'hs_queue_membership_ids',
+  ];
+
+  $batches = array_chunk(array_values($taskIds), 100);
+  foreach ($batches as $batch) {
+    $inputs = array_map(function ($id) { return ['id' => (string)$id]; }, $batch);
+    $body = [
+      'inputs'       => $inputs,
+      'properties'   => $properties,
+      'associations' => ['contacts'],
+    ];
+
+    list($code, $json, $_raw) = hs_api_post_json(
+      $accessToken,
+      'https://api.hubapi.com/crm/v3/objects/tasks/batch/read',
+      $body
+    );
+    $diag['tasks_fetch']['last_http'] = $code;
+
+    if ($code !== 200 || !is_array($json)) {
+      $diag['tasks_fetch']['fail'] += count($batch);
+      continue;
+    }
+
+    $results = $json['results'] ?? [];
+    if (is_array($results)) {
+      foreach ($results as $task) {
+        if (is_array($task)) {
+          $tasks[] = $task;
+          $diag['tasks_fetch']['ok']++;
+        }
+      }
+    }
+  }
+
+  return $tasks;
+}
+
+/**
+ * Fetch tasks with auto-refresh on 401 (same pattern as the contacts equivalent).
+ */
+function hs_fetch_tasks_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $taskIds, array &$diag = []) {
+  $tasks = hs_fetch_tasks_by_ids($hsAccess, $taskIds, $diag);
+
+  $lastHttp = $diag['tasks_fetch']['last_http'] ?? null;
+  if (empty($tasks) && $lastHttp === 401) {
+    $hs = hs_refresh_access_token_or_fail($client_id, $hs);
+    $hsAccess = (string)($hs['access_token'] ?? '');
+    $tasks = hs_fetch_tasks_by_ids($hsAccess, $taskIds, $diag);
+  }
+
+  return $tasks;
+}
+
 function hs_token_is_expired(array $hsTokens): bool {
   $exp = isset($hsTokens['expires_at']) ? (int)$hsTokens['expires_at'] : 0;
   return $exp > 0 && time() >= $exp;
