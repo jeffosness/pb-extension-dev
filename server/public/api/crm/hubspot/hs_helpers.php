@@ -12,10 +12,25 @@
 // HubSpot API helpers (v3)
 // -----------------------------------------------------------------------------
 
+/**
+ * Refresh a HubSpot OAuth token, with optional fallback to legacy credentials.
+ *
+ * Tries the primary HS_CLIENT_ID/HS_CLIENT_SECRET first. If HubSpot returns a
+ * 4xx (typically because the refresh token was issued by a different OAuth
+ * app), and HS_LEGACY_CLIENT_ID/HS_LEGACY_CLIENT_SECRET are configured, retries
+ * with the legacy credentials.
+ *
+ * This supports the OAuth app migration where existing customer tokens were
+ * issued by the previous (demo-org) app, but new connections go through the
+ * new (PB-portal) app. The legacy fallback keeps existing customers refreshing
+ * cleanly until they reconnect.
+ */
 function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): array {
   $cfg = cfg();
   $hsClientId     = $cfg['HS_CLIENT_ID'] ?? null;
   $hsClientSecret = $cfg['HS_CLIENT_SECRET'] ?? null;
+  $hsLegacyId     = $cfg['HS_LEGACY_CLIENT_ID'] ?? null;
+  $hsLegacySecret = $cfg['HS_LEGACY_CLIENT_SECRET'] ?? null;
 
   if (!$hsClientId || !$hsClientSecret) {
     api_error('Server missing HS_CLIENT_ID/HS_CLIENT_SECRET for token refresh', 'server_error', 500);
@@ -26,23 +41,33 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
     api_error('HubSpot token expired and no refresh_token is available. Please reconnect HubSpot.', 'unauthorized', 401);
   }
 
-  $t0 = microtime(true);
-  list($status, $resp) = http_post_form(
-    'https://api.hubapi.com/oauth/v1/token',
-    [
-      'grant_type'    => 'refresh_token',
-      'client_id'     => $hsClientId,
-      'client_secret' => $hsClientSecret,
-      'refresh_token' => $refresh,
-    ]
-  );
-  $hs_ms = (int) round((microtime(true) - $t0) * 1000);
+  $clientIdHash = substr(hash('sha256', (string)$client_id), 0, 12);
+
+  // Attempt 1: primary credentials
+  list($status, $resp, $hs_ms) = hs_attempt_token_refresh($refresh, $hsClientId, $hsClientSecret);
+
+  // Attempt 2: legacy credentials (only if primary returned a 4xx AND legacy creds exist).
+  // We don't fall back on 5xx because that's a HubSpot-side issue, not a credential mismatch.
+  $usedLegacy = false;
+  if (($status >= 400 && $status < 500) && $hsLegacyId && $hsLegacySecret) {
+    list($status, $resp, $legacy_ms) = hs_attempt_token_refresh($refresh, $hsLegacyId, $hsLegacySecret);
+    $hs_ms += $legacy_ms;
+    $usedLegacy = true;
+    if ($status >= 200 && $status < 300 && is_array($resp)) {
+      api_log('hubspot_refresh.legacy_creds.ok', [
+        'client_id_hash' => $clientIdHash,
+        'status'         => (int)$status,
+        'hs_ms'          => $hs_ms,
+      ]);
+    }
+  }
 
   if ($status < 200 || $status >= 300 || !is_array($resp)) {
     api_log('hubspot_refresh.error', [
-      'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-      'status' => (int)$status,
-      'hs_ms' => $hs_ms,
+      'client_id_hash' => $clientIdHash,
+      'status'         => (int)$status,
+      'hs_ms'          => $hs_ms,
+      'tried_legacy'   => $usedLegacy,
     ]);
     api_error('HubSpot token refresh failed. Please reconnect HubSpot.', 'unauthorized', 401);
   }
@@ -60,12 +85,33 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
   save_hs_tokens($client_id, $resp);
 
   api_log('hubspot_refresh.ok', [
-    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    'hub_id' => $resp['hub_id'] ?? null,
-    'hs_ms' => $hs_ms,
+    'client_id_hash' => $clientIdHash,
+    'hub_id'         => $resp['hub_id'] ?? null,
+    'hs_ms'          => $hs_ms,
+    'used_legacy'    => $usedLegacy,
   ]);
 
   return $resp;
+}
+
+/**
+ * Internal: POST to HubSpot's token endpoint with a specific client_id/secret pair.
+ * Returns [http_status, decoded_response_array_or_null, elapsed_ms].
+ * Separate from the main refresh function so we can call it twice (primary + legacy).
+ */
+function hs_attempt_token_refresh(string $refreshToken, string $clientId, string $clientSecret): array {
+  $t0 = microtime(true);
+  list($status, $resp) = http_post_form(
+    'https://api.hubapi.com/oauth/v1/token',
+    [
+      'grant_type'    => 'refresh_token',
+      'client_id'     => $clientId,
+      'client_secret' => $clientSecret,
+      'refresh_token' => $refreshToken,
+    ]
+  );
+  $hs_ms = (int) round((microtime(true) - $t0) * 1000);
+  return [(int)$status, is_array($resp) ? $resp : null, $hs_ms];
 }
 
 function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array $phoneProperties = [], array &$diag = [], ?string $preferredPrimary = null) {
