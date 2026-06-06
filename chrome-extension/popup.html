@@ -501,6 +501,44 @@
             Launch Dial Session from List
           </button>
         </div>
+
+        <!-- HubSpot Task Queue (only on HubSpot tasks pages) -->
+        <div id="hubspot-tasks-card" class="card hidden">
+          <div class="card-title">
+            HubSpot Task Queue <span class="pill">Level 3</span>
+          </div>
+          <div class="help-text mt-4">
+            Launch a dial session for all contacts associated with the tasks
+            visible on this page. As each call lands, the matching task is
+            marked complete in HubSpot. Filter or sort your tasks in HubSpot
+            first, then come back here.
+          </div>
+
+          <!-- Default state: launch button -->
+          <div id="hs-tasks-launch-section" class="mt-8 hidden">
+            <button id="hs-tasks-launch" class="primary">
+              Dial Tasks on This Page
+            </button>
+            <div class="help-text mt-6">
+              Tip: check the boxes on specific task rows in HubSpot to dial
+              only those. Otherwise all tasks visible on the page are dialed.
+            </div>
+          </div>
+
+          <!-- Reconnect-required state (customer's HubSpot tokens don't have contacts.write) -->
+          <div id="hs-tasks-reconnect-section" class="mt-8 hidden">
+            <div class="help-text" style="color: rgba(255, 200, 100, 0.95);">
+              Your HubSpot connection needs to be refreshed to enable Task
+              Queue dialing. Click below to reconnect — takes ~10 seconds and
+              your other HubSpot features keep working.
+            </div>
+            <button id="hs-tasks-reconnect" class="primary mt-8">
+              Reconnect HubSpot
+            </button>
+          </div>
+
+          <div id="hs-tasks-status" class="status mt-4"></div>
+        </div>
       </div>
     </div>
 
