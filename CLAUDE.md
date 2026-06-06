@@ -1509,7 +1509,11 @@ Parameters available:
 
 1. **Self-contained curl** — use direct curl, not `{provider}_helpers.php`. The webhook doesn't include `bootstrap.php`, so `api_error()` is unavailable. Exception: `cfg()`, `log_msg()`, `load_{provider}_tokens()`, `save_{provider}_tokens()` ARE available via `utils.php`.
 
-2. **Use `payload.contact.external_id`** to identify the called contact, NOT `$state['current']`. The `contact_displayed` webhook for the NEXT contact fires BEFORE `call_done`, so `current` points to the wrong person.
+2. **Identify the called contact via the same external_crm_data lookup `webhooks/contact_displayed.php` uses** — iterate `payload.external_crm[]` (with fallbacks to `payload.contact.external_crm[]`, `payload.external_crm_data[]`, etc.) collecting `crm_id` candidates, then find the first one that's a key in `state.contacts_map`. **Do NOT just use `payload.contact.external_id`** — that's PB's own internal identifier (often a Salesforce-style ID like `00Q8c000010sMczEAE` from PB's existing Salesforce sync) and doesn't necessarily round-trip with what your CRM sent in `external_crm_data`. **Do NOT use `$state['current']` either** — the `contact_displayed` webhook for the NEXT contact fires BEFORE `call_done`, so `current` points to the wrong person at this moment.
+
+   Exception: if your provider explicitly sets `external_id` on each PB contact at session creation (Apollo does), PB's `payload.contact.external_id` round-trips correctly and the simpler lookup works. But the robust `external_crm_data` iteration always works, so prefer it unconditionally.
+
+   See [hs_call_logger.php](server/public/api/crm/hubspot/hs_call_logger.php) for the reference implementation.
 
 3. **Handle token refresh inline** for long dial sessions (>1 hour).
 
@@ -1542,6 +1546,8 @@ Parameters available:
 | **Close HTML is strict** | No `<br>`, no multiple root elements without `<body>`. Always use `<body><p>...</p></body>`. Test HTML in the API before assuming standard HTML works. |
 | **Close ignores disposition on external calls** | API-created calls (`call_method: "external"`) always show `disposition: answered` regardless of what you send. PUT updates are also ignored. PB call status is preserved in `note_html` as the workaround. |
 | **`track_crm_usage.php` in every launch handler** | Every L3 launch handler in `background.js` must call `core/track_crm_usage.php` (fire-and-forget, `try/catch`) before the dial session API call. Without this, the CRM won't appear in the usage dashboard. Close and Apollo missed this initially. |
+| **PB's `external_id` is NOT your CRM's ID** | The `payload.contact.external_id` field in PB's `call_done` and `contact_displayed` webhooks is PhoneBurner's OWN internal contact identifier — typically a Salesforce-style ID (e.g., `00Q8c000010sMczEAE`) inherited from PB's long-standing Salesforce sync. PB does NOT round-trip the `crm_id` value you stored in `external_crm_data` via that field. Always use the `external_crm_data` iteration pattern in `contact_displayed.php` (`extract_contact_lookup_key()`) to find the right `contacts_map` entry. HubSpot Task Queue auto-complete bit on this — copied Apollo's simpler `payload.contact.external_id` pattern, which only works because Apollo explicitly sets `external_id` on each PB contact at session creation. |
+| **Apollo call logging untested in production** | Apollo's call logger was built but never validated end-to-end because Apollo's OAuth had auth issues that blocked sessions from reaching call_done. Customers ended up needing to generate Apollo API tokens manually. Apollo's logger uses `payload.contact.external_id` (the brittle path) — if/when Apollo auth is fully resolved, the call logger may exhibit the same lookup bug HubSpot just hit. Defensive: port the `external_crm_data` lookup pattern into Apollo's logger too. |
 
 ---
 
