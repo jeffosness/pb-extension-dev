@@ -384,15 +384,37 @@ api_log('hubspot_tasks_dial.ok', [
   'pb_ms'                 => $pb_ms,
 ]);
 
-api_ok([
+// Build the launch_url with the temp_code appended as a query param.
+// The PhoneBurner dialer page passes URL params through to the content
+// script, which reads `code` to establish the SSE connection (the code is
+// single-use and exchanged for the session_token server-side). Mirrors the
+// pattern used by pb_dialsession_from_list.php and pb_dialsession_selection.php.
+$launch_url_with_code = $launch_url
+  . (strpos($launch_url, '?') !== false ? '&' : '?')
+  . 'code=' . urlencode($temp_code);
+
+$response = [
   'session_token'         => $session_token,
   'temp_code'             => $temp_code,
-  'launch_url'            => $launch_url,
+  'dialsession_url'       => $launch_url,           // raw PB URL (no code)
+  'launch_url'            => $launch_url_with_code, // PB URL with ?code=… appended
   'dialsession_id'        => $dial_id,
   'contacts_sent'         => count($pbContacts),
   'tasks_processed'       => count($tasks),
   'tasks_without_contact' => $tasksWithoutContact,
   'truncated_contacts'    => $truncatedCount,
   'skipped'               => $skipped,
-  'diag'                  => $diag,
-]);
+  'pb_ms'                 => $pb_ms,
+];
+
+if ($skipped > 0) {
+  $total = count($pbContacts) + $skipped;
+  $response['success_message'] = "Created dial session with " . count($pbContacts) . " of {$total} contacts (skipped {$skipped} without phone)";
+}
+
+if ($truncatedCount > 0) {
+  $totalContacts = count($pbContacts) + $truncatedCount;
+  $response['truncation_message'] = "Tasks reference {$totalContacts} unique contacts. PhoneBurner limit is " . PB_MAX_CONTACTS . " — the first " . PB_MAX_CONTACTS . " were used.";
+}
+
+api_ok_flat($response);
