@@ -3,7 +3,7 @@
 **Audience:** PhoneBurner customers using the Chrome extension, PhoneBurner support reps, and AI support agents.
 
 **Product:** PhoneBurner Dial Session Companion (Chrome extension)
-**Latest released version (at time of writing):** 0.6.2 — verify against the Chrome Web Store listing for the current published version. Some features described here may be unavailable in older installed versions; the extension auto-updates by default in Chrome.
+**Latest released version (at time of writing):** 0.6.4 — verify against the Chrome Web Store listing for the current published version. Some features described here may be unavailable in older installed versions; the extension auto-updates by default in Chrome.
 **Chrome Web Store:** Search "PhoneBurner Dial Session Companion"
 
 ---
@@ -29,7 +29,7 @@ The extension supports two integration levels. The level determines which featur
 
 | CRM | Level | Auth Method | Launch Methods |
 |-----|-------|-------------|----------------|
-| HubSpot | 3 (Full API) | OAuth | Selection, Saved Lists, Single Record |
+| HubSpot | 3 (Full API) | OAuth | Selection, Saved Lists, Task Queue, Single Record |
 | Close | 3 (Full API) | OAuth | Selection (Contacts and Leads) |
 | Apollo.io | 3 (Full API) | OAuth | People Selection, Sequence Call Tasks |
 | Salesforce | 2 (Optimized) | None (scrapes page) | Selected rows only (must check at least one) |
@@ -61,6 +61,8 @@ The extension supports two integration levels. The level determines which featur
 | "Close OAuth fails" / "Can't connect Close" | [Close OAuth issues](#12-close-oauth-issues) |
 | "Apollo OAuth fails" / "Can't connect Apollo" | [Apollo OAuth issues](#13-apollo-oauth-issues) |
 | "HubSpot lists not loading" / Lists missing / Wrong count | [HubSpot list problems](#14-hubspot-list-problems) |
+| "Task Queue button missing" / "Can't dial from HubSpot tasks page" | [HubSpot Task Queue dialing](#22-hubspot-task-queue-dialing) |
+| "Reconnect HubSpot prompt" / "Tasks not auto-completing" | [HubSpot Task Queue dialing](#22-hubspot-task-queue-dialing) |
 | "Apollo sequences not loading" / Task counts wrong | [Apollo sequence problems](#15-apollo-sequence-problems) |
 | "Phone number wrong" / "Dialed wrong number" | [Wrong phone number dialed](#16-wrong-phone-number-dialed) |
 | "Call notes not in CRM" / "Activity not logged" | [Call logging issues](#17-call-logging-issues) |
@@ -494,6 +496,72 @@ A: Yes — but **disconnect before uninstalling** for a complete cleanup:
 
 ---
 
+## 22. HubSpot Task Queue Dialing
+
+**What it does:** Lets a customer launch a PhoneBurner dial session for all contacts associated with the tasks visible on their HubSpot tasks page (e.g., `app.hubspot.com/tasks/{portalId}/view/all` or any task queue). Once the session is running, each task gets marked **Completed** in HubSpot as the corresponding call finishes — no manual cleanup.
+
+**Available in:** Extension v0.6.4 and later.
+
+### How to use it
+
+1. In HubSpot, open any tasks page (Tasks view, a specific Task Queue, or the "Due today" filter).
+2. Open the extension popup. A new **"HubSpot Task Queue"** card appears.
+3. (Optional) In HubSpot, check the checkboxes on the specific task rows you want to dial. If no rows are checked, the extension dials through the entire visible queue.
+4. Click **Launch Task Queue** in the popup. A dial session is built from the contacts associated with those tasks.
+5. As you complete each call, the corresponding task is auto-marked **Completed** in HubSpot.
+
+### Symptom: "I don't see a Task Queue card / launch button"
+
+**Likely causes:**
+- Customer is not on a HubSpot tasks page. The card only appears on `app.hubspot.com/tasks/.../view/...` URLs.
+- Customer is on an older extension version (pre-0.6.4). Wait for Chrome auto-update or force a reload at `chrome://extensions`.
+- HubSpot isn't connected. Settings → Connect HubSpot.
+
+**Resolution:**
+1. Confirm the URL contains `/tasks/` and a `/view/` segment.
+2. Confirm the extension version at the bottom of the popup is **0.6.4 or higher**.
+3. Confirm HubSpot shows as **Connected** in Settings.
+
+### Symptom: "Reconnect HubSpot to enable Task Queue dialing" prompt appears
+
+**What this means:** The customer's HubSpot connection is missing the new `crm.objects.contacts.write` permission, which is required to mark tasks complete. This is expected for any customer who connected HubSpot before v0.6.4 launched — the older connection didn't request that permission.
+
+**Resolution:**
+1. Click **Reconnect HubSpot** inside the Task Queue card (or go to Settings → Disconnect HubSpot → Connect HubSpot).
+2. Approve all requested scopes on HubSpot's consent screen — note this new connection asks for a write permission on contacts/tasks, which is what powers the auto-completion.
+3. Return to the tasks page; the launch button will be active.
+
+This is a one-time reconnect. The customer's existing dial flows (Selection, Saved Lists) keep working throughout — they're not blocked from any existing functionality during the reconnect prompt.
+
+### Symptom: "Dial session launched but tasks aren't being marked complete in HubSpot"
+
+**Likely causes:**
+- Customer reconnected HubSpot but the OAuth flow was canceled before approving the new scope.
+- The contact dialed has no HubSpot task associated with them in this session (e.g., the customer added contacts manually via Selection-mode on top of the Task Queue session — only the original task-driven contacts auto-complete).
+
+**Resolution:**
+1. In the extension popup, open Settings and confirm HubSpot shows as **Connected**.
+2. Disconnect HubSpot → Connect HubSpot, making sure to approve all consent scopes on HubSpot's screen.
+3. Launch a fresh Task Queue session and dial one contact as a test.
+4. Check the task in HubSpot — it should show **Completed** status within a few seconds of the call ending.
+
+**Escalate if:** Customer reconnected with all scopes approved and tasks still don't complete. Ask for: the HubSpot portal ID, the extension version, the timestamp of a recent test call, and the task ID in HubSpot. Engineering will check the webhook logs for the task-completion attempt.
+
+### Symptom: "Some tasks didn't get dialed / fewer contacts than tasks"
+
+**Cause:** Not every HubSpot task has a contact association. Tasks created without an associated contact (e.g., "Follow up on email" tasks attached only to a deal or company, or standalone reminders) can't be dialed — there's no phone number to call. The extension silently skips those tasks when building the session.
+
+**Resolution:** Confirm in HubSpot that the missing tasks have a contact associated. Adding a contact association to a task in HubSpot won't retroactively add them to an in-progress dial session — start a new session after associating the contact.
+
+### Edge cases worth knowing
+
+- **500-contact cap:** Same as other HubSpot launch methods. If the visible task queue points to more than 500 unique contacts, the session is truncated at 500.
+- **Duplicate contacts:** If two tasks are associated with the same contact, that contact appears once in the dial session but BOTH tasks get marked Completed when the call finishes.
+- **Selection inside task page:** Checking specific task rows narrows the session to those rows only. Unchecking everything (the default) dials all visible tasks.
+- **Mid-session task changes:** Marking a task complete manually in HubSpot during an active dial session doesn't pull that contact out of the session — PhoneBurner has already accepted the contact list.
+
+---
+
 ## Escalation Contact
 
 When escalating to PhoneBurner engineering:
@@ -532,6 +600,7 @@ Is PhoneBurner status "Connected" in the popup header?
 | "no button to click" | [Missing launch buttons](#6-missing-launch-buttons) |
 | "session has wrong number" | [Wrong phone number dialed](#16-wrong-phone-number-dialed) |
 | "calls aren't showing up in [CRM]" | [Call logging issues](#17-call-logging-issues) |
+| "task queue" / "tasks not completing" / "reconnect HubSpot" | [HubSpot Task Queue dialing](#22-hubspot-task-queue-dialing) |
 | "only got 500 contacts" / "session was cut off" | [500-contact limit](#18-500-contact-limit) |
 | "HubSpot changed my number" | [HubSpot Data Sync conflict](#19-hubspot-data-sync-conflict) |
 | "browser froze" / "Chrome stuck" | [Stuck permission dialog](#8-stuck-permission-dialog) |
@@ -546,6 +615,6 @@ Is PhoneBurner status "Connected" in the popup header?
 
 ---
 
-**Last updated:** 2026-05-28
-**Documents features through extension version:** 0.6.2 (some features may not appear in older installed builds)
+**Last updated:** 2026-06-06
+**Documents features through extension version:** 0.6.4 (some features may not appear in older installed builds)
 **Maintained by:** PhoneBurner engineering. To request changes, contact the extension team.
