@@ -130,15 +130,26 @@ function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, str
 
 /**
  * Fetch HubSpot task objects with contact associations.
- * Uses the v3 batch read endpoint (POST /crm/v3/objects/tasks/batch/read).
- * Each result includes `associations.contacts.results[]` listing associated contact IDs.
+ *
+ * HubSpot's `POST /crm/v3/objects/tasks/batch/read` endpoint does NOT return
+ * associations even when you include `associations: ['contacts']` in the body
+ * (that parameter is silently ignored). To get task→contact links we have to
+ * call the v4 associations batch endpoint separately and merge the results.
+ *
+ * This function does both:
+ *   1. POST /crm/v3/objects/tasks/batch/read  — fetches task properties
+ *   2. POST /crm/v4/associations/tasks/contacts/batch/read — fetches associations
+ *
+ * Then embeds the associations into each task object under
+ * `task['associations']['contacts']['results']` to match what callers expect.
  *
  * Batches input in groups of 100 (HubSpot's batch endpoint limit).
  * Returns an array of task objects.
  */
 function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) {
   $tasks = [];
-  $diag['tasks_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
+  $diag['tasks_fetch']        = ['ok' => 0, 'fail' => 0, 'last_http' => null];
+  $diag['associations_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
   if (empty($taskIds)) return $tasks;
 
@@ -154,12 +165,15 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
   ];
 
   $batches = array_chunk(array_values($taskIds), 100);
+
+  // -------------------------------------------------------------------------
+  // Step 1: fetch task properties
+  // -------------------------------------------------------------------------
   foreach ($batches as $batch) {
     $inputs = array_map(function ($id) { return ['id' => (string)$id]; }, $batch);
     $body = [
-      'inputs'       => $inputs,
-      'properties'   => $properties,
-      'associations' => ['contacts'],
+      'inputs'     => $inputs,
+      'properties' => $properties,
     ];
 
     list($code, $json, $_raw) = hs_api_post_json(
@@ -178,9 +192,71 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
     if (is_array($results)) {
       foreach ($results as $task) {
         if (is_array($task)) {
+          // Pre-initialize the associations structure so downstream code can
+          // safely read $task['associations']['contacts']['results'] even when
+          // a task has no associated contacts.
+          if (!isset($task['associations'])) $task['associations'] = [];
+          if (!isset($task['associations']['contacts'])) {
+            $task['associations']['contacts'] = ['results' => []];
+          }
           $tasks[] = $task;
           $diag['tasks_fetch']['ok']++;
         }
+      }
+    }
+  }
+
+  if (empty($tasks)) return $tasks;
+
+  // -------------------------------------------------------------------------
+  // Step 2: fetch task → contact associations (v4 endpoint, separate call)
+  // -------------------------------------------------------------------------
+  // Index tasks by ID so we can attach associations efficiently.
+  $tasksById = [];
+  foreach ($tasks as $i => $t) {
+    $tid = (string)($t['id'] ?? '');
+    if ($tid !== '') $tasksById[$tid] = $i;
+  }
+
+  foreach ($batches as $batch) {
+    $inputs = array_map(function ($id) { return ['id' => (string)$id]; }, $batch);
+    $body = ['inputs' => $inputs];
+
+    list($code, $json, $_raw) = hs_api_post_json(
+      $accessToken,
+      'https://api.hubapi.com/crm/v4/associations/tasks/contacts/batch/read',
+      $body
+    );
+    $diag['associations_fetch']['last_http'] = $code;
+
+    if ($code !== 200 || !is_array($json)) {
+      $diag['associations_fetch']['fail'] += count($batch);
+      continue;
+    }
+
+    $results = $json['results'] ?? [];
+    if (!is_array($results)) continue;
+
+    foreach ($results as $row) {
+      if (!is_array($row)) continue;
+      $fromId = (string)($row['from']['id'] ?? '');
+      if ($fromId === '' || !isset($tasksById[$fromId])) continue;
+
+      $taskIdx = $tasksById[$fromId];
+      $associatedContacts = [];
+      foreach (($row['to'] ?? []) as $toItem) {
+        if (!is_array($toItem)) continue;
+        // v4 response shape uses `toObjectId`; we map it to {id: ...} so the
+        // downstream parser (looking under associations.contacts.results[].id)
+        // sees a consistent shape regardless of which API version we used.
+        $toId = $toItem['toObjectId'] ?? null;
+        if ($toId === null) continue;
+        $associatedContacts[] = ['id' => (string)$toId];
+      }
+
+      if (!empty($associatedContacts)) {
+        $tasks[$taskIdx]['associations']['contacts']['results'] = $associatedContacts;
+        $diag['associations_fetch']['ok']++;
       }
     }
   }
