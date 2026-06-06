@@ -35,25 +35,6 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
     // by grepping app.log for 'hs_call_log:'.
     log_msg('hs_call_log: invoked launch_source=' . ($state['launch_source'] ?? '(none)'));
 
-    // Temporary diagnostic: dump payload structure so we can see where PB
-    // actually puts the external_crm in call_done webhooks. The visible
-    // candidates so far only include payload.contact.external_id (PB's own
-    // SFDC-format ID) — the HubSpot crm_id we sent must live elsewhere in
-    // the payload, but we don't yet know where.
-    log_msg('hs_call_log: DEBUG payload_keys=' . implode(',', array_keys($payload)));
-    if (isset($payload['contact']) && is_array($payload['contact'])) {
-        log_msg('hs_call_log: DEBUG contact_keys=' . implode(',', array_keys($payload['contact'])));
-    }
-    if (isset($payload['custom_data']) && is_array($payload['custom_data'])) {
-        log_msg('hs_call_log: DEBUG custom_data_keys=' . implode(',', array_keys($payload['custom_data'])));
-    }
-    if (isset($payload['external_crm'])) {
-        log_msg('hs_call_log: DEBUG external_crm at top-level: ' . json_encode($payload['external_crm']));
-    }
-    if (isset($payload['contact']['external_crm'])) {
-        log_msg('hs_call_log: DEBUG external_crm under contact: ' . json_encode($payload['contact']['external_crm']));
-    }
-
     // Gate: only fire for Task Queue dial sessions. Selection/list flows have
     // no hs_task_ids in contacts_map and never set launch_source.
     if (($state['launch_source'] ?? '') !== 'queue-tasks') {
@@ -97,15 +78,24 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
     // -------------------------------------------------------------------------
     // Find the CALLED contact from the payload.
     //
-    // CRITICAL: PB's `payload.contact.external_id` is PhoneBurner's OWN
-    // identifier (often a Salesforce-style ID from PB's internal Salesforce
-    // sync), NOT the HubSpot ID we stored in `external_crm_data` when creating
-    // the session. We have to iterate the external_crm array PB returns in
-    // the webhook payload and find the entry with our HubSpot crm_id.
+    // PB's `payload.contact.external_id` is PhoneBurner's OWN identifier
+    // (often a Salesforce-style ID from PB's internal Salesforce sync), NOT
+    // the HubSpot ID we stored in `external_crm_data` when creating the
+    // session. AND: PB's call_done payload does not include external_crm_data
+    // at all (unlike contact_displayed, which does).
     //
-    // Mirrors the lookup logic in webhooks/contact_displayed.php's
-    // extract_contact_lookup_key() — for the same reason: PB's external_id
-    // can't be relied on to round-trip.
+    // Strategy, in order:
+    //   1) Iterate any external_crm / external_crm_data PB sends in the
+    //      webhook (forward-compat — if PB ever starts including it).
+    //   2) Try the plain external_id as a candidate (works for providers
+    //      that explicitly set it at session creation, e.g. Apollo).
+    //   3) Below the candidate loop: fetch the PB contact via
+    //      /rest/1/contacts/{user_id} and read external_crm_data from there.
+    //
+    // We deliberately do NOT set external_id on PB contacts at session
+    // creation for HubSpot — that path would disturb PB dedup/merge and
+    // risks conflicts with the HubSpot Data Sync app and PB's native
+    // HubSpot activity logger that many customers already rely on.
     //
     // Also: do NOT use $state['current'] — the contact_displayed webhook for
     // the NEXT contact fires BEFORE call_done, so $state['current'] points to
@@ -144,6 +134,64 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
             $mapEntry = $contactsMap[$cand];
             $calledExternalId = $cand;
             break;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Fallback: PB contact API lookup via user_id.
+    //
+    // PB's call_done payload does NOT include external_crm_data — only its
+    // own internal `external_id` (often a Salesforce-style ID from PB's
+    // Salesforce sync). But the PB contact RECORD does carry external_crm_data,
+    // so we fetch the contact by user_id and pull external_crm_data from there.
+    //
+    // This is the canonical pattern (see close_call_logger.php). It avoids
+    // setting `external_id` on PB contacts at session creation, which would
+    // disturb PB's dedup/merge behavior and potentially conflict with the
+    // HubSpot Data Sync app and PB's built-in HubSpot activity logger.
+    // -------------------------------------------------------------------------
+    if (!$mapEntry) {
+        $pbUserId = trim((string)($payload['contact']['user_id'] ?? $payload['user_id'] ?? ''));
+        if ($pbUserId !== '') {
+            $pat = load_pb_token($clientId);
+            if ($pat) {
+                list($pbInfo, $pbResp) = pb_api_call($pat, 'GET', '/contacts/' . rawurlencode($pbUserId));
+                $pbHttpCode = (int)($pbInfo['http_code'] ?? 0);
+
+                if ($pbHttpCode === 200 && is_array($pbResp)) {
+                    // PB's /contacts/{id} response wraps the record under
+                    // `contacts.contacts[0]` (confirmed via curl on the PB API).
+                    // Fall back to flat access too, in case PB ever changes shape.
+                    $pbRecord = $pbResp['contacts']['contacts'][0]
+                        ?? ($pbResp['contacts'][0] ?? null)
+                        ?? $pbResp;
+                    $pbEcd = (is_array($pbRecord)
+                        ? ($pbRecord['external_crm_data'] ?? $pbRecord['external_crm'] ?? null)
+                        : null);
+
+                    if (is_array($pbEcd)) {
+                        foreach ($pbEcd as $row) {
+                            if (!is_array($row)) continue;
+                            $crmId = trim((string)($row['crm_id'] ?? ''));
+                            if ($crmId !== '' && isset($contactsMap[$crmId])) {
+                                $mapEntry = $contactsMap[$crmId];
+                                $calledExternalId = $crmId;
+                                log_msg('hs_call_log: matched via PB contact lookup user_id=' . $pbUserId . ' crm_id=' . $crmId);
+                                break;
+                            }
+                        }
+                        if (!$mapEntry) {
+                            log_msg('hs_call_log: PB contact fetched but no external_crm_data row matched contacts_map. user_id=' . $pbUserId . ' ecd_count=' . count($pbEcd));
+                        }
+                    } else {
+                        log_msg('hs_call_log: PB contact fetched but external_crm_data missing/empty. user_id=' . $pbUserId);
+                    }
+                } else {
+                    log_msg('hs_call_log: PB contact API non-200. user_id=' . $pbUserId . ' http=' . $pbHttpCode);
+                }
+            } else {
+                log_msg('hs_call_log: PB lookup skipped — no PB PAT for client');
+            }
         }
     }
 
