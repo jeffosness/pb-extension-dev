@@ -76,21 +76,63 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
     }
 
     // -------------------------------------------------------------------------
-    // Find the CALLED contact from the payload (not $state['current']).
-    // The contact_displayed webhook for the NEXT contact fires BEFORE call_done,
-    // so $state['current'] points to the wrong person at this moment.
+    // Find the CALLED contact from the payload.
+    //
+    // CRITICAL: PB's `payload.contact.external_id` is PhoneBurner's OWN
+    // identifier (often a Salesforce-style ID from PB's internal Salesforce
+    // sync), NOT the HubSpot ID we stored in `external_crm_data` when creating
+    // the session. We have to iterate the external_crm array PB returns in
+    // the webhook payload and find the entry with our HubSpot crm_id.
+    //
+    // Mirrors the lookup logic in webhooks/contact_displayed.php's
+    // extract_contact_lookup_key() — for the same reason: PB's external_id
+    // can't be relied on to round-trip.
+    //
+    // Also: do NOT use $state['current'] — the contact_displayed webhook for
+    // the NEXT contact fires BEFORE call_done, so $state['current'] points to
+    // the wrong person at this moment.
     // -------------------------------------------------------------------------
-    $calledExternalId = trim((string)(
+    $candidates = [];
+
+    $ecd = $payload['external_crm']
+        ?? $payload['external_crm_data']
+        ?? ($payload['contact']['external_crm'] ?? null)
+        ?? ($payload['contact']['external_crm_data'] ?? null)
+        ?? null;
+
+    if (is_array($ecd)) {
+        foreach ($ecd as $row) {
+            if (!is_array($row)) continue;
+            $crmId = trim((string)($row['crm_id'] ?? ''));
+            if ($crmId !== '') $candidates[] = $crmId;
+        }
+    }
+
+    // Fall back to PB's plain external_id last — works for Apollo (which sets
+    // it explicitly) but not for HubSpot, so list it after the crm_id lookups.
+    $legacyExtId = trim((string)(
         $payload['contact']['external_id'] ?? $payload['external_id'] ?? ''
     ));
+    if ($legacyExtId !== '' && !in_array($legacyExtId, $candidates, true)) {
+        $candidates[] = $legacyExtId;
+    }
 
     $contactsMap = $state['contacts_map'] ?? [];
-    $mapEntry = ($calledExternalId !== '' && isset($contactsMap[$calledExternalId]))
-        ? $contactsMap[$calledExternalId] : null;
+    $mapEntry = null;
+    $calledExternalId = '';
+    foreach ($candidates as $cand) {
+        if (isset($contactsMap[$cand])) {
+            $mapEntry = $contactsMap[$cand];
+            $calledExternalId = $cand;
+            break;
+        }
+    }
+
     if (!$mapEntry) {
         $contactsMapKeys = is_array($contactsMap) ? array_slice(array_keys($contactsMap), 0, 5) : [];
-        log_msg('hs_call_log: skipping — called external_id "' . $calledExternalId
-            . '" not in contacts_map (first 5 keys: ' . implode(',', $contactsMapKeys) . ')');
+        log_msg('hs_call_log: skipping — no candidate matched contacts_map. candidates=['
+            . implode(',', $candidates)
+            . '] map_keys=[' . implode(',', $contactsMapKeys) . ']');
         return;
     }
 
