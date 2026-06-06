@@ -16,6 +16,15 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.6.4": {
+    title: "What's New in v0.6.4",
+    items: [
+      "HubSpot Task Queue dialing — launch a dial session for all contacts associated with the tasks visible on your HubSpot tasks page",
+      "Tasks are automatically marked complete in HubSpot as you finish each call",
+      "Tip: check specific task rows in HubSpot to dial just those, or leave none checked to dial the entire visible queue",
+      "HubSpot users will need to reconnect HubSpot once to enable the new task-completion behavior — a one-time prompt appears in the Task Queue card"
+    ]
+  },
   "0.6.2": {
     title: "What's New in v0.6.2",
     items: [

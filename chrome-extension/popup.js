@@ -507,7 +507,7 @@ async function requestOptionalPermissionForActiveSiteBestEffort() {
 
 let ACTIVE_CTX = null;
 let PB_CONNECTED = false;
-let HS_STATE = { connected: false, portalId: null };
+let HS_STATE = { connected: false, portalId: null, hasTaskScope: false };
 let CLOSE_STATE = { connected: false };
 let APOLLO_STATE = { connected: false };
 
@@ -568,6 +568,20 @@ function applyContextVisibility(ctx, pbConnected) {
 
   // List card: any page when both PB + HS connected
   setVisible(hsListCard, bothAuth);
+
+  // Task Queue card: HS tasks pages only, when both PB + HS connected.
+  // Sub-section visibility (launch button vs reconnect prompt) depends on
+  // whether the customer's HS tokens have the contacts.write scope.
+  const hsTasksCard = $("hubspot-tasks-card");
+  const hsTasksLaunchSection = $("hs-tasks-launch-section");
+  const hsTasksReconnectSection = $("hs-tasks-reconnect-section");
+  const showTasksCard = isHS && pageType === "tasks" && bothAuth;
+  setVisible(hsTasksCard, showTasksCard);
+  if (showTasksCard) {
+    // Show launch button if customer has the write scope; otherwise show reconnect prompt
+    setVisible(hsTasksLaunchSection, !!HS_STATE.hasTaskScope);
+    setVisible(hsTasksReconnectSection, !HS_STATE.hasTaskScope);
+  }
 
   // Settings card visibility
   const settingsCard = $("hubspot-settings-card");
@@ -646,8 +660,13 @@ async function checkHubSpotConnectionState() {
     // portal_id is nested under hubspot object in state response
     const hsPortalId = state?.hubspot?.portal_id || null;
     if (hsPortalId) HS_STATE.portalId = hsPortalId;
+    // has_task_scope flags whether the customer's tokens have
+    // crm.objects.contacts.write — required for the Task Queue feature.
+    // Customers on legacy demo-org tokens won't have it until they reconnect.
+    HS_STATE.hasTaskScope = !!state?.hubspot?.has_task_scope;
   } catch (e) {
     HS_STATE.connected = false;
+    HS_STATE.hasTaskScope = false;
   }
   return HS_STATE.connected;
 }
@@ -1218,6 +1237,62 @@ async function launchDialSessionFromList() {
 
   if (listStatus) listStatus.textContent = "Dial session created ✔";
   window.close();
+}
+
+// ---------------------------
+// HubSpot Task Queue launch (only available on HS tasks pages)
+// ---------------------------
+
+async function launchHubSpotTaskQueue() {
+  const launchBtn = $("hs-tasks-launch");
+  const reconnectBtn = $("hs-tasks-reconnect");
+  const status = $("hs-tasks-status");
+  const allButtons = [launchBtn, reconnectBtn];
+
+  // Best-effort permission request for the active site
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult.timeout) {
+      console.warn("Permission request timed out, continuing anyway");
+    } else if (!permResult.ok) {
+      console.warn("Permission request failed:", permResult.error);
+    }
+  } catch (err) {
+    console.error("Permission request crashed:", err);
+  }
+
+  allButtons.forEach((b) => { if (b) b.disabled = true; });
+  if (status) {
+    status.textContent = "Building dial session from tasks on this page…";
+    status.classList.add("loading");
+  }
+
+  const resp = await sendToBackground({ type: "HS_LAUNCH_FROM_TASKS" });
+
+  if (status) status.classList.remove("loading");
+
+  if (!resp || !resp.ok) {
+    const errorMsg = getErrorMessage(resp, "Failed to launch dial session from task queue.");
+    if (status) status.textContent = errorMsg;
+    allButtons.forEach((b) => { if (b) b.disabled = false; });
+    await showAlert(errorMsg);
+    return;
+  }
+
+  // Show truncation / skipped message if relevant before closing
+  if (status) {
+    let msg = "Dial session launched";
+    if (resp.successMessage) msg = resp.successMessage;
+    if (resp.truncationMessage) msg += " — " + resp.truncationMessage;
+    status.textContent = msg + " ✔";
+  }
+  window.close();
+}
+
+async function reconnectHubSpotForTaskQueue() {
+  // Same flow as connecting HubSpot for the first time — the new tokens issued
+  // by the (current) HS_CLIENT_ID app will have the contacts.write scope.
+  await startHubSpotOAuth();
 }
 
 // ---------------------------
@@ -1945,6 +2020,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("hs-list-search-clear")?.addEventListener("click", onHsListSearchClear);
   $("hs-list-select")?.addEventListener("change", onHsListSelectChange);
   $("hs-dial-from-list")?.addEventListener("click", launchDialSessionFromList);
+
+  // HubSpot Task Queue
+  $("hs-tasks-launch")?.addEventListener("click", launchHubSpotTaskQueue);
+  $("hs-tasks-reconnect")?.addEventListener("click", reconnectHubSpotForTaskQueue);
 
   $("hs-phone-pref")?.addEventListener("change", onPhonePrefChange);
   $("hs-disconnect")?.addEventListener("click", disconnectHubSpot);

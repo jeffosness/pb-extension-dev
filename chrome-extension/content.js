@@ -2058,6 +2058,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async response
   }
 
+  // --- HubSpot Task Queue: scrape task IDs from the tasks page DOM ---
+  // The HubSpot tasks table marks each row with data-test-id="row-{taskId}".
+  // If any rows have their checkbox checked, return only those task IDs;
+  // otherwise return all visible task IDs (the customer dials the whole view).
+  if (msg && msg.type === "HS_GET_TASK_IDS") {
+    try {
+      const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+      if (ctx.crmId !== "hubspot") {
+        sendResponse({ error: "Not on a HubSpot page." });
+        return true;
+      }
+
+      const rows = document.querySelectorAll('tr[data-test-id^="row-"]');
+      const allIds = [];
+      const selectedIds = [];
+
+      rows.forEach((row) => {
+        const testId = row.getAttribute("data-test-id") || "";
+        const m = testId.match(/^row-(\d+)$/);
+        if (!m) return;
+        const taskId = m[1];
+        allIds.push(taskId);
+
+        // Per-row checkbox state — if checked, this task is in the user's explicit selection.
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (cb && cb.checked) {
+          selectedIds.push(taskId);
+        }
+      });
+
+      // If anything is checked, dial only those; otherwise dial all visible tasks.
+      const taskIds = selectedIds.length > 0 ? selectedIds : allIds;
+
+      sendResponse({
+        taskIds: [...new Set(taskIds)],
+        totalVisible: allIds.length,
+        selectedCount: selectedIds.length,
+        usedSelection: selectedIds.length > 0,
+      });
+    } catch (e) {
+      sendResponse({ error: e?.message || String(e) });
+    }
+    return true;
+  }
+
   // Ignore SCAN_PAGE in iframes
   if (msg?.type === "SCAN_PAGE" && !isTopWindow) {
     sendResponse({ ok: false, error: "ignored_iframe" });

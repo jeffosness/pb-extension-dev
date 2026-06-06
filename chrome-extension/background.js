@@ -126,6 +126,14 @@ function detectCrmFromUrl(tabUrl) {
       else if (typeId === "0-2") objectType = "company";
       else if (typeId === "0-3") objectType = "deal";
     }
+    // Tasks pages: /tasks/{portalId}/view/...
+    // (Customer's task queue / list view. Used by the Task Queue dialing feature.)
+    else if (path.match(/\/tasks\/\d+\/(view|queue)\//)) {
+      pageType = "tasks";
+      // Portal ID is in the path here too: /tasks/{portalId}/view/...
+      const tasksPortalMatch = path.match(/\/tasks\/(\d+)\//);
+      if (tasksPortalMatch && !portalId) portalId = tasksPortalMatch[1];
+    }
 
     return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType, pageType, recordId, portalId };
   }
@@ -765,6 +773,117 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
 
         return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
+      // HubSpot L3: launch from task queue (visible tasks on the HS tasks page)
+      // -------------------------
+      if (msg.type === "HS_LAUNCH_FROM_TASKS") {
+        // Find the active HubSpot tab — that's where the user has the tasks
+        // page open and where the content script will scrape task IDs from.
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const hubTab = (tabs || []).find((t) =>
+          (t.url || "").includes("hubspot.com"),
+        );
+        if (!hubTab?.id) {
+          return sendResponse({
+            ok: false,
+            error: "No active HubSpot tab found.",
+          });
+        }
+
+        // Ensure content script is injected, then ask it to scrape task IDs
+        await ensureContentScript(hubTab.id);
+        const taskIdsResp = await new Promise((resolve) => {
+          chrome.tabs.sendMessage(
+            hubTab.id,
+            { type: "HS_GET_TASK_IDS" },
+            { frameId: 0 },
+            (res) => {
+              if (chrome.runtime.lastError) return resolve(null);
+              resolve(res);
+            },
+          );
+        });
+
+        const taskIds = Array.isArray(taskIdsResp?.taskIds) ? taskIdsResp.taskIds : [];
+        if (taskIds.length === 0) {
+          return sendResponse({
+            ok: false,
+            error: "No tasks found on the page. Make sure you're viewing a HubSpot task queue with at least one task visible.",
+          });
+        }
+
+        // Extract portal_id + hostname from the active HubSpot tab
+        let portalId = null;
+        const portalMatch = hubTab.url.match(/\/tasks\/(\d+)\//);
+        if (portalMatch) portalId = portalMatch[1];
+        const hp = deriveHostPathFromTabUrl(hubTab.url);
+
+        // Track usage (best effort — never block the launch on this)
+        try {
+          await api("core/track_crm_usage.php", {
+            crm_id: "hubspot",
+            host: hp.host || "app.hubspot.com",
+            path: hp.path || "",
+            level: 3,
+            portal_id: portalId,
+            object_type: "tasks",
+            selected_count: taskIds.length,
+            launch_source: "queue-tasks",
+          });
+        } catch (e) {}
+
+        const resp = await api("crm/hubspot/pb_dialsession_from_tasks.php", {
+          task_ids: taskIds,
+          portal_id: portalId || "",
+          hs_host: hp.host || "",
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session from task queue.",
+            details: resp,
+          });
+        }
+
+        // Register the follow session against the HubSpot tab so SSE-driven
+        // navigation can move the user through each contact's record page.
+        await registerSessionForTab(hubTab.id, sessionToken, tempCode, BASE_URL);
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({
+          ok: true,
+          sessionToken,
+          dialUrl,
+          contactsSent: resp.contacts_sent ?? resp.data?.contacts_sent ?? null,
+          tasksProcessed: resp.tasks_processed ?? resp.data?.tasks_processed ?? null,
+          skipped: resp.skipped ?? resp.data?.skipped ?? null,
+          successMessage: resp.success_message ?? resp.data?.success_message ?? null,
+          truncationMessage: resp.truncation_message ?? resp.data?.truncation_message ?? null,
+        });
       }
 
       // -------------------------

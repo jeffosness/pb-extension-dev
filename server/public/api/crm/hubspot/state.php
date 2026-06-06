@@ -18,10 +18,22 @@ $client_id = get_client_id_or_fail($data);
 $pbPat    = load_pb_token($client_id);
 $hsTokens = load_hs_tokens($client_id);
 
+// Check whether the customer's HubSpot tokens have the contacts.write scope.
+// Used by the extension's Task Queue UI to decide between "launch" and
+// "reconnect to enable" prompts. Customers on legacy demo-org tokens won't
+// have this scope until they reconnect via the new PB-portal app.
+$hasTaskScope = false;
+if (is_array($hsTokens)) {
+    $scopeStr = (string)($hsTokens['scope'] ?? '');
+    // Scopes come back from HubSpot as a space-separated string
+    $hasTaskScope = $scopeStr !== '' && in_array('crm.objects.contacts.write', preg_split('/\s+/', $scopeStr), true);
+}
+
 api_log('hubspot_state.ok', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'pb_ready'       => (bool)$pbPat,
     'hs_ready'       => (bool)$hsTokens,
+    'has_task_scope' => $hasTaskScope,
 ]);
 
 api_ok_flat([
@@ -36,8 +48,11 @@ api_ok_flat([
         'connected' => (bool)$pbPat,
     ],
     'hubspot' => [
-        'connected'  => (bool)$hsTokens,
-        'expires_at' => is_array($hsTokens) ? ($hsTokens['expires_at'] ?? null) : null,
-        'portal_id'  => is_array($hsTokens) ? ($hsTokens['hub_id'] ?? null)      : null,
+        'connected'      => (bool)$hsTokens,
+        'expires_at'     => is_array($hsTokens) ? ($hsTokens['expires_at'] ?? null) : null,
+        'portal_id'      => is_array($hsTokens) ? ($hsTokens['hub_id'] ?? null)      : null,
+        // Task Queue feature requires crm.objects.contacts.write; customers on
+        // legacy demo-org tokens won't have it until they reconnect.
+        'has_task_scope' => $hasTaskScope,
     ],
 ]);
