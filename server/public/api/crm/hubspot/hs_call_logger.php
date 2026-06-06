@@ -35,6 +35,25 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
     // by grepping app.log for 'hs_call_log:'.
     log_msg('hs_call_log: invoked launch_source=' . ($state['launch_source'] ?? '(none)'));
 
+    // Temporary diagnostic: dump payload structure so we can see where PB
+    // actually puts the external_crm in call_done webhooks. The visible
+    // candidates so far only include payload.contact.external_id (PB's own
+    // SFDC-format ID) — the HubSpot crm_id we sent must live elsewhere in
+    // the payload, but we don't yet know where.
+    log_msg('hs_call_log: DEBUG payload_keys=' . implode(',', array_keys($payload)));
+    if (isset($payload['contact']) && is_array($payload['contact'])) {
+        log_msg('hs_call_log: DEBUG contact_keys=' . implode(',', array_keys($payload['contact'])));
+    }
+    if (isset($payload['custom_data']) && is_array($payload['custom_data'])) {
+        log_msg('hs_call_log: DEBUG custom_data_keys=' . implode(',', array_keys($payload['custom_data'])));
+    }
+    if (isset($payload['external_crm'])) {
+        log_msg('hs_call_log: DEBUG external_crm at top-level: ' . json_encode($payload['external_crm']));
+    }
+    if (isset($payload['contact']['external_crm'])) {
+        log_msg('hs_call_log: DEBUG external_crm under contact: ' . json_encode($payload['contact']['external_crm']));
+    }
+
     // Gate: only fire for Task Queue dial sessions. Selection/list flows have
     // no hs_task_ids in contacts_map and never set launch_source.
     if (($state['launch_source'] ?? '') !== 'queue-tasks') {
