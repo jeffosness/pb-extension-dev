@@ -40,6 +40,7 @@ Full API integration with HubSpot:
 
 • Launch from selected records (contacts, companies, or deals)
 • Launch from saved HubSpot lists (up to 500 records per session)
+• Launch from the HubSpot Task Queue — dial through the contacts associated with your visible tasks, and have those tasks auto-complete in HubSpot as you finish each call
 • Automatically discovers all phone properties (mobile, work, custom fields)
 • Set a preferred primary phone field in Settings
 • OAuth authentication — secure, no scraping required
@@ -110,6 +111,8 @@ This extension is ideal for:
 • PhoneBurner dial sessions support up to 500 contacts
 • Features may vary slightly by CRM platform
 
-🆕 What's New in v0.6.0
+🆕 What's New in v0.6.4
 
-✨ Apollo.io Integration: Connect your Apollo account via OAuth and launch dial sessions from your People page or sequence call tasks. Pick a sequence, filter by due tasks, and power-dial contacts directly through PhoneBurner. The Follow widget auto-navigates to Apollo contact profiles during calls.
+✨ HubSpot Task Queue dialing: Open any HubSpot tasks page and launch a dial session for all contacts associated with the visible tasks. Tasks are automatically marked complete in HubSpot as you finish each call. Check specific task rows to dial just those, or leave none checked to dial the entire visible queue.
+
+🔐 HubSpot users will see a one-time "Reconnect HubSpot" prompt the first time they open the Task Queue feature — this grants a new permission required for task completion. Reconnect takes about 30 seconds.
