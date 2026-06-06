@@ -138,6 +138,11 @@ $diag['tasks_without_contact']     = $tasksWithoutContact;
 $diag['unique_contacts_from_tasks'] = count($contactTaskMap);
 
 if (empty($contactTaskMap)) {
+  // Log explicitly so the diag is grep-able in app.log.
+  api_log('hubspot_tasks_dial.error.no_contacts', [
+    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    'diag'           => $diag,
+  ]);
   api_error('No contacts found in associated tasks', 'bad_request', 400, $diag);
 }
 
