@@ -414,6 +414,10 @@ The extension supports two integration levels. The level determines which featur
    - **Custom Outcome** — the extension auto-creates and assigns a Close Outcome that matches the PhoneBurner status text (e.g., "Set Appointment", "No Answer", "Voicemail"). Look at the Outcome column or the call activity's Outcome field. Note: custom Outcomes require a Close plan that supports them; on plans without Outcomes the extension silently skips this step.
    - **Note body** — the PhoneBurner status, any call notes entered during the call, and (when available) a link to the call recording are written into the call activity's note.
 
+**Tips for teams configuring Close:**
+- **Existing Close Outcomes are reused, not duplicated.** The extension matches PhoneBurner status text against the team's existing Close Outcomes by name, **case-insensitively**. So if the team already has an Outcome called "No Answer" in Close, PhoneBurner's "No Answer" / "no answer" / "NO ANSWER" all map to that same existing Outcome. Only PhoneBurner statuses with no name match get auto-created in Close. Teams with a curated set of Outcomes in Close don't need to pre-configure anything — their existing names will be picked up automatically as PhoneBurner reports matching statuses.
+- **Outcome IDs are cached for 24 hours per org.** If the team adds, renames, or deletes an Outcome in Close and expects the extension to pick up the change immediately, there may be up to a 24-hour delay before the cache refreshes. For an immediate refresh, engineering can clear the cache manually — the file lives at `cache/close_outcomes_{org-hash}.json` on the server, and removing it forces a re-fetch on the next call.
+
 **Escalate if:**
 - HubSpot: customer confirms the PhoneBurner ↔ HubSpot integration is activated but calls still aren't appearing. Escalate to PhoneBurner integrations support (not extension engineering).
 - Close/Apollo: call activities are missing for confirmed-completed calls. Ask: customer email/org, call timestamp, contact name. Extension engineering can trace via webhook logs.
@@ -615,6 +619,6 @@ Is PhoneBurner status "Connected" in the popup header?
 
 ---
 
-**Last updated:** 2026-06-06
+**Last updated:** 2026-06-11
 **Documents features through extension version:** 0.6.4 (some features may not appear in older installed builds)
 **Maintained by:** PhoneBurner engineering. To request changes, contact the extension team.
