@@ -2,14 +2,15 @@
 
 // -----------------------------------------------------------------------------
 // Backend env — runtime toggle support.
-// See background.js for the full explanation. Default for v0.6.3 is "dev"; users
-// can opt into "prod" via Settings → Developer Options once that backend exists.
+// See background.js for the full explanation. Default flipped from "dev" to
+// "prod" in v0.7.0 (Phase 4 cutover). Power users / internal testing can
+// switch back to "dev" via Settings → Developer Options.
 // -----------------------------------------------------------------------------
 const BASE_URLS = {
   dev: "https://extension-dev.phoneburner.biz",
   prod: "https://extension.phoneburner.biz",
 };
-const DEFAULT_ENV = "dev";
+const DEFAULT_ENV = "prod";
 let BASE_URL = BASE_URLS[DEFAULT_ENV];
 
 chrome.storage.local.get(["pb_env_override"]).then((res) => {

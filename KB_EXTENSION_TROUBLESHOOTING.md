@@ -3,7 +3,7 @@
 **Audience:** PhoneBurner customers using the Chrome extension, PhoneBurner support reps, and AI support agents.
 
 **Product:** PhoneBurner Dial Session Companion (Chrome extension)
-**Latest released version (at time of writing):** 0.6.4 — verify against the Chrome Web Store listing for the current published version. Some features described here may be unavailable in older installed versions; the extension auto-updates by default in Chrome.
+**Latest released version (at time of writing):** 0.7.0 — verify against the Chrome Web Store listing for the current published version. Some features described here may be unavailable in older installed versions; the extension auto-updates by default in Chrome.
 **Chrome Web Store:** Search "PhoneBurner Dial Session Companion"
 
 ---
@@ -64,6 +64,7 @@ The extension supports two integration levels. The level determines which featur
 | "HubSpot lists not loading" / Lists missing / Wrong count | [HubSpot list problems](#14-hubspot-list-problems) |
 | "Task Queue button missing" / "Can't dial from HubSpot tasks page" | [HubSpot Task Queue dialing](#22-hubspot-task-queue-dialing) |
 | "Reconnect HubSpot prompt" / "Tasks not auto-completing" | [HubSpot Task Queue dialing](#22-hubspot-task-queue-dialing) |
+| "Why am I being asked to reconnect after the update?" / "Extension lost my login after v0.7.0" | [Reconnecting after the v0.7.0 upgrade](#23-reconnecting-after-the-v070-upgrade) |
 | "Apollo sequences not loading" / Task counts wrong | [Apollo sequence problems](#15-apollo-sequence-problems) |
 | "Phone number wrong" / "Dialed wrong number" | [Wrong phone number dialed](#16-wrong-phone-number-dialed) |
 | "Call notes not in CRM" / "Activity not logged" | [Call logging issues](#17-call-logging-issues) |
@@ -593,6 +594,60 @@ This is a one-time reconnect. The customer's existing dial flows (Selection, Sav
 
 ---
 
+## 23. Reconnecting after the v0.7.0 upgrade
+
+**Symptom:** After Chrome auto-updated the extension to v0.7.0, the customer is being asked to paste a PhoneBurner Personal Access Token again, and any previously-connected CRMs (HubSpot, Close, Apollo) show as disconnected in Settings. They were working fine on the previous version.
+
+**Cause:** v0.7.0 migrated the extension to a new production backend. The previous backend's customer tokens don't carry over — this is a planned, **one-time** reconnect event tied to the version upgrade. CRM data, PhoneBurner data, and dial history are all untouched; only the extension's authentication needs refreshing against the new backend.
+
+**Available in:** Extension v0.7.0 and later. Customers still on v0.6.4 or earlier won't see this prompt because they're still on the old backend.
+
+### How to reconnect (~2 minutes per connection)
+
+1. Open the extension popup. The **Dial** tab will show "Not connected" with a **Save PAT** field.
+2. Get a fresh PhoneBurner Personal Access Token: log in to PhoneBurner → **Settings → Personal Access Tokens** → copy an existing one or generate a new one.
+3. Paste the PAT into the popup and click **Save**. The PhoneBurner status indicator turns green.
+4. For each CRM the customer was previously using:
+   - HubSpot: **Settings → Connect HubSpot** → approve the consent screen (scopes are the same as before).
+   - Close: **Settings → Connect Close** → approve the consent screen. Note: Close customers will see a new app name ("PhoneBurner Chrome Extension Production") in their Close Connected Apps list — this is expected.
+   - Apollo: **Settings → Connect Apollo** → approve the consent screen.
+5. After all reconnections, launch a small test dial session (1-2 contacts) to confirm the full flow works.
+
+### Symptom: "I pasted a valid PAT and it still shows 'Not connected'"
+
+**Likely causes:**
+- The PAT has whitespace or hidden characters from the copy operation.
+- The PAT was revoked or expired on PhoneBurner's side.
+- The PB account associated with the PAT has been suspended.
+
+**Resolution:**
+1. Have the customer re-copy the PAT directly from PhoneBurner (not from email or chat).
+2. Paste freshly into the popup field — no leading/trailing whitespace.
+3. If still failing, generate a brand-new PAT in PhoneBurner and try that.
+
+### Symptom: "HubSpot/Close/Apollo OAuth fails after I approve on the provider's side"
+
+**Likely causes:**
+- Browser blocked the OAuth popup window.
+- Cookies are blocked for the provider.
+- The OAuth redirect URI for the new prod backend hasn't propagated yet (transient, very rare).
+
+**Resolution:**
+1. Disable any popup blockers for `extension.phoneburner.biz` and the CRM provider's domain.
+2. Confirm cookies are enabled for the provider.
+3. Try the OAuth flow in a fresh tab.
+4. If still failing, escalate with the provider name, exact error wording, and timestamp.
+
+### "Why do I have to do this?"
+
+A talking-point for support reps: tell the customer this is a one-time migration to a new infrastructure. Their PhoneBurner account, dial history, contact records, and CRM data are unaffected — only the extension's internal authentication needs refreshing. We did this to set up the extension for the next phase of features and to give it a faster, more reliable foundation.
+
+**Escalate if:**
+- Customer says they pasted a valid PAT and it still shows "Not connected" after re-copying. Ask for the error message in the popup status area + a screenshot of the popup.
+- Customer's OAuth consent for any CRM fails after approving on the provider's side, AND a fresh tab + popup-blocker disable doesn't fix it. Escalate to engineering with the provider name, timestamp, and exact error wording. Likely a redirect URI issue we need to investigate.
+
+---
+
 ## Escalation Contact
 
 When escalating to PhoneBurner engineering:
@@ -632,6 +687,7 @@ Is PhoneBurner status "Connected" in the popup header?
 | "session has wrong number" | [Wrong phone number dialed](#16-wrong-phone-number-dialed) |
 | "calls aren't showing up in [CRM]" | [Call logging issues](#17-call-logging-issues) |
 | "task queue" / "tasks not completing" / "reconnect HubSpot" | [HubSpot Task Queue dialing](#22-hubspot-task-queue-dialing) |
+| "why am I being asked to reconnect" / "extension lost my login" / "after the update" | [Reconnecting after the v0.7.0 upgrade](#23-reconnecting-after-the-v070-upgrade) |
 | "only got 500 contacts" / "session was cut off" | [500-contact limit](#18-500-contact-limit) |
 | "HubSpot changed my number" | [HubSpot Data Sync conflict](#19-hubspot-data-sync-conflict) |
 | "browser froze" / "Chrome stuck" | [Stuck permission dialog](#8-stuck-permission-dialog) |
@@ -646,6 +702,6 @@ Is PhoneBurner status "Connected" in the popup header?
 
 ---
 
-**Last updated:** 2026-06-24
-**Documents features through extension version:** 0.6.4 (some features may not appear in older installed builds)
+**Last updated:** 2026-06-25
+**Documents features through extension version:** 0.7.0 (some features may not appear in older installed builds)
 **Maintained by:** PhoneBurner engineering. To request changes, contact the extension team.

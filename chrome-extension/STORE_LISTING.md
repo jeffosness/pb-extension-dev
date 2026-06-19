@@ -111,8 +111,10 @@ This extension is ideal for:
 • PhoneBurner dial sessions support up to 500 contacts
 • Features may vary slightly by CRM platform
 
-🆕 What's New in v0.6.4
+🆕 What's New in v0.7.0
 
-✨ HubSpot Task Queue dialing: Open any HubSpot tasks page and launch a dial session for all contacts associated with the visible tasks. Tasks are automatically marked complete in HubSpot as you finish each call. Check specific task rows to dial just those, or leave none checked to dial the entire visible queue.
+✨ New production backend: PhoneBurner Dial Session Companion has migrated to a new production backend with better reliability and a stronger foundation for upcoming features.
 
-🔐 HubSpot users will see a one-time "Reconnect HubSpot" prompt the first time they open the Task Queue feature — this grants a new permission required for task completion. Reconnect takes about 30 seconds.
+🔐 One-time reconnect required: after updating, you'll be prompted to paste your PhoneBurner Personal Access Token again and reconnect any CRM integrations you use (HubSpot, Close, Apollo). The reconnect takes about 2 minutes per connection.
+
+Your data is untouched — contacts, lists, call history, and CRM records all remain in place. Only the extension's authentication needs refreshing on the new backend.
