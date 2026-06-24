@@ -58,6 +58,7 @@ The extension supports two integration levels. The level determines which featur
 | "Follow widget not showing" / "No overlay" / "Widget gone" | [Follow widget missing](#9-follow-widget-missing) |
 | "Follow widget stuck" / "Not updating" / "Wrong contact shown" | [Follow widget not updating](#10-follow-widget-not-updating) |
 | "HubSpot OAuth fails" / "Can't connect HubSpot" | [HubSpot OAuth issues](#11-hubspot-oauth-issues) |
+| "Admin needs to grant App Marketplace access" / "can't install HubSpot app" / "no permission" | [HubSpot OAuth issues](#11-hubspot-oauth-issues) |
 | "Close OAuth fails" / "Can't connect Close" | [Close OAuth issues](#12-close-oauth-issues) |
 | "Apollo OAuth fails" / "Can't connect Apollo" | [Apollo OAuth issues](#13-apollo-oauth-issues) |
 | "HubSpot lists not loading" / Lists missing / Wrong count | [HubSpot list problems](#14-hubspot-list-problems) |
@@ -279,7 +280,33 @@ The extension supports two integration levels. The level determines which featur
 
 ## 11. HubSpot OAuth Issues
 
-**Symptom:** Customer clicks "Connect HubSpot", a HubSpot consent screen appears, but after approving they see an error or aren't connected.
+### Symptom: "You don't have permission to install this app" / admin needs to grant App Marketplace access
+
+**What's happening:** The HubSpot user trying to Connect HubSpot doesn't have **App Marketplace access** in their HubSpot user permissions. This is HubSpot's safeguard against rank-and-file users installing third-party apps that could modify CRM data — our extension requests `crm.objects.contacts.write` (used by the Task Queue feature) which triggers this gate.
+
+The affected user **cannot reach the OAuth consent screen at all** until their HubSpot admin grants this permission.
+
+**Resolution — a HubSpot admin (not the affected user) needs to do this:**
+
+1. In HubSpot, click the **Settings** gear icon (top right)
+2. Navigate to **Users & Teams** and click the affected user's name
+3. Click the **Access** tab on the user's profile
+4. Click **Edit Permissions**
+5. In the left sidebar, expand **Account** and click **Settings access**
+6. Find **App Marketplace access** and toggle it **on**
+7. Click **Save** (top right of the page)
+
+Once saved, the affected user retries the **Connect HubSpot** flow in the extension and the consent screen should appear normally.
+
+**Alternative if the admin doesn't want to grant App Marketplace access to individual users:**
+
+The admin can install the app on the account themselves by running the OAuth flow from their own HubSpot user. The OAuth grant is at the portal level, so other users in the same portal can then use the existing connection without each needing App Marketplace access.
+
+**Why this happens:** The extension requests `crm.objects.contacts.write` (needed for HubSpot Task Queue auto-completion) and several read scopes. HubSpot gates any app requesting write scopes behind the App Marketplace permission. This is not something we can bypass from our side — it's an org-level HubSpot security control.
+
+---
+
+### Symptom: Consent screen appears but connection fails after approving
 
 **Likely causes:**
 - Customer denied the consent request.
@@ -291,7 +318,7 @@ The extension supports two integration levels. The level determines which featur
 1. Open Settings → click **Disconnect HubSpot** if shown.
 2. Log in fresh to the correct HubSpot portal in a separate tab.
 3. Return to the extension popup → Settings → click **Connect HubSpot**.
-4. Approve all requested scopes (contacts, companies, deals, lists — read access only).
+4. Approve all requested scopes (contacts, companies, deals, lists, and contacts write for Task Queue).
 5. Make sure Chrome isn't blocking the OAuth popup window.
 
 **Escalate if:** Customer follows all steps, sees "Authorization failed" or a blank page after approving. Ask: which HubSpot account, the exact error text/URL, and screenshots.
@@ -619,6 +646,6 @@ Is PhoneBurner status "Connected" in the popup header?
 
 ---
 
-**Last updated:** 2026-06-11
+**Last updated:** 2026-06-24
 **Documents features through extension version:** 0.6.4 (some features may not appear in older installed builds)
 **Maintained by:** PhoneBurner engineering. To request changes, contact the extension team.
