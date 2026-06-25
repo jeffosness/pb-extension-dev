@@ -115,6 +115,8 @@ This extension is ideal for:
 
 ✨ New production backend: PhoneBurner Dial Session Companion has migrated to a new production backend with better reliability and a stronger foundation for upcoming features.
 
-🔐 One-time reconnect required: after updating, you'll be prompted to paste your PhoneBurner Personal Access Token again and reconnect any CRM integrations you use (HubSpot, Close, Apollo). The reconnect takes about 2 minutes per connection.
+🔄 For most users this is invisible — your PhoneBurner, HubSpot, and Apollo connections carry over automatically. No action required.
 
-Your data is untouched — contacts, lists, call history, and CRM records all remain in place. Only the extension's authentication needs refreshing on the new backend.
+🔐 Close users: you'll see a one-time reconnect prompt the next time you launch a Close dial session. Takes about 30 seconds.
+
+Your data is untouched throughout — contacts, lists, call history, and CRM records all stay where they are.

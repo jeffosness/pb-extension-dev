@@ -20,8 +20,9 @@ const PB_CHANGELOG = {
     title: "What's New in v0.7.0",
     items: [
       "We've migrated to a new production backend with better reliability and room to grow",
-      "One-time reconnect required: you'll be asked to paste your PhoneBurner Personal Access Token and reconnect any CRMs you use (HubSpot, Close, Apollo) — takes about 2 minutes per connection",
-      "Your data is untouched — contacts, lists, call history, and CRM records all stay in place. Only the extension's authentication needs refreshing on the new backend"
+      "Most users: nothing to do! Your PhoneBurner, HubSpot, and Apollo connections carry over automatically",
+      "Close users: you'll see a one-time reconnect prompt the next time you launch a Close dial session — takes about 30 seconds",
+      "Your data is untouched throughout — contacts, lists, call history, and CRM records all stay where they are"
     ]
   },
   "0.6.4": {
