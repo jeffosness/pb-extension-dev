@@ -6,9 +6,19 @@ importScripts("crm_config.js");
 // Backend env — runtime toggle support.
 // Each extension version pins a DEFAULT_ENV. A user-set value in
 // chrome.storage.local.pb_env_override overrides the default for that profile.
-// In v0.6.3 the default is "dev" because all live customers are still on the
-// extension-dev backend; this will flip to "prod" in a future version once the
-// prod backend is stood up and validated.
+//
+// In v0.7.0 the default flipped from "dev" to "prod" — the prod backend is now
+// the canonical home for all customer tokens and dial activity. Existing
+// customers auto-updating to v0.7.0 have no pb_env_override set, so they
+// follow the new default and land on prod. Their previous tokens were on
+// dev and don't carry over; the popup naturally surfaces the connect prompts
+// on first open. This is the Phase 4 cutover trigger — see the v0.7.0
+// changelog entry and KB section "Reconnecting after the v0.7.0 upgrade" for
+// the customer-facing details.
+//
+// The dev backend remains online for internal testing (toggleable via
+// Settings → Developer Options) and to serve any in-flight session whose
+// webhooks were already pointed at dev at session creation time.
 //
 // BASE_URL stays as a mutable module-level variable so existing call sites work
 // unchanged. The value is eager-loaded from storage on service worker wake-up
@@ -18,7 +28,7 @@ const BASE_URLS = {
   dev: "https://extension-dev.phoneburner.biz",
   prod: "https://extension.phoneburner.biz",
 };
-const DEFAULT_ENV = "dev";
+const DEFAULT_ENV = "prod";
 let BASE_URL = BASE_URLS[DEFAULT_ENV];
 
 chrome.storage.local.get(["pb_env_override"]).then((res) => {

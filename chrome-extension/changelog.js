@@ -16,6 +16,15 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.7.0": {
+    title: "What's New in v0.7.0",
+    items: [
+      "We've migrated to a new production backend with better reliability and room to grow",
+      "Most users: nothing to do! Your PhoneBurner, HubSpot, and Apollo connections carry over automatically",
+      "Close users: you'll see a one-time reconnect prompt the next time you launch a Close dial session — takes about 30 seconds",
+      "Your data is untouched throughout — contacts, lists, call history, and CRM records all stay where they are"
+    ]
+  },
   "0.6.4": {
     title: "What's New in v0.6.4",
     items: [
