@@ -499,6 +499,36 @@ After all of the above, walk through this list. Each step should succeed cleanly
 
 ---
 
+## Migration: dev → prod cutover (Phase 4)
+
+When the project rolls customers from the dev backend to the prod backend (the Phase 4 cutover triggered by the v0.7.0 extension release), tokens can be **pre-positioned** on prod ahead of the auto-update so most customers experience a seamless cutover.
+
+See [`scripts/migrate-dev-to-prod-tokens.sh`](scripts/migrate-dev-to-prod-tokens.sh). What it does:
+
+| Migrated | Why it works |
+|---|---|
+| PhoneBurner PATs | Opaque tokens, env-agnostic |
+| HubSpot OAuth tokens | PB-portal HubSpot app supports both dev + prod redirect URIs — same `client_id`, tokens interchangeable |
+| Apollo OAuth tokens | Single Apollo app with both dev + prod redirect URIs registered |
+| `user_settings/` | Per-user prefs (phone preference, etc.) — preserves customer's existing setup |
+| `daily_stats/` | Per-user operational metrics — preserves dashboard continuity |
+| NOT Close tokens | Dev and prod use **separate** Close OAuth apps. Close doesn't support multi-URI per app. Customers using Close re-OAuth once on prod (~30 seconds) |
+| NOT `sessions/` | Active dial sessions; webhooks point at dev; let them drain naturally |
+
+**When to run:** AFTER PR #110 (v0.7.0 prod-default flip) merges and the `prod-v*` tag deploys, BEFORE submitting the v0.7.0 zip to the Chrome Web Store. Sequence:
+
+```bash
+# 1. Dry run to see counts — no changes made
+sudo bash /opt/pb-extension-dev/scripts/migrate-dev-to-prod-tokens.sh --dry-run
+
+# 2. If counts look right, do the migration for real
+sudo bash /opt/pb-extension-dev/scripts/migrate-dev-to-prod-tokens.sh
+```
+
+Safe to re-run: `rsync --ignore-existing` skips anything already on prod (e.g., your own env-toggle testing tokens), and net-new dev files get migrated. Designed to be idempotent.
+
+---
+
 ## Migration: moving to a new server
 
 When the time comes to move off the current VPS — whether to a larger box, into AWS, or anywhere else — the migration is:
