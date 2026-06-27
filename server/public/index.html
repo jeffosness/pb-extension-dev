@@ -235,15 +235,13 @@
     .split--reverse { direction: rtl; }
     .split--reverse > * { direction: ltr; }
     .split__visual {
-      background: linear-gradient(135deg, var(--orange-soft), #fff);
-      border: 1px solid var(--border);
       border-radius: var(--radius-lg);
-      padding: 32px;
-      min-height: 320px;
-      display: grid; place-items: center;
-      color: var(--muted);
-      font-size: 0.9rem;
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
     }
+    .split__visual img { width: 100%; height: auto; display: block; }
     @media (max-width: 900px) {
       .split { grid-template-columns: 1fr; }
       .split--reverse { direction: ltr; }
@@ -538,7 +536,7 @@
         <div class="feature-card">
           <div class="feature-card__icon">⚡</div>
           <h3>Task Queue dialing</h3>
-          <p>Dial through your HubSpot task queue and have each task auto-complete the moment the call ends. Built for the way SDR teams actually work.</p>
+          <p>Dial through your HubSpot task queue and have each task close the moment the call ends. Built for the way SDR teams actually work.</p>
         </div>
       </div>
     </div>
@@ -553,16 +551,16 @@
         <div>
           <span class="eyebrow">Live Follow Widget</span>
           <h2>Your CRM follows along on every call</h2>
-          <p class="lead">As PhoneBurner dials, the extension's overlay shows the active contact, the live call timer, and session stats — and it auto-navigates your CRM tab to the right record so you're never digging for context mid-conversation.</p>
+          <p class="lead">As PhoneBurner dials, the extension's overlay shows the active contact, the live call timer, and session stats — and it brings your CRM tab to the right record so you're never digging for context mid-conversation.</p>
           <ul style="margin-top:18px;color:var(--ink-2);padding-left:1.1em;">
-            <li>Auto-navigates to the active contact's record</li>
+            <li>Brings your CRM tab to the active contact's record</li>
             <li>Tracks current call duration, dispositions, and session totals</li>
             <li>Expand or minimize on demand — never in the way</li>
             <li>Zero setup — works the moment a session starts</li>
           </ul>
         </div>
         <div class="split__visual">
-          <span>Screenshot: Follow widget overlay on a HubSpot record page<br /><em style="font-size:0.85rem;">(asset to be added)</em></span>
+          <img src="/images/hs-follow-widget.png" alt="The Follow widget overlaid on a HubSpot contact record showing an active PhoneBurner dial session with appointment outcome" loading="lazy" />
         </div>
       </div>
     </div>
@@ -594,7 +592,7 @@
           </tr>
           <tr>
             <td><strong>Dialing style</strong></td>
-            <td class="pb-col">Automatic, one-after-another</td>
+            <td class="pb-col">Power dialing, one-after-another</td>
             <td>One call at a time, manual</td>
           </tr>
           <tr>
@@ -603,7 +601,7 @@
             <td>Plan limits apply</td>
           </tr>
           <tr>
-            <td><strong>1-click voicemail drop</strong></td>
+            <td><strong>Pre-recorded voicemail send (one click)</strong></td>
             <td class="pb-col yes">✓</td>
             <td class="no">—</td>
           </tr>
@@ -613,7 +611,7 @@
             <td class="no">—</td>
           </tr>
           <tr>
-            <td><strong>Activity auto-logged to CRM</strong></td>
+            <td><strong>Call activities logged to your CRM</strong></td>
             <td class="pb-col yes">✓</td>
             <td>Limited / manual</td>
           </tr>
@@ -644,20 +642,20 @@
         <div class="crm-detail__video">
           <iframe
             src="https://www.youtube-nocookie.com/embed/eK0gdlihURo?rel=0"
-            title="Dialing from HubSpot Tasks with auto-complete — PhoneBurner Dial Session Companion"
+            title="Dialing from HubSpot Tasks with task close-on-call-end — PhoneBurner Dial Session Companion"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowfullscreen
             loading="lazy"></iframe>
         </div>
-        <p class="muted" style="font-size:0.92rem;margin:-8px 0 16px;">▲ Watch the HubSpot Task Queue dialer in action — launch from a tasks view, dial through, watch tasks auto-close.</p>
+        <p class="muted" style="font-size:0.92rem;margin:-8px 0 16px;">▲ Watch the HubSpot Task Queue dialer in action — launch from a tasks view, dial through, watch tasks close as each call ends.</p>
         <ul>
           <li><strong>Launch from any list view</strong> — contacts, companies, or deals. Select records, click Launch.</li>
           <li><strong>Launch from saved HubSpot lists</strong> — pick from your existing saved lists and dial up to 500 records in one session, with no CSV export.</li>
           <li><strong>Launch from your HubSpot Task Queue</strong> — open any tasks view (queues, filtered views, due-today, custom), pick which task rows to dial (or dial them all), and run the queue through PhoneBurner.</li>
-          <li><strong>Auto-complete tasks as you dial</strong> — when a call ends, the originating HubSpot task is marked Completed automatically. If the contact has multiple open call tasks, all of them get closed on a single dial.</li>
-          <li><strong>Auto-discovers your phone fields</strong> — including custom phone properties — and lets you set a preferred primary phone in Settings.</li>
-          <li><strong>Follow widget auto-navigates to the active contact's record</strong> as PhoneBurner moves through the session.</li>
-          <li><strong>Call activities log automatically</strong> via the PhoneBurner ↔ HubSpot integration in your PhoneBurner account.</li>
+          <li><strong>Close tasks as you dial</strong> — when a call ends, the originating HubSpot task is marked Completed in your HubSpot account. If the contact has multiple open call tasks, all of them get closed on a single dial.</li>
+          <li><strong>Discovers your phone fields</strong> — including custom phone properties — and lets you set a preferred primary phone in Settings.</li>
+          <li><strong>Follow widget keeps your HubSpot tab in sync with the active contact's record</strong> as PhoneBurner moves through the session.</li>
+          <li><strong>Call activities log to HubSpot</strong> via the PhoneBurner ↔ HubSpot integration in your PhoneBurner account.</li>
           <li>OAuth authentication — connect securely with one click; no copy-pasting tokens for HubSpot.</li>
         </ul>
         <a class="crm-link" href="https://www.phoneburner.com/integrations/hubspot" target="_blank" rel="noopener">See the full HubSpot integration on phoneburner.com →</a>
@@ -667,10 +665,10 @@
         <h3>Close <span class="level-badge level-badge--3">Level 3 · Full API</span></h3>
         <ul>
           <li>Launch dial sessions from Close <strong>contacts or leads</strong> — works on both the Contacts page and the Leads page</li>
-          <li>Automatic phone and email fetching via the Close API — no scraping</li>
+          <li>Phone and email fetching via the Close API — no scraping</li>
           <li><strong>Call activities logged back to Close</strong>, including disposition, custom outcome, and recording link</li>
           <li><strong>Note activity logged separately</strong> — any notes typed during the call also appear as a stand-alone Note on the lead, in addition to the call activity itself, so they're easy to find later</li>
-          <li>Custom Close Outcomes auto-matched (case-insensitive) or created from PhoneBurner statuses — no Close-side setup required</li>
+          <li>Custom Close Outcomes matched by name (case-insensitive) or created from PhoneBurner statuses — no Close-side setup required</li>
           <li>OAuth authentication — connect securely with one click</li>
         </ul>
       </article>
@@ -681,9 +679,9 @@
           <li>Launch dial sessions from the Apollo People page — select contacts and dial</li>
           <li>Dial from sequence call tasks — pick a sequence, filter by due tasks, power-dial</li>
           <li>Filter tasks by due today, overdue, or all open</li>
-          <li>Auto-navigate to Apollo contact profiles during calls</li>
+          <li>Navigate to Apollo contact profiles during calls — the Follow widget keeps the Apollo tab in sync</li>
           <li>OAuth authentication — connect securely with one click</li>
-          <li><em>Note: automatic call-activity logging back to Apollo is on the roadmap and ships when there's sufficient customer demand. Today, PhoneBurner's main app retains the full call record.</em></li>
+          <li><em>Note: call-activity logging back to Apollo is on the roadmap and ships when there's sufficient customer demand. Today, PhoneBurner's main app retains the full call record.</em></li>
         </ul>
       </article>
 
@@ -786,8 +784,8 @@
             <p>It depends on the CRM:</p>
             <ul>
               <li><strong>HubSpot:</strong> Call activities log via the existing PhoneBurner ↔ HubSpot integration in your PhoneBurner account (activate it once under PhoneBurner Settings → Integrations → HubSpot).</li>
-              <li><strong>Close:</strong> Call activities log automatically through the extension itself — including disposition, custom outcome, and recording link. Any notes typed during the call also appear as a separate Note activity on the lead.</li>
-              <li><strong>Apollo:</strong> Automatic activity logging back to Apollo isn't supported yet — it's on the roadmap and ships when there's sufficient customer demand. PhoneBurner's main app keeps the full call record either way.</li>
+              <li><strong>Close:</strong> Call activities log to Close through the extension itself — including disposition, custom outcome, and recording link. Any notes typed during the call also appear as a separate Note activity on the lead.</li>
+              <li><strong>Apollo:</strong> Activity logging back to Apollo isn't supported yet — it's on the roadmap and ships when there's sufficient customer demand. PhoneBurner's main app keeps the full call record either way.</li>
               <li><strong>Salesforce, Pipedrive, and other CRMs:</strong> Call activity logging from this extension isn't currently supported for those CRMs. PhoneBurner's main app retains the full call records. If you want fully native Salesforce activity logging, PhoneBurner has a <a href="https://www.phoneburner.com/integrations/salesforce" target="_blank" rel="noopener">dedicated Salesforce package</a> that's built for that.</li>
             </ul>
           </div>
