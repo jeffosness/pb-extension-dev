@@ -1,91 +1,170 @@
 <!doctype html>
 <html lang="en">
 <head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width,initial-scale=1" />
-	<title>Privacy Policy — PhoneBurner Dial Session Companion</title>
-	<style>
-		body{font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f7f7f7;color:#111;margin:0;padding:0}
-		.container{max-width:820px;margin:48px auto;background:#fff;padding:28px 32px;border-radius:8px;box-shadow:0 6px 18px rgba(16,24,40,0.06)}
-		h1{font-size:1.5rem;margin:0 0 8px}
-		p{margin:0 0 12px;line-height:1.5}
-		h2{font-size:1.05rem;margin-top:20px}
-		ul,ol{margin-left:1.1rem}
-		.muted{color:#57606a;font-size:0.95rem}
-		footer{margin-top:28px;font-size:0.9rem;color:#5b6b76}
-		a{color:#0b69ff}
-	</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Privacy Policy — PhoneBurner Dial Session Companion</title>
+  <style>
+    :root {
+      --orange: #FF6B35;
+      --orange-dark: #E5561F;
+      --ink: #1a1a1a;
+      --ink-2: #404040;
+      --muted: #6b7280;
+      --bg: #ffffff;
+      --bg-alt: #f8f9fb;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: var(--bg-alt);
+      color: var(--ink);
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 820px;
+      margin: 40px auto;
+      background: #fff;
+      padding: 36px 40px;
+      border-radius: 14px;
+      box-shadow: 0 6px 24px rgba(17,24,39,0.06);
+      border: 1px solid var(--border);
+    }
+    .topnav {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 20px 40px 0;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-weight: 800; }
+    .brand:hover { text-decoration: none; }
+    .brand__mark {
+      width: 32px; height: 32px;
+      background: linear-gradient(135deg, var(--orange), var(--orange-dark));
+      border-radius: 8px;
+      display: grid; place-items: center;
+      color: #fff; font-weight: 800;
+    }
+    .brand__text { font-size: 0.95rem; }
+    .brand__text small { display: block; font-size: 0.7rem; color: var(--muted); font-weight: 500; margin-top: -2px; }
+    a.back { color: var(--orange-dark); font-weight: 600; text-decoration: none; font-size: 0.92rem; }
+    a.back:hover { text-decoration: underline; }
+    h1 { font-size: 1.8rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+    h2 { font-size: 1.15rem; margin: 28px 0 10px; }
+    p { margin: 0 0 12px; color: var(--ink-2); }
+    .updated { color: var(--muted); font-size: 0.92rem; margin-bottom: 18px; }
+    ul, ol { margin: 0 0 16px 1.1em; padding: 0; color: var(--ink-2); }
+    li { margin-bottom: 8px; }
+    a { color: var(--orange-dark); }
+    .callout {
+      background: #fff7f3;
+      border: 1px solid #fad6c4;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      color: var(--ink);
+      font-size: 0.95rem;
+    }
+    footer { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; }
+  </style>
 </head>
 <body>
-	<main class="container">
-		<h1>Privacy Policy</h1>
-		<p class="muted">Last updated: January 2026</p>
 
-		<h2>Overview</h2>
-		<p>The PhoneBurner Dial Session Companion Chrome Extension helps users launch PhoneBurner dial sessions from supported CRM platforms and follow calls in real time. The extension runs only when a user initiates an action.</p>
+  <div class="topnav">
+    <a class="brand" href="/">
+      <div class="brand__mark">📞</div>
+      <div class="brand__text">
+        PhoneBurner
+        <small>Dial Session Companion</small>
+      </div>
+    </a>
+    <a class="back" href="/">← Back to homepage</a>
+  </div>
 
-		<h2>Information We Collect</h2>
-		<p>The extension may access the following data only when the user initiates an action (for example, launching a dial session):</p>
+  <main class="container">
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: June 2026</p>
 
-		<ol>
-			<li>
-				<strong>Personally Identifiable Information</strong>
-				<ul>
-					<li>Contact names</li>
-					<li>Phone numbers</li>
-					<li>Email addresses</li>
-				</ul>
-				<p>This information is read from the user's CRM to create and follow PhoneBurner dial sessions. The extension does not independently create, enrich, or sell this data.</p>
-			</li>
+    <h2>Overview</h2>
+    <p>The PhoneBurner Dial Session Companion Chrome Extension helps PhoneBurner customers launch PhoneBurner dial sessions from supported CRM platforms and follow calls in real time. The extension runs only when a user initiates an action.</p>
 
-			<li>
-				<strong>Authentication Information</strong>
-				<p>A PhoneBurner Personal Access Token (PAT). This token is used to authenticate with PhoneBurner APIs and is stored locally in the user's browser.</p>
-			</li>
+    <h2>Information We Collect</h2>
+    <p>The extension may access the following data only when the user initiates an action (for example, launching a dial session):</p>
 
-			<li>
-				<strong>Website Content</strong>
-				<p>CRM page content necessary to detect selected records or extract contact details. The extension reads only the minimum content required to perform the requested action.</p>
-			</li>
-		</ol>
+    <ol>
+      <li>
+        <strong>Personally identifiable information from your CRM</strong>
+        <ul>
+          <li>Contact names</li>
+          <li>Phone numbers</li>
+          <li>Email addresses</li>
+        </ul>
+        <p>This information is read from your CRM to create and follow PhoneBurner dial sessions. The extension does not independently create, enrich, or sell this data.</p>
+      </li>
 
-		<h2>How We Use Information</h2>
-		<p>Collected information is used only to:</p>
-		<ul>
-			<li>Launch PhoneBurner dial sessions</li>
-			<li>Display the currently called contact during an active dial session</li>
-			<li>Provide real-time call follow-along functionality inside supported CRMs</li>
-		</ul>
+      <li>
+        <strong>Authentication information</strong>
+        <p>
+          A PhoneBurner Personal Access Token (PAT), and (for Level 3 CRMs) OAuth tokens that authorize the extension to read your CRM data.
+        </p>
+        <div class="callout">
+          <strong>How and where these tokens are stored:</strong>
+          When you save your PAT or connect a CRM, the credential is transmitted over HTTPS to PhoneBurner-managed servers and stored with strict owner-only file permissions (mode 0600). <strong>Your browser does not keep a copy of these tokens.</strong> The browser stores only an anonymous lookup key (a random UUID) that we use to retrieve the token server-side at the moment a dial session is created. A compromised browser profile or another extension cannot read your PhoneBurner credentials.
+        </div>
+      </li>
 
-		<h2>Data Storage</h2>
-		<p>Authentication tokens and user preferences are stored locally using Chrome's storage APIs. Session data may be temporarily processed by PhoneBurner servers to support real-time call tracking. The extension does not maintain long-term user data storage.</p>
+      <li>
+        <strong>Website content</strong>
+        <p>CRM page content necessary to detect selected records or extract contact details. The extension reads only the minimum content required to perform the requested action, and only at the moment you initiate that action.</p>
+      </li>
+    </ol>
 
-		<h2>What We Do Not Do</h2>
-		<ul>
-			<li>We do not sell, rent, or trade user data</li>
-			<li>We do not track browsing history</li>
-			<li>We do not monitor keystrokes, clicks, or user activity</li>
-			<li>We do not collect health, financial, or location data</li>
-			<li>We do not use data for advertising or analytics</li>
-		</ul>
+    <h2>How We Use Information</h2>
+    <p>Collected information is used only to:</p>
+    <ul>
+      <li>Launch PhoneBurner dial sessions</li>
+      <li>Display the currently-called contact during an active dial session</li>
+      <li>Provide real-time call follow-along functionality inside supported CRMs</li>
+      <li>Log call activities back to your CRM (where supported by the integration — HubSpot, Close, Apollo)</li>
+    </ul>
 
-		<h2>Data Sharing</h2>
-		<p>Data is shared only with PhoneBurner services as required to create and manage dial sessions. No data is shared with third parties outside of this purpose.</p>
+    <h2>Data Storage</h2>
+    <ul>
+      <li><strong>Tokens (PAT and OAuth):</strong> stored on PhoneBurner-managed servers with owner-only file permissions. Not stored in your browser.</li>
+      <li><strong>Browser-local data:</strong> the extension keeps an anonymous client identifier (UUID) and your user preferences (e.g., preferred phone field) in Chrome's local storage. No personally identifiable contact data is persisted in browser storage.</li>
+      <li><strong>Session data:</strong> active dial session state is temporarily processed by PhoneBurner servers to support real-time call tracking. Sessions are cleaned up after they end.</li>
+    </ul>
 
-		<h2>User Control</h2>
-		<ul>
-			<li>The extension operates only when the user interacts with it.</li>
-			<li>Users can disconnect their PhoneBurner account at any time via the extension UI.</li>
-			<li>Removing the extension stops all data access from the browser.</li>
-		</ul>
+    <h2>What We Do Not Do</h2>
+    <ul>
+      <li>We do not sell, rent, or trade user data</li>
+      <li>We do not track browsing history</li>
+      <li>We do not monitor keystrokes, clicks, or user activity</li>
+      <li>We do not collect health, financial, or location data</li>
+      <li>We do not use data for advertising or third-party analytics</li>
+    </ul>
 
-		<h2>Changes to This Policy</h2>
-		<p>This policy may be updated to reflect changes in functionality or compliance requirements. Updates will be posted on this page.</p>
+    <h2>Data Sharing</h2>
+    <p>Data is shared only with PhoneBurner services (and, for Level 3 CRMs, with the CRM's API on your behalf, using the OAuth tokens you authorized) as required to create and manage dial sessions. No data is shared with third parties outside of this purpose.</p>
 
-		<footer>
-			<h2>Contact</h2>
-			<p>For questions about this privacy policy or the extension, contact: <a href="mailto:jeffosness@gmail.com">jeffosness@gmail.com</a></p>
-		</footer>
-	</main>
+    <h2>User Control</h2>
+    <ul>
+      <li>The extension operates only when you interact with it.</li>
+      <li>You can disconnect your PhoneBurner account or any connected CRM at any time via the extension's Settings tab. Disconnecting deletes the corresponding server-side token immediately.</li>
+      <li>Removing the extension from Chrome stops all browser-side access. To also delete server-side tokens, click Disconnect in the extension Settings before uninstalling.</li>
+    </ul>
+
+    <h2>Changes to This Policy</h2>
+    <p>This policy may be updated to reflect changes in functionality or compliance requirements. Updates will be posted on this page.</p>
+
+    <footer>
+      <h2 style="margin-top:0;">Contact</h2>
+      <p style="margin-bottom:0;">For questions about this privacy policy or the extension, contact: <a href="mailto:jeff@phoneburner.com">jeff@phoneburner.com</a></p>
+    </footer>
+  </main>
+
 </body>
 </html>
