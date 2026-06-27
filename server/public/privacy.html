@@ -112,7 +112,7 @@
         </p>
         <div class="callout">
           <strong>How and where these tokens are stored:</strong>
-          When you save your PAT or connect a CRM, the credential is transmitted over HTTPS to PhoneBurner-managed servers and stored with strict owner-only file permissions (mode 0600). <strong>Your browser does not keep a copy of these tokens.</strong> The browser stores only an anonymous lookup key (a random UUID) that we use to retrieve the token server-side at the moment a dial session is created. A compromised browser profile or another extension cannot read your PhoneBurner credentials.
+          When you save your PAT or connect a CRM, the credential is transmitted over HTTPS to the extension's backend servers and stored with strict owner-only file permissions (mode 0600). <strong>Your browser does not keep a copy of these tokens.</strong> The browser stores only an anonymous lookup key (a random UUID) that we use to retrieve the token server-side at the moment a dial session is created. A compromised browser profile or another extension cannot read your PhoneBurner credentials.
         </div>
       </li>
 
@@ -133,9 +133,9 @@
 
     <h2>Data Storage</h2>
     <ul>
-      <li><strong>Tokens (PAT and OAuth):</strong> stored on PhoneBurner-managed servers with owner-only file permissions. Not stored in your browser.</li>
+      <li><strong>Tokens (PAT and OAuth):</strong> stored on the extension's backend servers with owner-only file permissions. Not stored in your browser.</li>
       <li><strong>Browser-local data:</strong> the extension keeps an anonymous client identifier (UUID) and your user preferences (e.g., preferred phone field) in Chrome's local storage. No personally identifiable contact data is persisted in browser storage.</li>
-      <li><strong>Session data:</strong> active dial session state is temporarily processed by PhoneBurner servers to support real-time call tracking. Sessions are cleaned up after they end.</li>
+      <li><strong>Session data:</strong> active dial session state is temporarily processed by the extension's backend to support real-time call tracking. Sessions are cleaned up after they end.</li>
     </ul>
 
     <h2>What We Do Not Do</h2>
