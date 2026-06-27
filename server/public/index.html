@@ -6,7 +6,7 @@
   <title>PhoneBurner Dial Session Companion — Dial from your CRM</title>
   <meta name="description" content="The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, and more. Reach 4x more people per hour without leaving your CRM." />
   <meta property="og:title" content="PhoneBurner Dial Session Companion — Dial from your CRM" />
-  <meta property="og:description" content="Free Chrome extension that turns your CRM into a power-dialing workstation. Works with HubSpot, Close, Apollo, Salesforce, Pipedrive, Zoho, and more." />
+  <meta property="og:description" content="Free Chrome extension that turns your CRM into a power-dialing workstation. Works with HubSpot, Close, Apollo, Salesforce, Pipedrive, and more." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="https://extension.phoneburner.biz/og-image.png" />
 
@@ -197,8 +197,6 @@
     .crm-pill[data-crm="apollo"]    .crm-pill__dot { background: #0095ff; }
     .crm-pill[data-crm="sf"]        .crm-pill__dot { background: #00a1e0; }
     .crm-pill[data-crm="pipedrive"] .crm-pill__dot { background: #1a1a1a; }
-    .crm-pill[data-crm="zoho"]      .crm-pill__dot { background: #e42527; }
-    .crm-pill[data-crm="monday"]    .crm-pill__dot { background: #6161ff; }
     .crm-pill[data-crm="more"]      .crm-pill__dot { background: var(--orange); }
 
     /* ------------------------------------------------------------------ */
@@ -301,6 +299,16 @@
     .crm-detail ul { margin: 12px 0 0; padding-left: 1.1em; }
     .crm-detail li { margin-bottom: 6px; color: var(--ink-2); }
     .crm-detail .crm-link { display: inline-block; margin-top: 12px; font-weight: 600; }
+    .crm-detail__video {
+      margin: 18px 0 22px;
+      max-width: 720px;
+      aspect-ratio: 16 / 9;
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow-md);
+      background: #000;
+    }
+    .crm-detail__video iframe { width: 100%; height: 100%; border: 0; display: block; }
 
     /* ------------------------------------------------------------------ */
     /* Setup steps                                                          */
@@ -458,11 +466,11 @@
           <span class="eyebrow">Free Chrome Extension</span>
           <h1>Dial from your CRM.<br /><span class="accent">Stay in your CRM.</span></h1>
           <p class="hero__sub">
-            The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, Zoho, and more. Reach <strong>4× more people per hour</strong> without leaving your CRM tab.
+            The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, and more. Reach <strong>4× more people per hour</strong> without leaving your CRM tab.
           </p>
           <div class="hero__ctas">
             <a class="btn btn--primary btn--lg" href="https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj" target="_blank" rel="noopener">Install Free on Chrome Web Store ↗</a>
-            <a class="btn btn--secondary btn--lg" href="#demo">Watch 90-second demo</a>
+            <a class="btn btn--secondary btn--lg" href="#hero-video">Watch the demo</a>
           </div>
           <div class="hero__trust">
             <span class="stars">★★★★★</span>
@@ -497,10 +505,13 @@
         <a class="crm-pill" data-crm="apollo"    href="#crm-apollo"><span class="crm-pill__dot"></span>Apollo.io</a>
         <a class="crm-pill" data-crm="sf"        href="#crm-sf"><span class="crm-pill__dot"></span>Salesforce</a>
         <a class="crm-pill" data-crm="pipedrive" href="#crm-pipedrive"><span class="crm-pill__dot"></span>Pipedrive</a>
-        <a class="crm-pill" data-crm="zoho"      href="#crm-zoho"><span class="crm-pill__dot"></span>Zoho</a>
-        <a class="crm-pill" data-crm="monday"    href="#crm-monday"><span class="crm-pill__dot"></span>monday.com</a>
         <a class="crm-pill" data-crm="more"      href="#crm-more"><span class="crm-pill__dot"></span>Many more</a>
       </div>
+      <p class="muted" style="text-align:center;margin-top:24px;font-size:0.95rem;max-width:680px;margin-left:auto;margin-right:auto;">
+        <strong>Looking for Zoho or monday.com?</strong> PhoneBurner has dedicated integrations for those — see
+        <a href="https://www.phoneburner.com/integrations/zoho-crm" target="_blank" rel="noopener">Zoho CRM</a> and
+        <a href="https://www.phoneburner.com/integrations/monday" target="_blank" rel="noopener">monday.com</a>.
+      </p>
     </div>
   </section>
 
@@ -629,12 +640,25 @@
 
       <article class="crm-detail" id="crm-hubspot">
         <h3>HubSpot <span class="level-badge level-badge--3">Level 3 · Full API</span></h3>
+        <p style="color:var(--ink-2);margin-bottom:14px;">The deepest integration we offer. Built for high-volume SDR and account-management teams running their entire pipeline through HubSpot.</p>
+        <div class="crm-detail__video">
+          <iframe
+            src="https://www.youtube-nocookie.com/embed/eK0gdlihURo?rel=0"
+            title="Dialing from HubSpot Tasks with auto-complete — PhoneBurner Dial Session Companion"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowfullscreen
+            loading="lazy"></iframe>
+        </div>
+        <p class="muted" style="font-size:0.92rem;margin:-8px 0 16px;">▲ Watch the HubSpot Task Queue dialer in action — launch from a tasks view, dial through, watch tasks auto-close.</p>
         <ul>
-          <li>Launch from any contact, company, or deal list — pick records and dial</li>
-          <li>Launch from <strong>saved HubSpot lists</strong> (up to 500 records per session)</li>
-          <li>Launch from your <strong>HubSpot task queue</strong> — tasks auto-complete after each call</li>
-          <li>Follow widget auto-navigates to the active contact's HubSpot record</li>
-          <li>Call activities log automatically via the PhoneBurner ↔ HubSpot integration</li>
+          <li><strong>Launch from any list view</strong> — contacts, companies, or deals. Select records, click Launch.</li>
+          <li><strong>Launch from saved HubSpot lists</strong> — pick from your existing saved lists and dial up to 500 records in one session, with no CSV export.</li>
+          <li><strong>Launch from your HubSpot Task Queue</strong> — open any tasks view (queues, filtered views, due-today, custom), pick which task rows to dial (or dial them all), and run the queue through PhoneBurner.</li>
+          <li><strong>Auto-complete tasks as you dial</strong> — when a call ends, the originating HubSpot task is marked Completed automatically. If the contact has multiple open call tasks, all of them get closed on a single dial.</li>
+          <li><strong>Auto-discovers your phone fields</strong> — including custom phone properties — and lets you set a preferred primary phone in Settings.</li>
+          <li><strong>Follow widget auto-navigates to the active contact's record</strong> as PhoneBurner moves through the session.</li>
+          <li><strong>Call activities log automatically</strong> via the PhoneBurner ↔ HubSpot integration in your PhoneBurner account.</li>
+          <li>OAuth authentication — connect securely with one click; no copy-pasting tokens for HubSpot.</li>
         </ul>
         <a class="crm-link" href="https://www.phoneburner.com/integrations/hubspot" target="_blank" rel="noopener">See the full HubSpot integration on phoneburner.com →</a>
       </article>
@@ -642,10 +666,11 @@
       <article class="crm-detail" id="crm-close">
         <h3>Close <span class="level-badge level-badge--3">Level 3 · Full API</span></h3>
         <ul>
-          <li>Launch dial sessions from Close contacts or leads</li>
-          <li>Automatic phone and email fetching via the Close API</li>
-          <li>Call activities logged back to Close, including disposition and recording link</li>
-          <li>Notes typed during calls flow into the Close call activity</li>
+          <li>Launch dial sessions from Close <strong>contacts or leads</strong> — works on both the Contacts page and the Leads page</li>
+          <li>Automatic phone and email fetching via the Close API — no scraping</li>
+          <li><strong>Call activities logged back to Close</strong>, including disposition, custom outcome, and recording link</li>
+          <li><strong>Note activity logged separately</strong> — any notes typed during the call also appear as a stand-alone Note on the lead, in addition to the call activity itself, so they're easy to find later</li>
+          <li>Custom Close Outcomes auto-matched (case-insensitive) or created from PhoneBurner statuses — no Close-side setup required</li>
           <li>OAuth authentication — connect securely with one click</li>
         </ul>
       </article>
@@ -658,6 +683,7 @@
           <li>Filter tasks by due today, overdue, or all open</li>
           <li>Auto-navigate to Apollo contact profiles during calls</li>
           <li>OAuth authentication — connect securely with one click</li>
+          <li><em>Note: automatic call-activity logging back to Apollo is on the roadmap and ships when there's sufficient customer demand. Today, PhoneBurner's main app retains the full call record.</em></li>
         </ul>
       </article>
 
@@ -669,6 +695,10 @@
           <li>Follow widget keeps the Salesforce tab in sync with the active call</li>
           <li>No OAuth required — works the moment you load a list view</li>
         </ul>
+        <p class="muted" style="margin-top:12px;font-size:0.92rem;">
+          <strong>Want fully native Salesforce integration?</strong> PhoneBurner offers a dedicated Salesforce package that runs as a first-class app inside Salesforce with full activity logging and deeper data sync.
+          <a href="https://www.phoneburner.com/integrations/salesforce" target="_blank" rel="noopener">See the PhoneBurner Salesforce package →</a>
+        </p>
       </article>
 
       <article class="crm-detail" id="crm-pipedrive">
@@ -681,28 +711,15 @@
         </ul>
       </article>
 
-      <article class="crm-detail" id="crm-zoho">
-        <h3>Zoho <span class="level-badge level-badge--1">Level 1 · Generic</span></h3>
-        <ul>
-          <li>Generic page-scan mode extracts visible contact details from list views</li>
-          <li>Dial through whatever the page shows — adapts to most Zoho layouts</li>
-          <li>Follow widget navigation works for most page structures</li>
-        </ul>
-      </article>
-
-      <article class="crm-detail" id="crm-monday">
-        <h3>monday.com <span class="level-badge level-badge--1">Level 1 · Generic</span></h3>
-        <ul>
-          <li>Generic page-scan mode reads contact details from board/table views</li>
-          <li>Launch dial sessions from monday.com tables that include phone fields</li>
-          <li>Follow widget integrates with the monday.com tab during sessions</li>
-        </ul>
-      </article>
-
       <article class="crm-detail" id="crm-more">
         <h3>Don't see your CRM? <span class="level-badge level-badge--1">Level 1 · Generic</span></h3>
-        <p style="color:var(--ink-2);margin:0;">
+        <p style="color:var(--ink-2);margin:0 0 12px;">
           The generic page-scan mode works on most table or list-based CRM pages — even ones we haven't specifically optimized for. Install the extension and try it on your CRM. If you're a larger team that wants deeper Level 3 support for a specific system, <a href="mailto:jeff@phoneburner.com">get in touch</a> — we add new providers regularly.
+        </p>
+        <p class="muted" style="margin:0;font-size:0.92rem;">
+          <strong>Using Zoho or monday.com?</strong> Those CRMs are served by separate PhoneBurner integrations rather than this extension — see
+          <a href="https://www.phoneburner.com/integrations/zoho-crm" target="_blank" rel="noopener">Zoho CRM</a> or
+          <a href="https://www.phoneburner.com/integrations/monday" target="_blank" rel="noopener">monday.com</a> on phoneburner.com.
         </p>
       </article>
     </div>
@@ -752,14 +769,14 @@
         <details>
           <summary>Do I need a PhoneBurner account?</summary>
           <div class="faq__body">
-            <p>Yes. The extension launches dial sessions through your existing PhoneBurner subscription — it doesn't replace PhoneBurner, it makes your CRM able to drive it. If you don't have an account yet, <a href="https://www.phoneburner.com/" target="_blank" rel="noopener">start a free trial at phoneburner.com</a>.</p>
+            <p>Yes. The extension launches dial sessions through your existing PhoneBurner subscription — it doesn't replace PhoneBurner, it makes your CRM able to drive it. If you don't have an account yet, <a href="https://www.phoneburner.com/index?id=40580713" target="_blank" rel="noopener">start a free trial at phoneburner.com</a>.</p>
           </div>
         </details>
 
         <details>
           <summary>How is my PhoneBurner credential stored? Is it secure?</summary>
           <div class="faq__body">
-            <p>Yes — and more carefully than most extensions. When you save your Personal Access Token, it's transmitted over HTTPS to PhoneBurner-managed servers and stored with strict owner-only file permissions (mode 0600). Your browser does NOT keep a copy of the token. The browser only stores an anonymous lookup key (a random UUID); the actual token lives server-side. This means a compromised browser profile or another extension can't read your PhoneBurner credentials.</p>
+            <p>Yes — and more carefully than most extensions. When you save your Personal Access Token, it's transmitted over HTTPS to the extension's backend servers and stored with strict owner-only file permissions (mode 0600). Your browser does NOT keep a copy of the token. The browser only stores an anonymous lookup key (a random UUID); the actual token lives server-side. This means a compromised browser profile or another extension can't read your PhoneBurner credentials.</p>
           </div>
         </details>
 
@@ -769,9 +786,9 @@
             <p>It depends on the CRM:</p>
             <ul>
               <li><strong>HubSpot:</strong> Call activities log via the existing PhoneBurner ↔ HubSpot integration in your PhoneBurner account (activate it once under PhoneBurner Settings → Integrations → HubSpot).</li>
-              <li><strong>Close:</strong> Call activities log automatically through the extension itself — including disposition, custom outcome, and recording link.</li>
-              <li><strong>Apollo:</strong> Activities log automatically through the extension, including call notes.</li>
-              <li><strong>Salesforce, Pipedrive, Zoho, monday.com, others:</strong> Call activity logging isn't currently supported for these CRMs by the extension. PhoneBurner's main app retains full call records.</li>
+              <li><strong>Close:</strong> Call activities log automatically through the extension itself — including disposition, custom outcome, and recording link. Any notes typed during the call also appear as a separate Note activity on the lead.</li>
+              <li><strong>Apollo:</strong> Automatic activity logging back to Apollo isn't supported yet — it's on the roadmap and ships when there's sufficient customer demand. PhoneBurner's main app keeps the full call record either way.</li>
+              <li><strong>Salesforce, Pipedrive, and other CRMs:</strong> Call activity logging from this extension isn't currently supported for those CRMs. PhoneBurner's main app retains the full call records. If you want fully native Salesforce activity logging, PhoneBurner has a <a href="https://www.phoneburner.com/integrations/salesforce" target="_blank" rel="noopener">dedicated Salesforce package</a> that's built for that.</li>
             </ul>
           </div>
         </details>
@@ -786,14 +803,15 @@
         <details>
           <summary>How much does the extension cost?</summary>
           <div class="faq__body">
-            <p>The extension itself is <strong>free</strong>. You only pay for your PhoneBurner subscription. <a href="https://www.phoneburner.com/pricing" target="_blank" rel="noopener">See PhoneBurner pricing</a>.</p>
+            <p>The extension itself is <strong>free</strong>. You only pay for your PhoneBurner subscription. <a href="https://www.phoneburner.com/index?id=40580713" target="_blank" rel="noopener">Start a free PhoneBurner trial</a> or <a href="https://www.phoneburner.com/pricing" target="_blank" rel="noopener">see PhoneBurner pricing</a>.</p>
           </div>
         </details>
 
         <details>
           <summary>What if my CRM isn't listed?</summary>
           <div class="faq__body">
-            <p>Try it anyway. The extension's generic page-scan mode works on most table or list-based CRM pages. If you're a larger team and want deeper Level 3 support for a specific CRM, <a href="mailto:jeff@phoneburner.com">reach out</a> — we add new providers regularly.</p>
+            <p>Try it anyway. The extension's generic page-scan mode works on most table or list-based CRM pages we haven't specifically optimized for. If you're a larger team and want deeper Level 3 support for a specific CRM, <a href="mailto:jeff@phoneburner.com">reach out</a> — we add new providers regularly.</p>
+            <p><strong>One exception:</strong> Zoho and monday.com aren't supported by this extension. PhoneBurner has separate integrations for those — see <a href="https://www.phoneburner.com/integrations/zoho-crm" target="_blank" rel="noopener">Zoho CRM</a> and <a href="https://www.phoneburner.com/integrations/monday" target="_blank" rel="noopener">monday.com</a>.</p>
           </div>
         </details>
 
@@ -832,7 +850,7 @@
       <p>Install free, paste your Personal Access Token, and start dialing from the CRM you already use. Most reps are running their first session within 5 minutes.</p>
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
         <a class="btn btn--primary btn--lg" href="https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj" target="_blank" rel="noopener">Install Free on Chrome Web Store ↗</a>
-        <a class="btn btn--secondary btn--lg" href="https://www.phoneburner.com/" target="_blank" rel="noopener">Start free PhoneBurner trial</a>
+        <a class="btn btn--secondary btn--lg" href="https://www.phoneburner.com/index?id=40580713" target="_blank" rel="noopener">Start free PhoneBurner trial</a>
       </div>
     </div>
   </section>
@@ -869,7 +887,7 @@
           <ul>
             <li><a href="/kb.php">Knowledge base</a></li>
             <li><a href="mailto:jeff@phoneburner.com">Email support</a></li>
-            <li><a href="https://www.phoneburner.com/" target="_blank" rel="noopener">PhoneBurner home</a></li>
+            <li><a href="https://www.phoneburner.com/index?id=40580713" target="_blank" rel="noopener">Start free PhoneBurner trial</a></li>
             <li><a href="https://www.phoneburner.com/pricing" target="_blank" rel="noopener">PhoneBurner pricing</a></li>
           </ul>
         </div>
