@@ -82,10 +82,10 @@ Full API integration with Apollo:
 
 🔐 Security & Privacy
 
-✅ Your PhoneBurner Personal Access Token is stored locally in your browser
+✅ Your PhoneBurner Personal Access Token is stored server-side with strict owner-only file permissions — your browser keeps only an anonymous lookup key, never the token itself
 ✅ HubSpot, Close, and Apollo authentication uses industry-standard OAuth
 ✅ No data is sold or shared with third parties
-✅ The extension only runs on pages you visit
+✅ The extension only reads CRM data when you initiate an action (clicking Launch)
 ✅ All communication is encrypted over HTTPS
 
 🧾 Requirements
