@@ -34,6 +34,15 @@ return [
     'PB_API_BASE' => 'https://www.phoneburner.com/rest/1',
     'PB_WEBHOOK_SECRET' => 'CHANGE_ME_WEBHOOK_SECRET',
 
+    // ── Click-to-Call (generic softphone) ────────────────────────
+    // HMAC secret from your PhoneBurner softphone registration
+    // (Settings → Developer → Softphones). PhoneBurner signs the
+    // softphone_call_done webhook body with this secret; webhooks/
+    // softphone_call_done.php verifies X-PB-Signature against it.
+    // One secret per registration; for multiple registrations, switch
+    // this to a slug-keyed map and look up by the incoming slug.
+    'SOFTPHONE_HMAC_SECRET' => 'CHANGE_ME_SOFTPHONE_SECRET',
+
     // ── Logging ──────────────────────────────────────────────────
     // Dev:  /opt/pb-extension-dev/var/log/app.log
     // Prod: /opt/pb-extension/var/log/app.log
