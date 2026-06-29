@@ -338,6 +338,74 @@ api_log('crm_usage_dashboard.view', [
       .controls-bar { flex-direction: column; align-items: stretch; }
       .auto-refresh { margin-left: 0; }
     }
+
+    /* ---------------------------------------------------------------- */
+    /* Tab navigation                                                   */
+    /* ---------------------------------------------------------------- */
+    .tab-nav {
+      display: flex;
+      gap: 2px;
+      margin: 36px 0 0;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      position: sticky;
+      top: 0;
+      background: var(--bg, #ffffff);
+      z-index: 10;
+      padding: 8px 0 0;
+    }
+    .tab-btn {
+      padding: 10px 18px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+      margin-bottom: -1px;
+      border-radius: 6px 6px 0 0;
+      font-family: inherit;
+    }
+    .tab-btn:hover {
+      color: var(--text);
+      background: rgba(0, 0, 0, 0.025);
+    }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: rgba(0, 102, 204, 0.04);
+    }
+    .tab-pane {
+      display: none;
+    }
+    .tab-pane.active {
+      display: block;
+      animation: tabFadeIn 0.15s ease;
+    }
+    @keyframes tabFadeIn {
+      from { opacity: 0; transform: translateY(2px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    /* Mobile: tabs scroll horizontally rather than wrap */
+    @media (max-width: 720px) {
+      .tab-nav {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+        margin: 24px -16px 0;
+        padding: 8px 16px 0;
+      }
+      .tab-btn {
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+    }
+    /* Section title spacing inside tabs — first one should hug the tab nav */
+    .tab-pane > .section-title:first-child {
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
@@ -591,102 +659,124 @@ api_log('crm_usage_dashboard.view', [
       <?php endif; ?>
     <?php endif; ?>
 
-    <!-- Section 2: Usage Trends -->
-    <h2 class="section-title">Usage Trends</h2>
-    <div id="trends-section">
+    <!-- Tab Navigation -->
+    <nav class="tab-nav" role="tablist" aria-label="Dashboard sections">
+      <button type="button" class="tab-btn active" data-tab="trends"       role="tab" aria-selected="true"  aria-controls="tab-trends">📈 Trends</button>
+      <button type="button" class="tab-btn"        data-tab="users"        role="tab" aria-selected="false" aria-controls="tab-users">👥 Users</button>
+      <button type="button" class="tab-btn"        data-tab="productivity" role="tab" aria-selected="false" aria-controls="tab-productivity">📞 Productivity</button>
+      <button type="button" class="tab-btn"        data-tab="sessions"     role="tab" aria-selected="false" aria-controls="tab-sessions">⚡ Sessions</button>
+      <button type="button" class="tab-btn"        data-tab="detail"       role="tab" aria-selected="false" aria-controls="tab-detail">🔎 Detail</button>
+    </nav>
+
+    <!-- Tab: Trends (Usage Trends + CRM Distribution) -->
+    <div class="tab-pane active" data-tab="trends" id="tab-trends" role="tabpanel" aria-labelledby="tab-trends-btn">
+      <!-- Section 2: Usage Trends -->
+      <h2 class="section-title">Usage Trends</h2>
+      <div id="trends-section">
+        <div class="chart-row">
+          <div class="chart-box">
+            <h3>Sessions & Users per Day</h3>
+            <div class="chart-container"><canvas id="chart-sessions"></canvas></div>
+          </div>
+          <div class="chart-box">
+            <h3>Calls & Connections per Day</h3>
+            <div class="chart-container"><canvas id="chart-calls"></canvas></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: CRM Distribution -->
+      <h2 class="section-title">CRM Distribution</h2>
       <div class="chart-row">
         <div class="chart-box">
-          <h3>Sessions & Users per Day</h3>
-          <div class="chart-container"><canvas id="chart-sessions"></canvas></div>
+          <h3>Events by CRM</h3>
+          <div class="chart-container"><canvas id="chart-crm-dist"></canvas></div>
         </div>
-        <div class="chart-box">
-          <h3>Calls & Connections per Day</h3>
-          <div class="chart-container"><canvas id="chart-calls"></canvas></div>
+        <div>
+          <table id="crm-combined-table">
+            <thead><tr><th>CRM</th><th>Sessions</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
     </div>
 
-    <!-- Section 3: CRM Distribution -->
-    <h2 class="section-title">CRM Distribution</h2>
-    <div class="chart-row">
-      <div class="chart-box">
-        <h3>Events by CRM</h3>
-        <div class="chart-container"><canvas id="chart-crm-dist"></canvas></div>
+    <!-- Tab: Users (Activity by User) -->
+    <div class="tab-pane" data-tab="users" id="tab-users" role="tabpanel" hidden>
+      <!-- Section 3.5: Activity by User -->
+      <h2 class="section-title">Activity by User</h2>
+      <div class="alert alert-info" style="margin: 0 0 12px;">
+        <strong>Privacy note:</strong> Only the PhoneBurner <code>member_user_id</code> is shown here.
+        Names and email addresses are intentionally omitted &mdash; if you need to identify a specific
+        user, look the ID up in the PhoneBurner admin. We may surface richer profile data in the
+        future once we&rsquo;ve formalized access controls for it.
       </div>
-      <div>
-        <table id="crm-combined-table">
-          <thead><tr><th>CRM</th><th>Sessions</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <div style="display:flex; gap:8px; align-items:center; margin: 8px 0 12px;">
+        <input type="text" id="user-search"
+               placeholder="Filter by member_user_id&hellip;"
+               style="flex:1; max-width:300px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+        <span class="muted" id="user-search-count"></span>
       </div>
+      <table id="by-user-table">
+        <thead>
+          <tr>
+            <th>Member User ID</th>
+            <th style="text-align:right;">Launches</th>
+            <th>CRMs Used</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
 
-    <!-- Section 3.5: Activity by User -->
-    <h2 class="section-title">Activity by User</h2>
-    <div class="alert alert-info" style="margin: 0 0 12px;">
-      <strong>Privacy note:</strong> Only the PhoneBurner <code>member_user_id</code> is shown here.
-      Names and email addresses are intentionally omitted &mdash; if you need to identify a specific
-      user, look the ID up in the PhoneBurner admin. We may surface richer profile data in the
-      future once we&rsquo;ve formalized access controls for it.
-    </div>
-    <div style="display:flex; gap:8px; align-items:center; margin: 8px 0 12px;">
-      <input type="text" id="user-search"
-             placeholder="Filter by member_user_id&hellip;"
-             style="flex:1; max-width:300px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
-      <span class="muted" id="user-search-count"></span>
-    </div>
-    <table id="by-user-table">
-      <thead>
-        <tr>
-          <th>Member User ID</th>
-          <th style="text-align:right;">Launches</th>
-          <th>CRMs Used</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+    <!-- Tab: Productivity (Dial Session Productivity + Records per Session) -->
+    <div class="tab-pane" data-tab="productivity" id="tab-productivity" role="tabpanel" hidden>
+      <!-- Section 4: Dial Session Productivity -->
+      <h2 class="section-title">Dial Session Productivity</h2>
+      <div class="grid-3" id="productivity-grid"></div>
+      <table id="call-outcomes-table">
+        <thead><tr><th>Call Outcome</th><th>Count</th><th>%</th></tr></thead>
+        <tbody></tbody>
+      </table>
 
-    <!-- Section 4: Dial Session Productivity -->
-    <h2 class="section-title">Dial Session Productivity</h2>
-    <div class="grid-3" id="productivity-grid"></div>
-    <table id="call-outcomes-table">
-      <thead><tr><th>Call Outcome</th><th>Count</th><th>%</th></tr></thead>
-      <tbody></tbody>
-    </table>
-
-    <!-- Section 5: Records per Session -->
-    <h2 class="section-title">Records per Session</h2>
-    <div class="grid" id="records-grid"></div>
-    <div class="chart-box" style="margin-top: 12px;">
-      <h3>Records per Launch Distribution</h3>
-      <div class="chart-container" style="height: 200px;"><canvas id="chart-histogram"></canvas></div>
-    </div>
-
-    <!-- Section 6: SSE Session Details -->
-    <h2 class="section-title">SSE Session Details</h2>
-    <div class="grid" id="sse-grid"></div>
-
-    <!-- Section 7: Launch Source & Object Type -->
-    <h2 class="section-title">Launch Sources & Object Types</h2>
-    <div class="grid" id="launch-grid"></div>
-    <div class="chart-row" style="margin-top: 12px;">
-      <div>
-        <table id="by-launch-source-table">
-          <thead><tr><th>Launch Source</th><th>Events</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div>
-        <table id="by-object-type-table">
-          <thead><tr><th>Object Type</th><th>Events</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <!-- Section 5: Records per Session -->
+      <h2 class="section-title">Records per Session</h2>
+      <div class="grid" id="records-grid"></div>
+      <div class="chart-box" style="margin-top: 12px;">
+        <h3>Records per Launch Distribution</h3>
+        <div class="chart-container" style="height: 200px;"><canvas id="chart-histogram"></canvas></div>
       </div>
     </div>
 
-    <!-- Section 8: Detail Breakdown (collapsed) -->
-    <details>
-      <summary class="section-title">Detailed Breakdown</summary>
+    <!-- Tab: Sessions (SSE Session Details + Launch Sources & Object Types) -->
+    <div class="tab-pane" data-tab="sessions" id="tab-sessions" role="tabpanel" hidden>
+      <!-- Section 6: SSE Session Details -->
+      <h2 class="section-title">SSE Session Details</h2>
+      <div class="grid" id="sse-grid"></div>
+
+      <!-- Section 7: Launch Source & Object Type -->
+      <h2 class="section-title">Launch Sources & Object Types</h2>
+      <div class="grid" id="launch-grid"></div>
+      <div class="chart-row" style="margin-top: 12px;">
+        <div>
+          <table id="by-launch-source-table">
+            <thead><tr><th>Launch Source</th><th>Events</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div>
+          <table id="by-object-type-table">
+            <thead><tr><th>Object Type</th><th>Events</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Detail (Detailed Breakdown by Hostname & Level) -->
+    <div class="tab-pane" data-tab="detail" id="tab-detail" role="tabpanel" hidden>
+      <!-- Section 8: Detail Breakdown -->
+      <h2 class="section-title">Detailed Breakdown</h2>
       <div class="chart-row">
         <div>
           <h3 style="font-size:14px; color:#666; margin-bottom:8px;">By Hostname</h3>
@@ -703,7 +793,7 @@ api_log('crm_usage_dashboard.view', [
           </table>
         </div>
       </div>
-    </details>
+    </div>
 
     <p class="muted" style="margin-top:24px;">
       Data: <code>crm_usage_stats.php</code> &middot; <code>sse_usage_stats.php</code> &middot; <code>daily_agent_stats.php</code>
@@ -1396,6 +1486,60 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("user-search").addEventListener("input", function() {
     renderByUser(this.value);
   });
+
+  // ========================================================================
+  // Tab navigation
+  // ------------------------------------------------------------------------
+  // - URL hash (#users, #productivity, etc.) drives the active tab so links
+  //   are shareable and refresh-friendly.
+  // - Chart.js charts inside an initially-hidden tab compute width=0 on
+  //   first render; we fire a resize event after activation so they pick up
+  //   the correct dimensions.
+  // ========================================================================
+  const VALID_TABS = ["trends", "users", "productivity", "sessions", "detail"];
+
+  function activateTab(name, opts) {
+    if (!VALID_TABS.includes(name)) name = "trends";
+    opts = opts || {};
+
+    document.querySelectorAll(".tab-btn").forEach(btn => {
+      const isActive = btn.dataset.tab === name;
+      btn.classList.toggle("active", isActive);
+      btn.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+    document.querySelectorAll(".tab-pane").forEach(pane => {
+      const isActive = pane.dataset.tab === name;
+      pane.classList.toggle("active", isActive);
+      if (isActive) {
+        pane.removeAttribute("hidden");
+      } else {
+        pane.setAttribute("hidden", "");
+      }
+    });
+
+    // Charts laid out while hidden need a nudge to recompute their canvas size.
+    window.dispatchEvent(new Event("resize"));
+
+    if (opts.updateHash !== false) {
+      const newHash = "#" + name;
+      if (window.location.hash !== newHash) {
+        history.replaceState(null, "", newHash);
+      }
+    }
+  }
+
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+  });
+
+  window.addEventListener("hashchange", () => {
+    const fromHash = (window.location.hash || "").replace(/^#/, "");
+    activateTab(fromHash, { updateHash: false });
+  });
+
+  // Honor an initial hash like /crm_usage_dashboard.php#users
+  const initialTab = (window.location.hash || "").replace(/^#/, "") || "trends";
+  activateTab(initialTab, { updateHash: false });
 
   // Initial load
   loadDashboard();
