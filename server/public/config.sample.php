@@ -43,6 +43,12 @@ return [
     // this to a slug-keyed map and look up by the incoming slug.
     'SOFTPHONE_HMAC_SECRET' => 'CHANGE_ME_SOFTPHONE_SECRET',
 
+    // DEV/TEST ONLY — forces the softphone iframe to authenticate with this
+    // fixed bearer token (softphone.php ?token=). Needed locally because the
+    // per-user PAT is a PRODUCTION token that won't auth against a local-dev PB.
+    // Leave EMPTY/unset in production so each user's own PAT is used.
+    'SOFTPHONE_TEST_TOKEN' => '',
+
     // ── Logging ──────────────────────────────────────────────────
     // Dev:  /opt/pb-extension-dev/var/log/app.log
     // Prod: /opt/pb-extension/var/log/app.log
