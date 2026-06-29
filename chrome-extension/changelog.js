@@ -16,6 +16,13 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.7.1": {
+    title: "What's Fixed in v0.7.1",
+    items: [
+      "Fix: the live Follow widget now connects properly during dial sessions. After the v0.7.0 backend migration, some users saw the dialer work but the in-CRM Follow widget never appeared — this update fixes that.",
+      "No action needed on your part — the Follow widget will work as expected on your next dial session after the update."
+    ]
+  },
   "0.7.0": {
     title: "What's New in v0.7.0",
     items: [
