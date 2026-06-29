@@ -7,12 +7,17 @@
 // See background.js for the full explanation. Content scripts re-run on every
 // page load, so we eager-load the env preference from storage and keep BASE_URL
 // in sync via storage.onChanged.
+//
+// MUST stay in sync with the same constant in background.js and popup.js.
+// In v0.7.0 we flipped the default to "prod" in background.js + popup.js but
+// missed this file, which caused content scripts to open EventSource against
+// dev for customers with no explicit pb_env_override. Fixed in v0.7.1.
 // -----------------------------------------------------------------------------
 const BASE_URLS = {
   dev: "https://extension-dev.phoneburner.biz",
   prod: "https://extension.phoneburner.biz",
 };
-const DEFAULT_ENV = "dev";
+const DEFAULT_ENV = "prod";
 let BASE_URL = BASE_URLS[DEFAULT_ENV];
 
 chrome.storage.local.get(["pb_env_override"]).then((res) => {
