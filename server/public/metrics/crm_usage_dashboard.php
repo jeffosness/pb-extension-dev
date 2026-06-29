@@ -383,6 +383,214 @@ api_log('crm_usage_dashboard.view', [
     <!-- Section 1: Executive Summary -->
     <div class="grid-5" id="exec-grid"></div>
 
+    <!-- Section 1b: Token Security (server-rendered from token-audit.log) -->
+    <?php
+    // Read the audit log and compute summary + anomalies for the last 24h.
+    // This is server-rendered (no JS) because the audit log is small and
+    // we want it visible immediately on page load.
+    require_once __DIR__ . '/../utils.php';
+
+    $token_summary = [
+        'reads'    => 0,
+        'writes'   => 0,
+        'deletes'  => 0,
+        'errors'   => 0,
+        'by_prov'  => ['pb' => 0, 'hubspot' => 0, 'close' => 0, 'apollo' => 0],
+        'anomalies'=> [],
+        'log_missing' => false,
+    ];
+
+    // Per-provider whitelist of script names that are EXPECTED to read tokens.
+    // Anything outside this list gets flagged as an anomaly so we can spot a
+    // suspicious endpoint reading tokens we didn't intend to give it access.
+    $token_read_whitelist = [
+        'pb' => [
+            'state', 'oauth_pb_save', 'oauth_pb_clear', 'session_stop',
+            'dialsession_from_scan', 'pb_dialsession_selection',
+            'pb_dialsession_from_list', 'pb_dialsession_from_tasks',
+            'hs_call_logger', 'close_call_logger', 'apollo_call_logger',
+            'call_done', 'contact_displayed', 'refresh_sse_code',
+            'user_settings_get', 'user_settings_save', 'track_crm_usage',
+            'apollo_sequences', 'apollo_sequence_tasks',
+            'hs_lists', 'hs_phone_properties',
+        ],
+        'hubspot' => [
+            'state', 'oauth_hs_finish', 'oauth_disconnect',
+            'pb_dialsession_selection', 'pb_dialsession_from_list',
+            'pb_dialsession_from_tasks', 'hs_lists', 'hs_phone_properties',
+            'hs_call_logger', 'call_done', 'contact_displayed',
+        ],
+        'close' => [
+            'state', 'oauth_close_finish', 'oauth_disconnect',
+            'pb_dialsession_selection', 'close_call_logger',
+            'call_done', 'contact_displayed',
+        ],
+        'apollo' => [
+            'state', 'oauth_apollo_finish', 'oauth_disconnect', 'save_api_key',
+            'pb_dialsession_selection', 'pb_dialsession_from_tasks',
+            'apollo_sequences', 'apollo_sequence_tasks',
+            'apollo_call_logger', 'call_done', 'contact_displayed',
+        ],
+    ];
+
+    $audit_path = audit_token_log_path();
+    if (!is_file($audit_path)) {
+        $token_summary['log_missing'] = true;
+    } else {
+        $cutoff = time() - 86400;
+        // Burst detection: tally reads per (client_id_hash, 5-min bucket)
+        $burst_buckets = [];
+        // Failure detection: tally read-misses per IP
+        $miss_by_ip = [];
+
+        $fh = @fopen($audit_path, 'r');
+        if ($fh) {
+            while (($line = fgets($fh)) !== false) {
+                $r = json_decode(trim($line), true);
+                if (!is_array($r)) continue;
+                $t = strtotime($r['t'] ?? '') ?: 0;
+                if ($t < $cutoff) continue;
+
+                $evt = $r['evt'] ?? '';
+                $prov = $r['prov'] ?? '';
+                $ep = $r['ep'] ?? '';
+                $res = $r['res'] ?? '';
+                $cid = $r['cid'] ?? '';
+                $ip = $r['ip'] ?? '';
+
+                if ($evt === 'read')   $token_summary['reads']++;
+                if ($evt === 'write')  $token_summary['writes']++;
+                if ($evt === 'delete') $token_summary['deletes']++;
+                if ($res === 'error')  $token_summary['errors']++;
+
+                if (isset($token_summary['by_prov'][$prov])) {
+                    $token_summary['by_prov'][$prov]++;
+                }
+
+                // Anomaly check 1: endpoint not in whitelist for this provider
+                if ($evt === 'read' && isset($token_read_whitelist[$prov])
+                    && !in_array($ep, $token_read_whitelist[$prov], true)) {
+                    $token_summary['anomalies'][] = $r + ['why' => 'Endpoint "' . htmlspecialchars($ep) . '" is not in the whitelist for ' . htmlspecialchars($prov) . ' token reads'];
+                }
+
+                // Anomaly check 2: burst — > 30 reads from same client in 5 min
+                if ($evt === 'read' && $cid !== '') {
+                    $bucket = $cid . '|' . floor($t / 300);
+                    if (!isset($burst_buckets[$bucket])) $burst_buckets[$bucket] = ['count' => 0, 'sample' => $r];
+                    $burst_buckets[$bucket]['count']++;
+                }
+
+                // Anomaly check 3: many read-misses from same IP — possible scanning
+                if ($evt === 'read' && $res === 'missing' && $ip !== '') {
+                    if (!isset($miss_by_ip[$ip])) $miss_by_ip[$ip] = ['count' => 0, 'sample' => $r];
+                    $miss_by_ip[$ip]['count']++;
+                }
+            }
+            fclose($fh);
+        }
+
+        // Promote burst buckets > 30 reads in 5min into anomalies
+        foreach ($burst_buckets as $bucket => $info) {
+            if ($info['count'] > 30) {
+                $token_summary['anomalies'][] = $info['sample'] + [
+                    'why' => 'Read burst: ' . $info['count'] . ' reads from same client in a 5-minute window',
+                ];
+            }
+        }
+
+        // Promote miss-by-ip > 10 in 24h into anomalies (possible scan/enumeration)
+        foreach ($miss_by_ip as $ip => $info) {
+            if ($info['count'] > 10) {
+                $token_summary['anomalies'][] = $info['sample'] + [
+                    'why' => $info['count'] . ' missing-token reads from IP ' . htmlspecialchars($ip) . ' in 24h (possible enumeration)',
+                ];
+            }
+        }
+    }
+    ?>
+    <h2 class="section-title">Token Security (last 24h)</h2>
+    <?php if ($token_summary['log_missing']): ?>
+      <div class="alert alert-warning">
+        Token audit log not found at <code><?= htmlspecialchars(audit_token_log_path()) ?></code>.
+        This is expected if no token operations have happened since the audit log feature was deployed.
+        The log will be created automatically on the next token read/write/delete.
+      </div>
+    <?php else: ?>
+      <div class="grid-5">
+        <div class="stat">
+          <div class="label">Reads</div>
+          <div class="value"><?= number_format($token_summary['reads']) ?></div>
+        </div>
+        <div class="stat">
+          <div class="label">Writes</div>
+          <div class="value"><?= number_format($token_summary['writes']) ?></div>
+        </div>
+        <div class="stat">
+          <div class="label">Deletes</div>
+          <div class="value"><?= number_format($token_summary['deletes']) ?></div>
+        </div>
+        <div class="stat">
+          <div class="label">Read errors</div>
+          <div class="value" style="color: <?= $token_summary['errors'] > 0 ? '#92400e' : 'inherit' ?>;">
+            <?= number_format($token_summary['errors']) ?>
+          </div>
+        </div>
+        <div class="stat">
+          <div class="label">Anomalies</div>
+          <div class="value" style="color: <?= count($token_summary['anomalies']) > 0 ? '#991b1b' : '#16a34a' ?>;">
+            <?= count($token_summary['anomalies']) ?>
+          </div>
+        </div>
+      </div>
+      <div class="grid-4" style="margin-top: 12px;">
+        <?php foreach (['pb', 'hubspot', 'close', 'apollo'] as $prov): ?>
+          <div class="stat">
+            <div class="label"><?= strtoupper($prov) ?> events</div>
+            <div class="value"><?= number_format($token_summary['by_prov'][$prov]) ?></div>
+          </div>
+        <?php endforeach; ?>
+      </div>
+      <?php if (!empty($token_summary['anomalies'])): ?>
+        <details open style="margin-top: 16px;">
+          <summary class="section-title" style="margin-top: 0; cursor: pointer;">
+            🚨 Anomalies (<?= count($token_summary['anomalies']) ?>)
+          </summary>
+          <table style="width:100%; margin-top: 10px; border-collapse: collapse; font-size: 13px;">
+            <thead>
+              <tr style="background: #fef2f2;">
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">When</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Event</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Provider</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Endpoint</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">IP</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">client_id (hash)</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Why flagged</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach (array_slice($token_summary['anomalies'], 0, 50) as $a): ?>
+                <tr>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['t'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['evt'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['prov'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['ep'] ?? '') ?></code></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['ip'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['cid'] ?? '') ?></code></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['why'] ?? '') ?></td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+          <?php if (count($token_summary['anomalies']) > 50): ?>
+            <p style="font-size:12px; color: var(--text-muted); margin-top: 8px;">
+              Showing 50 of <?= count($token_summary['anomalies']) ?> anomalies. Check the audit log directly for the full list:
+              <code><?= htmlspecialchars(audit_token_log_path()) ?></code>
+            </p>
+          <?php endif; ?>
+        </details>
+      <?php endif; ?>
+    <?php endif; ?>
+
     <!-- Section 2: Usage Trends -->
     <h2 class="section-title">Usage Trends</h2>
     <div id="trends-section">

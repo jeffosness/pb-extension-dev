@@ -236,6 +236,56 @@ function hs_token_path(string $client_id): string
     return $dir . '/' . $client_id . '.json';
 }
 
+// -------------------------------------------------------------------------
+// Token audit log
+//
+// Every token read/write/delete logs a structured event to a SEPARATE log
+// file (NOT app.log) so we can keep it on a different retention schedule.
+// Token VALUES are never logged — only the event metadata. The client_id is
+// hashed before logging so the log itself isn't a customer-identifier index.
+//
+// The dashboard at /metrics/crm_usage_dashboard.php reads this file to
+// surface a 24-hour Token Security section + anomaly detection. See
+// SECURITY.md for the full security model.
+// -------------------------------------------------------------------------
+
+/**
+ * Return the path to the token-audit log file, co-located with app.log
+ * but distinct so retention/rotation policy can differ.
+ */
+function audit_token_log_path(): string
+{
+    $cfg = cfg();
+    $appLog = (string)($cfg['LOG_FILE'] ?? '/tmp/app.log');
+    return dirname($appLog) . '/token-audit.log';
+}
+
+/**
+ * Log a token event.
+ *
+ * @param string $event   One of 'read', 'write', 'delete'.
+ * @param string $provider One of 'pb', 'hubspot', 'close', 'apollo'.
+ * @param string $client_id Customer client_id — will be hashed before logging.
+ * @param string $result  'ok' (success), 'missing' (file not found), 'error' (parse/IO failure).
+ */
+function audit_token_event(string $event, string $provider, string $client_id, string $result = 'ok'): void
+{
+    $record = [
+        't'    => date('c'),
+        'evt'  => $event,
+        'prov' => $provider,
+        'cid'  => substr(hash('sha256', (string)$client_id), 0, 12),
+        'ep'   => basename($_SERVER['SCRIPT_FILENAME'] ?? 'cli', '.php'),
+        'ip'   => $_SERVER['REMOTE_ADDR'] ?? '',
+        'res'  => $result,
+    ];
+    @file_put_contents(
+        audit_token_log_path(),
+        json_encode($record) . "\n",
+        FILE_APPEND | LOCK_EX
+    );
+}
+
 // -------------------------
 // PhoneBurner PAT helpers
 // -------------------------
@@ -251,6 +301,7 @@ function save_pb_token($client_id, $pat)
     ];
 
     atomic_write_json($path, $data);
+    audit_token_event('write', 'pb', $client_id, 'ok');
 }
 
 function load_pb_token($client_id)
@@ -259,11 +310,14 @@ function load_pb_token($client_id)
     $path = pb_token_path($client_id);
 
     if (!is_file($path)) {
+        audit_token_event('read', 'pb', $client_id, 'missing');
         return null;
     }
 
     $data = json_decode(@file_get_contents($path), true);
-    return is_array($data) ? ($data['pat'] ?? null) : null;
+    $pat = is_array($data) ? ($data['pat'] ?? null) : null;
+    audit_token_event('read', 'pb', $client_id, $pat ? 'ok' : 'error');
+    return $pat;
 }
 
 function clear_pb_token($client_id)
@@ -271,9 +325,11 @@ function clear_pb_token($client_id)
     $client_id = (string)$client_id;
     $path = pb_token_path($client_id);
 
-    if (is_file($path)) {
+    $existed = is_file($path);
+    if ($existed) {
         @unlink($path);
     }
+    audit_token_event('delete', 'pb', $client_id, $existed ? 'ok' : 'missing');
 }
 
 // -------------------------------------------------------------------------
@@ -287,6 +343,7 @@ function save_hs_tokens($client_id, array $tokens)
 
     $tokens['saved_at'] = date('c');
     atomic_write_json($path, $tokens);
+    audit_token_event('write', 'hubspot', $client_id, 'ok');
 }
 
 function load_hs_tokens($client_id)
@@ -295,11 +352,14 @@ function load_hs_tokens($client_id)
     $path = hs_token_path($client_id);
 
     if (!is_file($path)) {
+        audit_token_event('read', 'hubspot', $client_id, 'missing');
         return null;
     }
 
     $data = json_decode(@file_get_contents($path), true);
-    return is_array($data) ? $data : null;
+    $result = is_array($data) ? $data : null;
+    audit_token_event('read', 'hubspot', $client_id, $result ? 'ok' : 'error');
+    return $result;
 }
 
 function clear_hs_tokens($client_id)
@@ -307,9 +367,11 @@ function clear_hs_tokens($client_id)
     $client_id = (string)$client_id;
     $path = hs_token_path($client_id);
 
-    if (is_file($path)) {
+    $existed = is_file($path);
+    if ($existed) {
         @unlink($path);
     }
+    audit_token_event('delete', 'hubspot', $client_id, $existed ? 'ok' : 'missing');
 }
 
 // -------------------------------------------------------------------------
@@ -330,6 +392,7 @@ function save_close_tokens($client_id, array $tokens)
 
     $tokens['saved_at'] = date('c');
     atomic_write_json($path, $tokens);
+    audit_token_event('write', 'close', $client_id, 'ok');
 }
 
 function load_close_tokens($client_id)
@@ -338,11 +401,14 @@ function load_close_tokens($client_id)
     $path = close_token_path($client_id);
 
     if (!is_file($path)) {
+        audit_token_event('read', 'close', $client_id, 'missing');
         return null;
     }
 
     $data = json_decode(@file_get_contents($path), true);
-    return is_array($data) ? $data : null;
+    $result = is_array($data) ? $data : null;
+    audit_token_event('read', 'close', $client_id, $result ? 'ok' : 'error');
+    return $result;
 }
 
 function clear_close_tokens($client_id)
@@ -350,9 +416,11 @@ function clear_close_tokens($client_id)
     $client_id = (string)$client_id;
     $path = close_token_path($client_id);
 
-    if (is_file($path)) {
+    $existed = is_file($path);
+    if ($existed) {
         @unlink($path);
     }
+    audit_token_event('delete', 'close', $client_id, $existed ? 'ok' : 'missing');
 }
 
 
@@ -375,6 +443,7 @@ function save_apollo_tokens($client_id, array $tokens)
 
     $tokens['saved_at'] = date('c');
     atomic_write_json($path, $tokens);
+    audit_token_event('write', 'apollo', $client_id, 'ok');
 }
 
 function load_apollo_tokens($client_id)
@@ -383,11 +452,14 @@ function load_apollo_tokens($client_id)
     $path = apollo_token_path($client_id);
 
     if (!is_file($path)) {
+        audit_token_event('read', 'apollo', $client_id, 'missing');
         return null;
     }
 
     $data = json_decode(@file_get_contents($path), true);
-    return is_array($data) ? $data : null;
+    $result = is_array($data) ? $data : null;
+    audit_token_event('read', 'apollo', $client_id, $result ? 'ok' : 'error');
+    return $result;
 }
 
 function clear_apollo_tokens($client_id)
@@ -395,9 +467,11 @@ function clear_apollo_tokens($client_id)
     $client_id = (string)$client_id;
     $path = apollo_token_path($client_id);
 
-    if (is_file($path)) {
+    $existed = is_file($path);
+    if ($existed) {
         @unlink($path);
     }
+    audit_token_event('delete', 'apollo', $client_id, $existed ? 'ok' : 'missing');
 }
 
 

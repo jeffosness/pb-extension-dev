@@ -24,6 +24,13 @@
 
 ---
 
+## Companion documents
+
+- **[PROJECT_MAP.md](PROJECT_MAP.md)** — auto-generated dependency map of the entire codebase. Consult before modifying shared code to trace blast radius.
+- **[SECURITY.md](SECURITY.md)** — security model, what we protect against, what we explicitly DON'T, and the files that trigger the **Security Impact CI check**. Read this before touching `utils.php` token functions, OAuth endpoints, call loggers, webhooks, or `sse.php`.
+- **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook for standing up the backend on a fresh host.
+- **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** — customer-facing knowledge base (also surfaced at `https://extension.phoneburner.biz/kb.php`).
+
 ## Dependency Map
 
 **[PROJECT_MAP.md](PROJECT_MAP.md)** is an auto-generated dependency map of the entire codebase. **Consult it before modifying shared code** — it shows every function, message type, endpoint, and their callers so you can trace the blast radius of any change.

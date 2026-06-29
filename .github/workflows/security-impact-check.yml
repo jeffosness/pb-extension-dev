@@ -1,0 +1,156 @@
+name: Security Impact Check
+
+# Enforces the Security Impact section of the PR template when a PR modifies
+# any file listed in SECURITY.md's "Files that trigger Security Impact review"
+# section. Mirrors the KB Impact check pattern.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  security-impact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out PR with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Security Impact declaration
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Files that trigger required Security Impact declaration.
+            // Keep this in sync with SECURITY.md "Files that trigger
+            // Security Impact review".
+            const SECURITY_RELEVANT_PATTERNS = [
+              /^server\/public\/utils\.php$/,
+              /^server\/public\/config\.sample\.php$/,
+              /^server\/public\/api\/.*oauth_.*\.php$/,
+              /^server\/public\/api\/.*_call_logger\.php$/,
+              /^server\/public\/api\/core\/oauth_pb_save\.php$/,
+              /^server\/public\/api\/core\/oauth_pb_clear\.php$/,
+              /^server\/public\/webhooks\/.*\.php$/,
+              /^server\/public\/sse\.php$/,
+              /^SECURITY\.md$/,
+            ];
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            const triggeringFiles = files.filter(f =>
+              SECURITY_RELEVANT_PATTERNS.some(p => p.test(f.filename))
+            );
+
+            if (triggeringFiles.length === 0) {
+              core.info('No security-relevant files modified. Security Impact check not required for this PR.');
+              return;
+            }
+
+            core.info(`Security-relevant files in this PR: ${triggeringFiles.map(f => f.filename).join(', ')}`);
+
+            const body = context.payload.pull_request.body || '';
+
+            // Extract the Security Impact section.
+            const sectionMatch = body.match(/##\s+Security Impact[\s\S]*?(?=\n##\s|$)/i);
+            if (!sectionMatch) {
+              core.setFailed(
+                'This PR modifies security-relevant files but is missing a "## Security Impact" section. ' +
+                'Add this block to your PR description:\n\n' +
+                '## Security Impact\n\n' +
+                '- [ ] **No security model change** — refactor/comments/non-security code path\n' +
+                '- [ ] **Security model updated in SECURITY.md** — see the changes in this PR\n' +
+                '- [ ] **Security follow-up tracked** — #issue-N (or a link)\n\n' +
+                'See SECURITY.md for the full review criteria.'
+              );
+              return;
+            }
+            const section = sectionMatch[0];
+
+            // Parse checkboxes. Same format as KB Impact: "- [x] **Label**"
+            const lines = section.split(/\r?\n/);
+            const checkboxes = lines
+              .map(l => l.match(/^\s*-\s*\[([ xX])\]\s*\*\*(.+?)\*\*/))
+              .filter(Boolean)
+              .map(m => ({ checked: m[1].toLowerCase() === 'x', label: m[2].trim() }));
+
+            if (checkboxes.length === 0) {
+              core.setFailed(
+                'No Security Impact checkboxes found in the PR body. ' +
+                'Use the "- [ ] **Label**" format (bold label, exactly as shown in SECURITY.md).'
+              );
+              return;
+            }
+
+            const checked = checkboxes.filter(c => c.checked);
+            if (checked.length === 0) {
+              core.setFailed(
+                'No Security Impact box is checked. ' +
+                'Edit the PR description and check exactly one option in the "## Security Impact" section.'
+              );
+              return;
+            }
+            if (checked.length > 1) {
+              core.setFailed(
+                `Multiple Security Impact boxes are checked (${checked.map(c => `"${c.label}"`).join(', ')}). ` +
+                'Edit the PR description and check exactly one option.'
+              );
+              return;
+            }
+
+            const choice = checked[0].label.toLowerCase();
+            core.info(`Security Impact choice: "${checked[0].label}"`);
+
+            // Case 1: No security model change — pass.
+            if (choice.startsWith('no security model change')) {
+              core.info('Declared no security model change. SECURITY.md update not required.');
+              return;
+            }
+
+            // Case 2: Security model updated in SECURITY.md.
+            if (choice.includes('security model updated in security.md')) {
+              const securityChanged = files.some(f => f.filename === 'SECURITY.md');
+              if (!securityChanged) {
+                core.setFailed(
+                  'You checked "Security model updated in SECURITY.md" but SECURITY.md is not modified in this PR. ' +
+                  'Either edit SECURITY.md or switch the checkbox to "No security model change" or "Security follow-up tracked".'
+                );
+                return;
+              }
+              core.info('SECURITY.md is modified in this PR. ✔');
+              return;
+            }
+
+            // Case 3: Security follow-up tracked.
+            if (choice.includes('security follow-up tracked')) {
+              const followupLineIdx = lines.findIndex(l => /security follow-up tracked/i.test(l));
+              const searchWindow = lines.slice(followupLineIdx, followupLineIdx + 3).join(' ');
+              const linkMatch =
+                searchWindow.match(/https?:\/\/\S+/) ||
+                searchWindow.match(/#\d+/);
+              if (!linkMatch) {
+                core.setFailed(
+                  'You checked "Security follow-up tracked" but no follow-up link ' +
+                  '(URL or #issue-number) was provided. Paste the link on the same line as the checkbox.'
+                );
+                return;
+              }
+              core.info(`Security follow-up link: ${linkMatch[0]} ✔`);
+              return;
+            }
+
+            core.setFailed(
+              `Could not match the checked Security Impact option ("${checked[0].label}") to a known choice. ` +
+              'See SECURITY.md for the exact checkbox labels expected.'
+            );
