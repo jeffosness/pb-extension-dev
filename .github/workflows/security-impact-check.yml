@@ -62,9 +62,26 @@ jobs:
 
             const body = context.payload.pull_request.body || '';
 
-            // Extract the Security Impact section.
-            const sectionMatch = body.match(/##\s+Security Impact[\s\S]*?(?=\n##\s|$)/i);
-            if (!sectionMatch) {
+            // Extract the Security Impact section using line-by-line parsing.
+            // We accumulate lines starting from the H2 heading until we hit
+            // the next H2 or end of body. This avoids subtleties with regex
+            // lookaheads + lazy quantifiers + the `$` anchor.
+            const allLines = body.split(/\r?\n/);
+            const sectionLines = [];
+            let inSection = false;
+            for (const ln of allLines) {
+              if (/^##\s+Security Impact\b/i.test(ln)) {
+                inSection = true;
+                sectionLines.push(ln);
+                continue;
+              }
+              if (inSection) {
+                if (/^##\s/.test(ln)) break; // hit next H2 — stop
+                sectionLines.push(ln);
+              }
+            }
+
+            if (sectionLines.length === 0) {
               core.setFailed(
                 'This PR modifies security-relevant files but is missing a "## Security Impact" section. ' +
                 'Add this block to your PR description:\n\n' +
@@ -76,10 +93,9 @@ jobs:
               );
               return;
             }
-            const section = sectionMatch[0];
 
             // Parse checkboxes. Same format as KB Impact: "- [x] **Label**"
-            const lines = section.split(/\r?\n/);
+            const lines = sectionLines;
             const checkboxes = lines
               .map(l => l.match(/^\s*-\s*\[([ xX])\]\s*\*\*(.+?)\*\*/))
               .filter(Boolean)
