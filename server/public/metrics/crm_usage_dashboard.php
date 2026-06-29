@@ -501,6 +501,24 @@ api_log('crm_usage_dashboard.view', [
         ],
     ];
 
+    // Anomaly-detection tunables. Adjust these in one place if the dashboard
+    // starts crying wolf — or going quiet — about real-world traffic patterns.
+    //
+    // Why the carve-outs:
+    //   - `state.php` is the popup connection-probe. Every popup open reads
+    //     all 4 providers, and a non-connected user generates "misses" by
+    //     design. Including state in burst/miss thresholds buries real signal
+    //     under normal popup polling.
+    //   - The original miss rule fired on (1 IP × many misses on 1 provider),
+    //     but actual enumeration looks like (1 IP × many DISTINCT client_ids).
+    //     One client repeatedly missing one provider = user without that CRM
+    //     connected, opening popup a lot.
+    $BURST_THRESHOLD             = 50;          // reads/5min from same client
+    $BURST_EXCLUDE_ENDPOINTS     = ['state'];   // endpoints exempt from burst
+    $ENUM_DISTINCT_CIDS_PER_IP   = 5;           // distinct cids/IP triggers enum
+    $DELETE_SPIKE_THRESHOLD      = 10;          // deletes/hour
+    $DELETE_SPIKE_BUCKET_SECONDS = 3600;
+
     $audit_path = audit_token_log_path();
     if (!is_file($audit_path)) {
         $token_summary['log_missing'] = true;
@@ -508,8 +526,10 @@ api_log('crm_usage_dashboard.view', [
         $cutoff = time() - 86400;
         // Burst detection: tally reads per (client_id_hash, 5-min bucket)
         $burst_buckets = [];
-        // Failure detection: tally read-misses per IP
+        // Miss tracking: per IP, count + the set of distinct client_ids that missed
         $miss_by_ip = [];
+        // Delete spike tracking: per 1-hour bucket
+        $delete_buckets = [];
 
         $fh = @fopen($audit_path, 'r');
         if ($fh) {
@@ -541,36 +561,66 @@ api_log('crm_usage_dashboard.view', [
                     $token_summary['anomalies'][] = $r + ['why' => 'Endpoint "' . htmlspecialchars($ep) . '" is not in the whitelist for ' . htmlspecialchars($prov) . ' token reads'];
                 }
 
-                // Anomaly check 2: burst — > 30 reads from same client in 5 min
-                if ($evt === 'read' && $cid !== '') {
+                // Anomaly check 2: burst — many reads from same client in 5 min.
+                // Skip endpoints that are expected to be polled (e.g. state.php).
+                if ($evt === 'read' && $cid !== ''
+                    && !in_array($ep, $BURST_EXCLUDE_ENDPOINTS, true)) {
                     $bucket = $cid . '|' . floor($t / 300);
                     if (!isset($burst_buckets[$bucket])) $burst_buckets[$bucket] = ['count' => 0, 'sample' => $r];
                     $burst_buckets[$bucket]['count']++;
                 }
 
-                // Anomaly check 3: many read-misses from same IP — possible scanning
+                // Anomaly check 3: enumeration. True enumeration = one IP
+                // probing MANY DISTINCT client_ids. We track both raw miss
+                // counts and the set of unique cids per IP.
                 if ($evt === 'read' && $res === 'missing' && $ip !== '') {
-                    if (!isset($miss_by_ip[$ip])) $miss_by_ip[$ip] = ['count' => 0, 'sample' => $r];
+                    if (!isset($miss_by_ip[$ip])) {
+                        $miss_by_ip[$ip] = ['count' => 0, 'sample' => $r, 'cids' => []];
+                    }
                     $miss_by_ip[$ip]['count']++;
+                    if ($cid !== '') $miss_by_ip[$ip]['cids'][$cid] = true;
+                }
+
+                // Anomaly check 4: delete spike — many tokens deleted in a
+                // short window. Could indicate mass-disconnect (legit, e.g. a
+                // bulk-cleanup script) or compromise-and-cleanup (concerning).
+                if ($evt === 'delete') {
+                    $bucket = (int) floor($t / $DELETE_SPIKE_BUCKET_SECONDS);
+                    if (!isset($delete_buckets[$bucket])) {
+                        $delete_buckets[$bucket] = ['count' => 0, 'sample' => $r];
+                    }
+                    $delete_buckets[$bucket]['count']++;
                 }
             }
             fclose($fh);
         }
 
-        // Promote burst buckets > 30 reads in 5min into anomalies
+        // Promote burst buckets over threshold into anomalies
         foreach ($burst_buckets as $bucket => $info) {
-            if ($info['count'] > 30) {
+            if ($info['count'] > $BURST_THRESHOLD) {
                 $token_summary['anomalies'][] = $info['sample'] + [
-                    'why' => 'Read burst: ' . $info['count'] . ' reads from same client in a 5-minute window',
+                    'why' => 'Read burst: ' . $info['count'] . ' reads from same client in a 5-minute window (excluding state.php polling)',
                 ];
             }
         }
 
-        // Promote miss-by-ip > 10 in 24h into anomalies (possible scan/enumeration)
+        // Promote IPs probing MANY DISTINCT client_ids — true enumeration shape.
+        // One client missing many times is normal (user without that CRM connected);
+        // one IP missing many DIFFERENT client_ids is the actual scan signature.
         foreach ($miss_by_ip as $ip => $info) {
-            if ($info['count'] > 10) {
+            $distinct = count($info['cids']);
+            if ($distinct >= $ENUM_DISTINCT_CIDS_PER_IP) {
                 $token_summary['anomalies'][] = $info['sample'] + [
-                    'why' => $info['count'] . ' missing-token reads from IP ' . htmlspecialchars($ip) . ' in 24h (possible enumeration)',
+                    'why' => 'Possible enumeration: ' . $info['count'] . ' missing-token reads from IP ' . htmlspecialchars($ip) . ' across ' . $distinct . ' distinct client_ids in 24h',
+                ];
+            }
+        }
+
+        // Promote delete spikes — many tokens deleted within a 1-hour bucket
+        foreach ($delete_buckets as $bucket => $info) {
+            if ($info['count'] > $DELETE_SPIKE_THRESHOLD) {
+                $token_summary['anomalies'][] = $info['sample'] + [
+                    'why' => 'Delete spike: ' . $info['count'] . ' token deletions within a 1-hour window — possible mass-disconnect or compromise-and-cleanup',
                 ];
             }
         }
