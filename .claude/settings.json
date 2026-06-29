@@ -8,7 +8,7 @@
             "type": "command",
             "if": "Bash(git commit:*)",
             "command": "bash scripts/generate-project-map.sh && git add PROJECT_MAP.md",
-            "timeout": 60,
+            "timeout": 240,
             "statusMessage": "Regenerating PROJECT_MAP.md..."
           }
         ]
