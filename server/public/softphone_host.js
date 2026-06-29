@@ -1,24 +1,14 @@
-// softphone_host.js — served from the extension backend
-// (e.g. https://extension.phoneburner.biz/softphone.html).
+// softphone_host.js — served from the extension backend, used by softphone.php.
 //
-// WHY THIS PAGE EXISTS
-// A WebRTC softphone needs microphone access, which a chrome-extension side
-// panel cannot get, and not every CRM will let us embed an iframe in their page.
-// So we host the softphone on a normal first-party-capable web page that WE
-// control and route every click-to-call through it. Benefits:
-//   • One iframe origin to register with PhoneBurner (this page's origin),
-//     regardless of how many CRMs the extension supports (incl. L1/unknown).
-//   • Mic works (normal https page), and we control the grant UX.
-//   • A persistent window can later receive inbound calls.
+// softphone.php has already set the iframe's src to the softphone runtime with
+// the bearer ?token= injected (server-side), and exposed window.PB_SOFTPHONE
+// with the runtime origin + dial details (NO token in JS). Our job here is just
+// to drive the call over the documented postMessage contract once the softphone
+// signals ready.
 //
-// The extension opens this page in a window with the dial details in the URL
-// and we relay them to the softphone over the documented postMessage contract.
-//
-// NOTE (auth): today the embedded softphone authenticates via the PhoneBurner
-// session cookie. A cleaner future option is to authenticate with a bearer
-// token / single-use code the extension already holds for the account, passed
-// here as a param and handed to the softphone — pending PhoneBurner support for
-// token-based softphone auth. The `auth` param below is reserved for that.
+// Auth note: because the iframe is authenticated by the token, this works with
+// no pb.com login / session cookie / CSRF — the previous third-party-cookie and
+// 401 problems are gone.
 
 (function () {
   var MSG = {
@@ -30,21 +20,16 @@
     CALL_COMPLETE: "pb-softphone:call-complete",
   };
 
+  var cfg = window.PB_SOFTPHONE || {};
+  var runtimeOrigin = cfg.runtimeOrigin || "";
+  var number = cfg.number || "";
+  var crmId = cfg.crmId || "";
+  var crmName = cfg.crmName || "";
+
   var frame = document.getElementById("sp-frame");
   var statusEl = document.getElementById("sp-status");
   var logEl = document.getElementById("sp-log");
   var micBtn = document.getElementById("sp-mic");
-
-  var params = new URLSearchParams(location.search);
-  var runtimeUrl = params.get("runtime") || "";
-  var number = params.get("number") || "";
-  var recordId = params.get("recordId") || null;
-  var recordType = params.get("recordType") || null;
-  var crmName = params.get("crmName") || null;
-  // var authCode = params.get("auth") || null; // reserved for token auth
-
-  var runtimeOrigin = "";
-  try { runtimeOrigin = new URL(runtimeUrl).origin; } catch (e) {}
 
   var isReady = false;
   var pendingDial = null;
@@ -59,7 +44,10 @@
   function setStatus(s) { if (statusEl) statusEl.textContent = s; }
 
   function externalCrmData() {
-    if (recordId && crmName) return [{ crm_id: String(recordId), crm_name: crmName }];
+    // Identity is the (crm_name, crm_id) pair — the object-type-aware namespace
+    // PhoneBurner dedupes/logs on (e.g. hubspot / hubspotcompany / hubspotdeal),
+    // NOT a display label.
+    if (crmId && crmName) return [{ crm_id: String(crmId), crm_name: crmName }];
     return null;
   }
 
@@ -81,20 +69,14 @@
 
   function dial(num) {
     if (!num) return;
-    pendingDial = {
-      type: MSG.DIAL,
-      number: num,
-      recordId: recordId,
-      recordType: recordType,
-      external_crm_data: externalCrmData(),
-    };
+    pendingDial = { type: MSG.DIAL, number: num, external_crm_data: externalCrmData() };
     if (isReady) flush();
     else { setStatus("queued — waiting for softphone…"); log("dial queued: " + num); }
   }
 
   window.addEventListener("message", function (event) {
     if (event.source !== frame.contentWindow) return;
-    if (event.origin !== runtimeOrigin) return;
+    if (event.origin !== runtimeOrigin) return; // verify origin before trusting
     var data = event.data || {};
     var type = typeof data.type === "string" ? data.type : "";
     if (type.indexOf("pb-softphone:") !== 0) return;
@@ -111,6 +93,9 @@
     }
   });
 
+  // The iframe src is set server-side, so it may already be loading/loaded.
+  // ready is also BROADCAST on load (handled above), so we don't depend on
+  // catching this load event — it's just an extra nudge + a fallback timer.
   frame.addEventListener("load", function () {
     log("iframe loaded");
     post({ type: MSG.HELLO });
@@ -119,6 +104,8 @@
       if (pendingDial && !isReady) { log("ready not received — sending anyway"); flush(); }
     }, 2500);
   });
+  // Also greet immediately in case the iframe already finished loading.
+  post({ type: MSG.HELLO });
 
   if (micBtn) {
     micBtn.addEventListener("click", function () {
@@ -142,13 +129,16 @@
   }
 
   // Boot
-  if (!runtimeUrl) {
-    setStatus("missing runtime URL");
-    log("no ?runtime param — nothing to load");
+  if (!runtimeOrigin) {
+    setStatus("missing runtime");
+    log("no runtime origin — nothing to drive");
     return;
   }
-  setStatus("connecting…");
-  log("loading " + runtimeUrl);
-  frame.src = runtimeUrl;
+  if (!cfg.authed) {
+    setStatus("not authenticated");
+    log("no bearer token resolved (code missing/expired?) — softphone may show login");
+  } else {
+    setStatus("connecting…");
+  }
   if (number) dial(number);
 })();
