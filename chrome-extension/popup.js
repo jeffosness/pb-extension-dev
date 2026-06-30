@@ -446,6 +446,37 @@ async function initDevOptions() {
 }
 
 // ---------------------------
+// Click-to-Call user preference
+// ---------------------------
+// Per-user toggle for the in-page click-to-call pill. We surface this whenever
+// the feature itself is active (currently env === "dev"). The actual gating
+// lives in background.js maybeActivateCtcInTab(); this UI just writes the
+// preference, and background reacts to the storage change to add/remove
+// existing pills in real time.
+async function initCtcOptions() {
+  const card = $("ctc-settings-card");
+  const checkbox = $("ctc-pills-enabled");
+  if (!card || !checkbox) return;
+
+  // Show the card only when click-to-call is reachable in this env. Mirror
+  // background.js's clickToCallEnabled() gate (currently CURRENT_ENV === "dev").
+  const env = await getEnvOverride();
+  const featureActive = env === "dev";
+  card.classList.toggle("hidden", !featureActive);
+  if (!featureActive) return;
+
+  // Read current preference (default: true)
+  chrome.storage.local.get(["pb_ctc_user_enabled"], (res) => {
+    const enabled = res?.pb_ctc_user_enabled !== false;
+    checkbox.checked = enabled;
+  });
+
+  checkbox.addEventListener("change", () => {
+    chrome.storage.local.set({ pb_ctc_user_enabled: !!checkbox.checked });
+  });
+}
+
+// ---------------------------
 // Permission on start (best-effort)
 // ---------------------------
 // We request permission ONLY when user clicks to start a dial session.
@@ -1974,6 +2005,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Developer Options (backend env toggle)
   initDevOptions();
+
+  // Click-to-Call user preference
+  initCtcOptions();
 
   // Get PB
   $("get-pb-btn")?.addEventListener("click", () =>

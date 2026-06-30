@@ -2061,11 +2061,11 @@ function pbCtcDecorate() {
       btn.dataset.pbNum = t.number.replace(/[^\d]/g, "");
       if (t.recordId) btn.dataset.pbRecordId = t.recordId;
       if (t.objectType) btn.dataset.pbObjectType = t.objectType;
-      btn.textContent = "📞 PhoneBurner";
+      btn.textContent = "🔥 PhoneBurner";
       btn.title = "Call with PhoneBurner";
       btn.style.cssText =
-        "margin-left:6px;padding:2px 8px;font:600 11px system-ui,sans-serif;" +
-        "color:#fff;background:#3e6ff0;border:0;border-radius:8px;cursor:pointer;" +
+        "margin-left:4px;padding:1px 6px;font:600 11px system-ui,sans-serif;" +
+        "color:#fff;background:#3e6ff0;border:0;border-radius:6px;cursor:pointer;" +
         "vertical-align:middle;line-height:1.6;";
 
       (function (number, recordId, objectType) {
