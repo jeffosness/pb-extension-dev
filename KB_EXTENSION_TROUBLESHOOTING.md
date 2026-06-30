@@ -69,6 +69,7 @@ The extension supports two integration levels. The level determines which featur
 | "Phone number wrong" / "Dialed wrong number" | [Wrong phone number dialed](#16-wrong-phone-number-dialed) |
 | "Call notes not in CRM" / "Activity not logged" | [Call logging issues](#17-call-logging-issues) |
 | "More than 500 contacts" / "Why is my session truncated" | [500-contact limit](#18-500-contact-limit) |
+| "I selected 100 but only X showed up" / "Counts vary on the same list" / "Some of my selected contacts are missing from the dial session" | [Fewer contacts than selected](#24-fewer-contacts-in-dial-session-than-selected) |
 | "HubSpot phone overwritten" / "Phone field changed in HubSpot" | [HubSpot Data Sync conflict](#19-hubspot-data-sync-conflict) |
 | "Is my data safe" / Privacy questions | [Privacy and security](#20-privacy-and-security) |
 | "Extension completely broken" / Nothing works | [Emergency reset](#21-emergency-reset) |
@@ -662,6 +663,68 @@ For Close users only: tell them this is a one-time reconnect tied to a backend i
 **Escalate if:**
 - Customer says PB or HubSpot/Apollo is showing "Not connected" after the upgrade and re-pasting a fresh PAT / re-OAuth doesn't fix it. Ask for the error message in the popup status area + a screenshot of the popup + the extension version.
 - Close OAuth fails after consenting on Close's side AND popup-blocker / cookies / fresh-tab steps don't help. Escalate with the timestamp and exact error wording.
+
+---
+
+## 24. Fewer Contacts in Dial Session Than Selected
+
+**Symptom:** Customer says: "I selected 100 contacts on my CRM list but only 38 (or 72, or some other smaller number) were added to my dial session."
+
+> **A note on terminology:** "Contacts" below covers any record the extension can dial — contacts, companies, deals, or leads, depending on the CRM. The three causes below apply to all of them, but contacts are the most common case.
+
+There are **three things that commonly cause this**, sometimes in combination. Walk the customer through them in order.
+
+### Cause A — Scroll / virtualization issue (mostly HubSpot list views)
+
+**The salesperson explanation:** HubSpot list views are like an infinite-scroll feed (think Twitter or Instagram). HubSpot only loads the rows currently on screen. When the customer clicks "Select all 100" or checks individual boxes, HubSpot remembers the selection internally, but the actual "checked" mark is only on the rows currently visible. The rest are tracked behind the scenes but not actually drawn on the page yet.
+
+To capture everyone, the extension auto-scrolls through the list, pausing at each step to grab the rows that have just been loaded. This works most of the time, but a few things can cut the scroll short and miss some of the 100:
+
+- **Slower internet** — if HubSpot pauses to load the next batch of rows, the extension may interpret the pause as "we've reached the end" and stop early.
+- **Smaller browser window** — fewer rows fit on screen at once, so the extension has to scroll more times to catch them all, increasing the chance of timing out.
+- **Background CPU load** (other heavy tabs, video calls, screen recording) — slows the scroll-and-capture loop.
+
+**Tell-tale sign that it's a scroll issue:** the count is **different each time** the customer relaunches the same list (e.g., 38 once, then 51, then 22).
+
+**Workaround:** Use the **Launch from List** dropdown in the extension popup instead of checking boxes on the page. The dropdown launch fetches the list through HubSpot's API, which doesn't depend on scrolling and reliably grabs every contact in the list (up to the 500-contact session cap — see Section 18).
+
+### Cause B — Selected contacts that have no phone number
+
+If a selected contact has no phone number in any of its phone fields (Phone Number, Mobile Phone, Home Phone, Account Phone, etc.), the extension can't dial it and quietly skips it. The session ends up smaller than the selection by the number of phone-less contacts.
+
+**Tell-tale sign:** the dial session screen shows an "**X contacts skipped**" message, OR the customer can see in the CRM that some of the missing contacts have empty phone fields.
+
+**Resolution:**
+- Add phone numbers to those contacts in the CRM and relaunch, OR
+- Filter the list to exclude contacts with empty phone numbers before selecting.
+
+**For HubSpot specifically:** if the customer has Settings → **Primary Phone Field** set to a specific field like "Mobile Phone Number", any contact without a value in THAT exact field will be skipped — even if it has a value in another phone field. Setting Primary Phone Field to **Default (first available)** widens the search to any phone-typed field on the contact.
+
+### Cause C — Duplicate phone numbers (PhoneBurner removes them)
+
+PhoneBurner has an account-level setting "Don't add duplicate phone numbers to the same dial session." When that setting is on (default for most accounts), if multiple selected contacts share the same phone number — for example, five contacts who all list the same company's main line — PhoneBurner keeps just one and drops the rest.
+
+**Tell-tale sign:** the contacts that got dropped tend to share something — same employer, same household, same shared assistant phone, or the same toll-free / main line number.
+
+**Resolution:**
+- This is intentional behavior in PhoneBurner. If the customer **wants** the duplicates dialed, they can turn the setting off in their PhoneBurner account preferences (PhoneBurner → Account Settings → Dial Session Settings → "Allow duplicate phone numbers in a session").
+- Or clean up shared phone numbers in the CRM (e.g., give each contact at the same company their own direct extension if available).
+
+### How to figure out which cause is in play
+
+| Observation | Most likely cause |
+|-------------|-------------------|
+| Counts vary across attempts on the same list | A — scroll / virtualization |
+| Dial session shows "X contacts skipped" message | B — missing phone numbers |
+| Dropped contacts all work at the same company or share a phone | C — duplicate phone dedup |
+| Count is dramatically lower than expected (e.g., 5 of 100) even with the dropdown | Escalate (see below) |
+
+**Escalate if:**
+- Customer uses the **Launch from List dropdown** in the popup (not page-checked selection) AND still gets dramatically fewer contacts than the list has.
+- The dropped contacts have phones and don't fit pattern A, B, or C.
+- The count is consistently the same wrong number every time (e.g., always exactly 50 out of 100) — that's a different kind of bug.
+
+Ask for: the list name, exactly how they selected (Select all / individual checks / list dropdown), screenshot of the CRM page with the selection visible, and a screenshot of the PhoneBurner dial session summary with the contact count.
 
 ---
 
