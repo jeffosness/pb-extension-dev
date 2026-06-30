@@ -1,6 +1,7 @@
 // background.js — Unified extension service worker (on-demand injection + no follow-me toggles)
 
 importScripts("crm_config.js");
+importScripts("softphone_config.js");
 
 // -----------------------------------------------------------------------------
 // Backend env — runtime toggle support.
@@ -30,25 +31,139 @@ const BASE_URLS = {
 };
 const DEFAULT_ENV = "prod";
 let BASE_URL = BASE_URLS[DEFAULT_ENV];
+let CURRENT_ENV = DEFAULT_ENV; // resolved env (dev|prod), used by feature gates
 
 chrome.storage.local.get(["pb_env_override"]).then((res) => {
   const env = res?.pb_env_override;
   if (env === "prod" || env === "dev") {
     BASE_URL = BASE_URLS[env];
+    CURRENT_ENV = env;
   }
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes.pb_env_override) return;
   const env = changes.pb_env_override.newValue;
-  BASE_URL = BASE_URLS[env] || BASE_URLS[DEFAULT_ENV];
+  CURRENT_ENV = env === "dev" || env === "prod" ? env : DEFAULT_ENV;
+  BASE_URL = BASE_URLS[CURRENT_ENV];
 });
+
+// ── Click-to-Call feature gate ────────────────────────────────────────────
+// Click-to-call (the softphone pill + hosted softphone window) is NOT yet
+// released to the public extension. It is active ONLY on the dev backend, so:
+//   • published/prod users never see it (DEFAULT_ENV = "prod"), and
+//   • the hosted softphone page (softphone.php) only exists on dev anyway.
+// This lets us publish unrelated extension updates without click-to-call going
+// live. TO LAUNCH: change this to `return true;` (or gate on a launch flag)
+// once softphone.php is deployed to prod and PhoneBurner's prod softphone app
+// is wired up.
+function clickToCallEnabled() {
+  return CURRENT_ENV === "dev";
+}
 
 // Content script files (crm_config.js must be first — defines CRM_REGISTRY)
 const CONTENT_SCRIPT_FILES = ["crm_config.js", "content.js"];
 
 // Track CRM context per tab (populated when content.js runs)
 const tabContexts = {}; // { [tabId]: { crmId, crmName, level, host, path } }
+
+// ── Click-to-Call (embedded softphone) state ──────────────────────────────
+// CRMs whose record pages support click-to-call decoration today. Record-level
+// context (id/type) is resolved from the URL via detectCrmFromUrl(); CRMs not
+// listed here can still be added later (L1/L2 can place calls without a
+// record id — they just can't log the call back).
+const CTC_SUPPORTED_CRMS = ["hubspot"];
+
+// Map a CRM object type to the PhoneBurner crm_name used in external_crm_data.
+// Mirrors the dial-session convention (see pb_dialsession_selection.php):
+// HubSpot contact → "hubspot", company → "hubspotcompany", deal → "hubspotdeal".
+function ctcCrmName(crmId, objectType) {
+  if (crmId === "hubspot") {
+    if (objectType === "company") return "hubspotcompany";
+    if (objectType === "deal") return "hubspotdeal";
+    return "hubspot"; // contact / default
+  }
+  return crmId || null; // other CRMs: baseline to the crmId
+}
+
+// ── Hosted softphone window ────────────────────────────────────────────────
+// We open our backend-hosted softphone page (BASE_URL/softphone.php) in a
+// popup window and pass the dial via URL params. The hosted page frames the PB
+// softphone and relays the dial. One window is reused across dials.
+let softphoneWindowId = null;
+
+async function resolveSoftphoneRuntime() {
+  try {
+    const { pb_softphone_runtime_override } = await chrome.storage.local.get(
+      "pb_softphone_runtime_override",
+    );
+    return (
+      pb_softphone_runtime_override ||
+      softphoneRuntimeUrl(CURRENT_ENV)
+    );
+  } catch (e) {
+    return softphoneRuntimeUrl(CURRENT_ENV);
+  }
+}
+
+async function buildSoftphoneUrl(dial) {
+  const runtime = await resolveSoftphoneRuntime();
+
+  // Mint a single-use code; softphone.php exchanges it server-side for this
+  // user's PhoneBurner bearer token and injects it into the iframe (?token=).
+  // The token never travels through the extension or the top-window URL.
+  let code = "";
+  try {
+    const resp = await api("core/softphone_auth_code.php");
+    if (resp && resp.ok && resp.code) code = resp.code;
+  } catch (e) {
+    console.error("softphone_auth_code failed", e);
+  }
+
+  const qs = new URLSearchParams();
+  qs.set("runtime", runtime);
+  if (code) qs.set("code", code);
+  if (dial.number) qs.set("number", dial.number);
+  // Identity travels as external_crm_data (crm_name + crm_id); the record id IS
+  // the crm_id. recordType / display labels are no longer sent.
+  if (dial.recordId) qs.set("crm_id", dial.recordId);
+  if (dial.crmName) qs.set("crm_name", dial.crmName);
+  return `${BASE_URL}/softphone.php?${qs.toString()}`;
+}
+
+async function openSoftphoneWindow(dial) {
+  const url = await buildSoftphoneUrl(dial);
+
+  // Reuse the existing window: navigate its tab to the new dial and focus it.
+  if (softphoneWindowId != null) {
+    try {
+      const win = await chrome.windows.get(softphoneWindowId, { populate: true });
+      if (win && win.tabs && win.tabs[0]) {
+        await chrome.tabs.update(win.tabs[0].id, { url });
+        await chrome.windows.update(softphoneWindowId, { focused: true });
+        return;
+      }
+    } catch (e) {
+      softphoneWindowId = null; // window was closed
+    }
+  }
+
+  try {
+    const created = await chrome.windows.create({
+      url,
+      type: "popup",
+      width: 420,
+      height: 680,
+    });
+    softphoneWindowId = created?.id ?? null;
+  } catch (e) {
+    console.error("openSoftphoneWindow failed", e);
+  }
+}
+
+chrome.windows.onRemoved.addListener((winId) => {
+  if (winId === softphoneWindowId) softphoneWindowId = null;
+});
 
 // Track which tab "owns" the current follow session
 let currentSession = {
@@ -280,6 +395,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.action.setIcon({ tabId, path: DEFAULT_ICON_PATH });
     sendResponse && sendResponse({ ok: true });
     return;
+  }
+
+  // Click-to-Call: a "Call with PhoneBurner" pill on a CRM record was clicked.
+  // Resolve the record context from the tab URL (authoritative) and open our
+  // hosted softphone window with the dial.
+  if (msg.type === "CLICK_TO_CALL") {
+    if (!clickToCallEnabled()) {
+      sendResponse({ ok: false, error: "click_to_call_disabled" });
+      return true;
+    }
+    const tab = sender.tab;
+    const ctx = detectCrmFromUrl(tab?.url || "");
+    // Identity travels as external_crm_data (crm_name + crm_id). crm_name (the
+    // object-type-aware namespace, e.g. hubspot / hubspotcompany / hubspotdeal)
+    // is what PB dedupes/logs on — not a display label.
+    const dial = {
+      number: msg.number,
+      recordId: ctx.recordId || null, // becomes crm_id
+      crmName: ctcCrmName(ctx.crmId, ctx.objectType),
+    };
+    // Open (or reuse) our hosted softphone window and pass the dial via the URL.
+    // Routing every CRM through this one page means one registered iframe origin
+    // and works even for CRMs we can't embed into.
+    openSoftphoneWindow(dial);
+    sendResponse({ ok: true });
+    return true;
   }
 
   // Popup asks for context (works even if content.js not injected yet)
@@ -1389,6 +1530,50 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (Object.prototype.hasOwnProperty.call(tabContexts, tabId))
     delete tabContexts[tabId];
+});
+
+// ── Click-to-Call: show the "Call with PhoneBurner" pill on supported CRM
+// record pages whenever the extension ALREADY has host access to that site.
+// Gated on an explicit host-permission grant (a user action) — NOT on the
+// softphone window being open — so the pill is present before the user reaches
+// for it. Clicking the pill is what opens the softphone (see CLICK_TO_CALL
+// handler above).
+async function maybeActivateCtcInTab(tabId, url) {
+  try {
+    if (!clickToCallEnabled()) return; // feature gated off (prod/public)
+    const ctx = detectCrmFromUrl(url || "");
+    if (!CTC_SUPPORTED_CRMS.includes(ctx.crmId) || !ctx.host) return;
+    const granted = await chrome.permissions.contains({
+      origins: [`https://${ctx.host}/*`],
+    });
+    if (!granted) return; // no host access → no passive injection
+    await ensureContentScript(tabId);
+    chrome.tabs.sendMessage(tabId, { type: "CTC_ACTIVATE" }, { frameId: 0 }, () => {
+      void chrome.runtime.lastError; // ignore "no receiver" races
+    });
+  } catch (e) {}
+}
+
+// Decorate on tab switch and on (SPA) navigation. The content-script side is
+// idempotent and keeps a MutationObserver running, so re-activating is cheap.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    maybeActivateCtcInTab(tab.id, tab.url);
+  });
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" || changeInfo.url) {
+    maybeActivateCtcInTab(tabId, tab?.url);
+  }
+});
+
+// On extension (re)load, decorate any already-open supported CRM tabs so the
+// pill appears without the user having to switch tabs or navigate.
+chrome.tabs.query({}, (tabs) => {
+  for (const tab of tabs || []) {
+    if (tab.id != null) maybeActivateCtcInTab(tab.id, tab.url);
+  }
 });
 
 // Re-inject after navigation/reload IF:

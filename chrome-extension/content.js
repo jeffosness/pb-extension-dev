@@ -1904,6 +1904,151 @@ async function hs_collectSelectedIdsDeep({
 }
 
 // ============================================================================
+//  📞 CLICK-TO-CALL — inject "Call with PhoneBurner" affordances on CRM records
+// ============================================================================
+// Activated on supported CRM record pages when the extension has host access
+// (CTC_ACTIVATE/CTC_DEACTIVATE from background.js). Per-CRM "finders" return
+// [{ el, number }]; the generic injector decorates each target with a button
+// that asks background.js to dial (background opens the hosted softphone window).
+// Record context (id/type) is resolved from the URL in background.js, so a
+// finder only needs to surface the dialable number. Adding a CRM = add a finder.
+//
+// Selectors follow the content.js safety rules: stable attributes only,
+// idempotent, and everything wrapped so a DOM quirk can never break the page.
+
+var PB_CTC_BTN_CLASS = "pb-ctc-call-btn";
+var pbCtcObserver = null;
+var pbCtcDebounce = null;
+
+// Normalize a displayed phone string ("(202) 838-8961") to a dialable number.
+// US-centric best-effort for v1; refine for international later.
+function pbCtcNormalizePhone(text) {
+  var digits = (text || "").replace(/[^\d]/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) return "+1" + digits;
+  if (digits.length === 11 && digits.charAt(0) === "1") return "+" + digits;
+  return "+" + digits;
+}
+
+// HubSpot renders phone property values as a <span> with this stable
+// selenium-test id — NOT a tel: link. (Confirmed on a live contact record.)
+function pbCtcFindHubspot() {
+  var out = [];
+  try {
+    var spans = document.querySelectorAll(
+      '[data-selenium-test="property-input-phone"]',
+    );
+    for (var i = 0; i < spans.length; i++) {
+      var el = spans[i];
+      // HubSpot sometimes nests the value inside matching spans. Decorate the
+      // INNERMOST one only, so we don't end up with a pill on both.
+      if (el.querySelector('[data-selenium-test="property-input-phone"]')) continue;
+      var num = pbCtcNormalizePhone(el.textContent || "");
+      if (num) out.push({ el: el, number: num });
+    }
+  } catch (e) {}
+  return out;
+}
+
+var PB_CTC_FINDERS = {
+  hubspot: pbCtcFindHubspot,
+};
+
+function pbCtcDecorate() {
+  try {
+    var ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+    var finder = PB_CTC_FINDERS[ctx.crmId];
+    if (!finder) return;
+    var targets = finder();
+
+    // ONE pill per distinct phone number, anchored to the LAST matching element
+    // for that number. HubSpot renders a hidden/duplicate copy of the value
+    // BEFORE the visible field, so the last match is the visible one — and
+    // inserting after it lands the pill after the number. Dedupe by the number
+    // itself (tagged on the button) is immune to however the DOM nests things
+    // and is loop-safe with the observer (an existing number is skipped).
+    var byNum = {};
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      if (!t.el || !t.number) continue;
+      var k = t.number.replace(/[^\d]/g, "");
+      if (k) byNum[k] = t; // later matches overwrite → keep the last
+    }
+
+    for (var key in byNum) {
+      var target = byNum[key];
+      // Anchor to the <a> that wraps the number; the pill goes right after it.
+      var anchor =
+        (target.el.closest && target.el.closest("a")) || target.el;
+
+      var existing = document.querySelector(
+        "." + PB_CTC_BTN_CLASS + '[data-pb-num="' + key + '"]',
+      );
+      if (existing) {
+        // HubSpot is a React app and RELOCATES our injected pill on re-render
+        // (it kept landing BEFORE the number). If it's not sitting immediately
+        // after the anchor, move it back. The observer fires on React's
+        // re-renders so this self-heals; React doesn't react to our move, so it
+        // settles (no loop).
+        if (anchor && anchor.nextElementSibling !== existing) {
+          anchor.insertAdjacentElement("afterend", existing);
+        }
+        continue;
+      }
+
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = PB_CTC_BTN_CLASS;
+      btn.dataset.pbNum = key;
+      btn.textContent = "📞 PhoneBurner";
+      btn.title = "Call with PhoneBurner";
+      btn.style.cssText =
+        "margin-left:6px;padding:2px 8px;font:600 11px system-ui,sans-serif;" +
+        "color:#fff;background:#3e6ff0;border:0;border-radius:8px;cursor:pointer;" +
+        "vertical-align:middle;line-height:1.6;";
+
+      (function (number) {
+        btn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          // Background opens our hosted softphone window and places the dial.
+          try {
+            chrome.runtime.sendMessage({ type: "CLICK_TO_CALL", number: number });
+          } catch (e) {}
+        });
+      })(target.number);
+
+      anchor.insertAdjacentElement("afterend", btn);
+    }
+  } catch (e) {}
+}
+
+function pbCtcScheduleDecorate() {
+  if (pbCtcDebounce) clearTimeout(pbCtcDebounce);
+  pbCtcDebounce = setTimeout(pbCtcDecorate, 300);
+}
+
+function pbCtcActivate() {
+  pbCtcDecorate();
+  if (pbCtcObserver) return; // already watching
+  try {
+    pbCtcObserver = new MutationObserver(pbCtcScheduleDecorate);
+    pbCtcObserver.observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+}
+
+function pbCtcDeactivate() {
+  try {
+    if (pbCtcObserver) {
+      pbCtcObserver.disconnect();
+      pbCtcObserver = null;
+    }
+    var btns = document.querySelectorAll("." + PB_CTC_BTN_CLASS);
+    for (var i = 0; i < btns.length; i++) btns[i].remove();
+  } catch (e) {}
+}
+
+// ============================================================================
 //  🔁 MESSAGE HANDLER (popup/background ↔ content) — SINGLE LISTENER
 // ============================================================================
 
@@ -1912,6 +2057,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- Required for ensureContentScript() ping test ---
   if (msg?.type === "PING") {
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // --- Click-to-Call decoration toggles (from background.js) ---
+  if (msg?.type === "CTC_ACTIVATE") {
+    if (isTopWindow) pbCtcActivate();
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg?.type === "CTC_DEACTIVATE") {
+    if (isTopWindow) pbCtcDeactivate();
     sendResponse({ ok: true });
     return true;
   }
