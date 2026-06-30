@@ -61,6 +61,23 @@ function clickToCallEnabled() {
   return CURRENT_ENV === "dev";
 }
 
+// Per-user toggle for the in-page pill. Default true. The popup writes this
+// via the Click-to-Call settings card. Distinct from clickToCallEnabled()
+// (which is the env-level feature flag) so the user pref persists across
+// env switches and survives the eventual flip to "feature live in prod".
+let CTC_USER_ENABLED = true;
+chrome.storage.local.get(["pb_ctc_user_enabled"]).then((res) => {
+  CTC_USER_ENABLED = res?.pb_ctc_user_enabled !== false;
+});
+
+// Should the pill render right now? Combines the env feature gate with the
+// per-user toggle. Used by maybeActivateCtcInTab; the CLICK_TO_CALL handler
+// still only checks clickToCallEnabled() because if there are no pills there
+// shouldn't be any clicks to handle.
+function ctcShouldShowPills() {
+  return clickToCallEnabled() && CTC_USER_ENABLED;
+}
+
 // Content script files (crm_config.js must be first — defines CRM_REGISTRY)
 const CONTENT_SCRIPT_FILES = ["crm_config.js", "content.js"];
 
@@ -1542,7 +1559,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // handler above).
 async function maybeActivateCtcInTab(tabId, url) {
   try {
-    if (!clickToCallEnabled()) return; // feature gated off (prod/public)
+    if (!ctcShouldShowPills()) return; // env gate OR user toggle off
     const ctx = detectCrmFromUrl(url || "");
     if (!CTC_SUPPORTED_CRMS.includes(ctx.crmId) || !ctx.host) return;
     const granted = await chrome.permissions.contains({
@@ -1555,6 +1572,28 @@ async function maybeActivateCtcInTab(tabId, url) {
     });
   } catch (e) {}
 }
+
+// React to the user toggling click-to-call on/off in popup Settings.
+// Toggle OFF → fire CTC_DEACTIVATE to every supported CRM tab so existing
+// pills disappear immediately without a reload.
+// Toggle ON  → re-run maybeActivateCtcInTab for every tab so pills come back.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !("pb_ctc_user_enabled" in changes)) return;
+  const newValue = changes.pb_ctc_user_enabled.newValue;
+  CTC_USER_ENABLED = newValue !== false;
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs || []) {
+      if (tab.id == null) continue;
+      if (CTC_USER_ENABLED) {
+        maybeActivateCtcInTab(tab.id, tab.url);
+      } else {
+        chrome.tabs.sendMessage(tab.id, { type: "CTC_DEACTIVATE" }, { frameId: 0 }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    }
+  });
+});
 
 // Decorate on tab switch and on (SPA) navigation. The content-script side is
 // idempotent and keeps a MutationObserver running, so re-activating is cheap.
