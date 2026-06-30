@@ -36,10 +36,15 @@
 //   defaultEnv    Which env to use when no override is stored. Matches the
 //                 extension's DEFAULT_ENV.
 //
-// You ALSO register (on the PhoneBurner side, not here, per env):
-//   • your extension origin  chrome-extension://<your-extension-id>
-//   • your softphone_call_done webhook URL
-//   • the HMAC secret (lives only on your server's config.php, never here)
+// You ALSO configure on the PhoneBurner side (not here), per env:
+//   • softphone_call_done webhook URL — the backend host that handles call
+//     completions (e.g. https://extension-dev.phoneburner.biz)
+//   • Allowed iframe origins — only the backend host needs to be registered,
+//     NOT the chrome-extension:// origin. The softphone iframe's parent in
+//     our architecture is softphone.php on our backend, so PB only ever sees
+//     the backend host as the parent origin. The extension ID is invisible
+//     to PB and intentionally not referenced anywhere in this codebase.
+//   • HMAC secret — lives only on your server's config.php, never here.
 //
 // For ad-hoc testing, chrome.storage.local["pb_softphone_runtime_override"]
 // (a full URL) wins over everything below.
@@ -54,13 +59,14 @@ const PARTNER_SOFTPHONE = {
   // integration with its own webhook URL + HMAC secret.
   //
   //   dev:  "Chrome Extension Dev"  — webhook → extension-dev backend
-  //   prod: TBD                     — webhook → extension (prod) backend
+  //   prod: "Chrome Extension"      — webhook → extension (prod) backend
   //
-  // Set the prod slug once the matching softphone registration exists in
-  // PhoneBurner and softphone.php has been promoted to the prod backend.
+  // The matching HMAC secret for each env lives in that backend's config.php
+  // as SOFTPHONE_HMAC_SECRET. The slug itself is a public identifier (it
+  // appears in the iframe URL) so committing it here is safe.
   slug: {
     dev: "d642dcb35bc4474e0159561acedb234e3b041c58",
-    prod: "", // not yet registered — set when going live on prod
+    prod: "c3687a4fcd17437b16d6c31571b9ef96fce2af61",
   },
 
   // Which env to use when nothing is overridden. Matches background.js
