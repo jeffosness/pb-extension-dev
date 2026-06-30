@@ -1938,21 +1938,40 @@ function pbCtcNormalizePhone(text) {
 // cells. The list cells embed the contact/company ID in the <td> id, so we
 // can pass per-row identity through the click.
 //
-//   Record page:  <span data-selenium-test="property-input-phone">…</span>
+//   Record page:  <span data-selenium-test="property-input-{propName}">…</span>
+//                 where {propName} is the property's internal name — phone,
+//                 mobilephone, home_phone_1, faxnumber, or custom.
 //   List view:    <td id="cell-0-1-phone-{contactId}"> (or 0-2 for companies)
 function pbCtcFindHubspot() {
   var out = [];
   try {
     // ── 1. Record-page property panel ────────────────────────────────
-    var spans = document.querySelectorAll(
-      '[data-selenium-test="property-input-phone"]',
-    );
+    // We can't enumerate every phone-typed property name (custom fields
+    // exist — "Home Phone 1", "Cell", "Best Number", etc.), so we widen the
+    // selector to ALL property-input-* spans and content-filter to values
+    // that look like phone numbers. This catches phone/mobilephone/custom
+    // phone fields while excluding notes, IDs, dates, statuses, etc. that
+    // also use the property-input-* attribute pattern.
+    var spans = document.querySelectorAll('[data-selenium-test^="property-input-"]');
+    var phoneShape = /^[\d\s\-+().]+$/;
     for (var i = 0; i < spans.length; i++) {
       var el = spans[i];
-      // HubSpot sometimes nests the value inside matching spans. Decorate the
-      // INNERMOST one only, so we don't end up with a pill on both.
-      if (el.querySelector('[data-selenium-test="property-input-phone"]')) continue;
-      var num = pbCtcNormalizePhone(el.textContent || "");
+      // Skip outer matches — decorate the INNERMOST one only.
+      if (el.querySelector('[data-selenium-test^="property-input-"]')) continue;
+      var text = (el.textContent || "").trim();
+      // Length cap rejects long-text fields like PhoneBurner Notes that may
+      // contain a phone number somewhere inside paragraphs of activity log.
+      if (!text || text.length > 25) continue;
+      // Character whitelist rejects fields with letters (City, dates with AM/PM,
+      // statuses, tags). Has to come before normalize so we don't accidentally
+      // dial "06/30/2026 8:00 AM MDT" by stripping non-digits.
+      if (!phoneShape.test(text)) continue;
+      // Min length 10 rejects things that pass the shape check but aren't
+      // phones — Folder IDs (8 digits), extension numbers, empty separators
+      // like "--".
+      var digits = text.replace(/\D/g, "");
+      if (digits.length < 10) continue;
+      var num = pbCtcNormalizePhone(text);
       if (num) out.push({ el: el, number: num });
     }
 
