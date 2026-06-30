@@ -398,8 +398,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // Click-to-Call: a "Call with PhoneBurner" pill on a CRM record was clicked.
-  // Resolve the record context from the tab URL (authoritative) and open our
-  // hosted softphone window with the dial.
+  // On a record page the pill omits per-row context and we resolve identity
+  // from the tab URL (detectCrmFromUrl). On a list view the pill carries
+  // recordId + objectType from its row — those win over URL-derived context
+  // because the list URL has no per-row identity to extract.
   if (msg.type === "CLICK_TO_CALL") {
     if (!clickToCallEnabled()) {
       sendResponse({ ok: false, error: "click_to_call_disabled" });
@@ -412,8 +414,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // is what PB dedupes/logs on — not a display label.
     const dial = {
       number: msg.number,
-      recordId: ctx.recordId || null, // becomes crm_id
-      crmName: ctcCrmName(ctx.crmId, ctx.objectType),
+      recordId: msg.recordId || ctx.recordId || null, // becomes crm_id
+      crmName: ctcCrmName(ctx.crmId, msg.objectType || ctx.objectType),
     };
     // Open (or reuse) our hosted softphone window and pass the dial via the URL.
     // Routing every CRM through this one page means one registered iframe origin

@@ -1906,12 +1906,16 @@ async function hs_collectSelectedIdsDeep({
 // ============================================================================
 //  📞 CLICK-TO-CALL — inject "Call with PhoneBurner" affordances on CRM records
 // ============================================================================
-// Activated on supported CRM record pages when the extension has host access
-// (CTC_ACTIVATE/CTC_DEACTIVATE from background.js). Per-CRM "finders" return
-// [{ el, number }]; the generic injector decorates each target with a button
-// that asks background.js to dial (background opens the hosted softphone window).
-// Record context (id/type) is resolved from the URL in background.js, so a
-// finder only needs to surface the dialable number. Adding a CRM = add a finder.
+// Activated on supported CRM record pages AND list views when the extension
+// has host access (CTC_ACTIVATE/CTC_DEACTIVATE from background.js). Per-CRM
+// "finders" return [{ el, number, recordId?, objectType? }]; the generic
+// injector decorates each target with a button that asks background.js to
+// dial.
+//
+// recordId + objectType (when present) travel with the click so the dial
+// carries per-row identity. On a record page they're optional — background.js
+// falls back to detectCrmFromUrl(tab.url). On a list page they're REQUIRED
+// because the page URL has no per-row context.
 //
 // Selectors follow the content.js safety rules: stable attributes only,
 // idempotent, and everything wrapped so a DOM quirk can never break the page.
@@ -1930,11 +1934,16 @@ function pbCtcNormalizePhone(text) {
   return "+" + digits;
 }
 
-// HubSpot renders phone property values as a <span> with this stable
-// selenium-test id — NOT a tel: link. (Confirmed on a live contact record.)
+// HubSpot finder — surfaces both record-page phone fields AND list-view phone
+// cells. The list cells embed the contact/company ID in the <td> id, so we
+// can pass per-row identity through the click.
+//
+//   Record page:  <span data-selenium-test="property-input-phone">…</span>
+//   List view:    <td id="cell-0-1-phone-{contactId}"> (or 0-2 for companies)
 function pbCtcFindHubspot() {
   var out = [];
   try {
+    // ── 1. Record-page property panel ────────────────────────────────
     var spans = document.querySelectorAll(
       '[data-selenium-test="property-input-phone"]',
     );
@@ -1945,6 +1954,37 @@ function pbCtcFindHubspot() {
       if (el.querySelector('[data-selenium-test="property-input-phone"]')) continue;
       var num = pbCtcNormalizePhone(el.textContent || "");
       if (num) out.push({ el: el, number: num });
+    }
+
+    // ── 2. List view: contact (0-1) and company (0-2) phone cells ────
+    var phoneCells = document.querySelectorAll(
+      'td[id^="cell-0-1-phone-"], td[id^="cell-0-2-phone-"]'
+    );
+    for (var j = 0; j < phoneCells.length; j++) {
+      var cell = phoneCells[j];
+      var phoneText = cell.textContent || "";
+      var listNum = pbCtcNormalizePhone(phoneText);
+      if (!listNum) continue; // empty phone cell
+
+      // Cell id pattern: "cell-{0-1|0-2}-phone-{recordId}"
+      var m = cell.id.match(/^cell-(0-[123])-phone-(\d+)$/);
+      if (!m) continue;
+      var typeCode = m[1];
+      var recordId = m[2];
+      var objectType =
+        typeCode === "0-1" ? "contact" :
+        typeCode === "0-2" ? "company" :
+        typeCode === "0-3" ? "deal" : null;
+
+      // The displayed phone sits inside an <a data-link-use="dark"> inside
+      // the cell. Anchor the pill right after that link.
+      var listAnchor = cell.querySelector('a[data-link-use="dark"]') || cell;
+      out.push({
+        el: listAnchor,
+        number: listNum,
+        recordId: recordId,
+        objectType: objectType,
+      });
     }
   } catch (e) {}
   return out;
@@ -1961,45 +2001,47 @@ function pbCtcDecorate() {
     if (!finder) return;
     var targets = finder();
 
-    // ONE pill per distinct phone number, anchored to the LAST matching element
-    // for that number. HubSpot renders a hidden/duplicate copy of the value
-    // BEFORE the visible field, so the last match is the visible one — and
-    // inserting after it lands the pill after the number. Dedupe by the number
-    // itself (tagged on the button) is immune to however the DOM nests things
-    // and is loop-safe with the observer (an existing number is skipped).
-    var byNum = {};
+    // Dedupe by ANCHOR element, not by phone number. On the record page the
+    // finder's innermost-only filter means each phone resolves to exactly one
+    // anchor — so dedup-by-anchor degenerates to dedup-by-number naturally.
+    // On a list view, multiple rows can legitimately share a phone number
+    // (multiple contacts at the same company) and EACH row should get a pill;
+    // anchor-keyed dedup gives us that for free.
+    var seenAnchors = new Set();
+
     for (var i = 0; i < targets.length; i++) {
       var t = targets[i];
       if (!t.el || !t.number) continue;
-      var k = t.number.replace(/[^\d]/g, "");
-      if (k) byNum[k] = t; // later matches overwrite → keep the last
-    }
+      var anchor = (t.el.closest && t.el.closest("a")) || t.el;
+      if (seenAnchors.has(anchor)) continue;
+      seenAnchors.add(anchor);
 
-    for (var key in byNum) {
-      var target = byNum[key];
-      // Anchor to the <a> that wraps the number; the pill goes right after it.
-      var anchor =
-        (target.el.closest && target.el.closest("a")) || target.el;
+      // If the pill is already sitting right after this anchor, nothing to do.
+      var sib = anchor.nextElementSibling;
+      if (sib && sib.classList && sib.classList.contains(PB_CTC_BTN_CLASS)) {
+        continue;
+      }
 
-      var existing = document.querySelector(
-        "." + PB_CTC_BTN_CLASS + '[data-pb-num="' + key + '"]',
-      );
-      if (existing) {
-        // HubSpot is a React app and RELOCATES our injected pill on re-render
-        // (it kept landing BEFORE the number). If it's not sitting immediately
-        // after the anchor, move it back. The observer fires on React's
-        // re-renders so this self-heals; React doesn't react to our move, so it
-        // settles (no loop).
-        if (anchor && anchor.nextElementSibling !== existing) {
-          anchor.insertAdjacentElement("afterend", existing);
-        }
+      // HubSpot is a React app and may RELOCATE our injected pill on re-render
+      // (on the record page it kept landing BEFORE the number; on list views
+      // re-renders happen on scroll/filter). Look within the row (list view)
+      // or the immediate parent (record page) for a stray pill that was moved,
+      // and pull it back into place. The MutationObserver fires on React's
+      // re-renders so this self-heals; React doesn't react to our move, so it
+      // settles (no loop).
+      var scope = anchor.closest("tr") || anchor.parentElement;
+      var stray = scope ? scope.querySelector("." + PB_CTC_BTN_CLASS) : null;
+      if (stray) {
+        anchor.insertAdjacentElement("afterend", stray);
         continue;
       }
 
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = PB_CTC_BTN_CLASS;
-      btn.dataset.pbNum = key;
+      btn.dataset.pbNum = t.number.replace(/[^\d]/g, "");
+      if (t.recordId) btn.dataset.pbRecordId = t.recordId;
+      if (t.objectType) btn.dataset.pbObjectType = t.objectType;
       btn.textContent = "📞 PhoneBurner";
       btn.title = "Call with PhoneBurner";
       btn.style.cssText =
@@ -2007,16 +2049,24 @@ function pbCtcDecorate() {
         "color:#fff;background:#3e6ff0;border:0;border-radius:8px;cursor:pointer;" +
         "vertical-align:middle;line-height:1.6;";
 
-      (function (number) {
+      (function (number, recordId, objectType) {
         btn.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
           // Background opens our hosted softphone window and places the dial.
+          // recordId/objectType travel with the click so list-view pills carry
+          // per-row identity; record-page pills omit them (null) and let
+          // background.js resolve from the tab URL.
           try {
-            chrome.runtime.sendMessage({ type: "CLICK_TO_CALL", number: number });
+            chrome.runtime.sendMessage({
+              type: "CLICK_TO_CALL",
+              number: number,
+              recordId: recordId || null,
+              objectType: objectType || null,
+            });
           } catch (e) {}
         });
-      })(target.number);
+      })(t.number, t.recordId, t.objectType);
 
       anchor.insertAdjacentElement("afterend", btn);
     }
