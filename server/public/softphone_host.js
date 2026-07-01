@@ -88,6 +88,9 @@
       flush();
     } else if (type === MSG.DIALING) {
       setStatus("dialing…");
+      // The softphone is dialing — mic must be working. Flip the button
+      // into a status indicator regardless of what the Permissions API says.
+      markMicActive();
     } else if (type === MSG.CALL_COMPLETE) {
       setStatus("ready");
     }
@@ -107,21 +110,37 @@
   // Also greet immediately in case the iframe already finished loading.
   post({ type: MSG.HELLO });
 
-  function hideMicButton() {
-    if (micBtn) micBtn.style.display = "none";
+  // ── Mic status footer ────────────────────────────────────────────────
+  // Two UI states share the same #sp-mic element:
+  //
+  //   BUTTON  "🎤 Enable microphone for calls" — first-run helper. Clicking
+  //           calls getUserMedia to prime Chrome's mic permission prompt so
+  //           the softphone can dial cleanly on its first attempt.
+  //   STATUS  "🎤 Microphone active" — non-clickable indicator confirming
+  //           the mic is granted (no explicit action needed from the user).
+  //
+  // We flip button → status when ANY of these signals fire:
+  //   • enumerateDevices() returns audioinput devices with populated labels
+  //     (spec: labels are only exposed after mic grant on the parent origin)
+  //   • Permissions API onchange event → "granted"
+  //   • The softphone iframe posts "pb-softphone:dialing" (proves mic works
+  //     regardless of where Chrome tracks the grant — parent or delegated)
+  //   • The user clicks the button and getUserMedia resolves successfully
+  //
+  // The dialing-event signal is our fallback for when Chrome's permission
+  // tracking is quirky (delegated permission via allow="microphone" doesn't
+  // always show up as "granted" at the parent origin, so enumerateDevices
+  // returns unlabeled devices even though the softphone dials fine).
+  function markMicActive() {
+    if (!micBtn || micBtn.dataset.pbMicActive === "1") return;
+    micBtn.dataset.pbMicActive = "1";
+    micBtn.textContent = "🎤 Microphone active";
+    micBtn.disabled = true;
+    micBtn.style.cursor = "default";
+    micBtn.style.opacity = "0.7";
   }
 
-  // Detect whether the origin already has mic permission using two paths:
-  //
-  //   1. enumerateDevices — the reliable signal. If the browser returns
-  //      populated `label` fields on audioinput devices, mic permission is
-  //      granted (spec: labels are only exposed after a getUserMedia grant).
-  //   2. Permissions API — subscribe to onchange so an in-session grant
-  //      hides the button in real time (enumerateDevices only runs once).
-  //      Chrome's permissions.query sometimes returns "prompt" for
-  //      microphone even after grant, so we can't rely on the initial
-  //      value alone — but the onchange callback still fires reliably.
-  function detectMicPermissionAndHide() {
+  function probeMicPermission() {
     if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
       navigator.mediaDevices
         .enumerateDevices()
@@ -129,7 +148,7 @@
           var hasLabeledMic = devices.some(function (d) {
             return d.kind === "audioinput" && d.label && d.label.length > 0;
           });
-          if (hasLabeledMic) hideMicButton();
+          if (hasLabeledMic) markMicActive();
         })
         .catch(function () {});
     }
@@ -138,9 +157,9 @@
         navigator.permissions
           .query({ name: "microphone" })
           .then(function (status) {
-            if (status.state === "granted") hideMicButton();
+            if (status.state === "granted") markMicActive();
             status.onchange = function () {
-              if (status.state === "granted") hideMicButton();
+              if (status.state === "granted") markMicActive();
             };
           })
           .catch(function () {});
@@ -149,9 +168,10 @@
   }
 
   if (micBtn) {
-    detectMicPermissionAndHide();
+    probeMicPermission();
 
     micBtn.addEventListener("click", function () {
+      if (micBtn.dataset.pbMicActive === "1") return; // status indicator, not a button
       log("requesting microphone…");
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         log("✗ getUserMedia unavailable");
@@ -162,7 +182,7 @@
         .then(function (s) {
           s.getTracks().forEach(function (t) { t.stop(); });
           log("✓ microphone granted");
-          hideMicButton();
+          markMicActive();
         })
         .catch(function (e) {
           log("✗ mic error: " + ((e && e.name) || "") + " " + ((e && e.message) || e));
