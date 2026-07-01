@@ -111,11 +111,28 @@
     if (micBtn) micBtn.style.display = "none";
   }
 
-  if (micBtn) {
-    // Hide the pre-emptive mic-priming button if the origin already has mic
-    // permission — Chrome remembers permission per-origin, so on second+ opens
-    // there's nothing for the button to do. Also react to state changes so
-    // clicking Allow in the prompt hides the button in real time.
+  // Detect whether the origin already has mic permission using two paths:
+  //
+  //   1. enumerateDevices — the reliable signal. If the browser returns
+  //      populated `label` fields on audioinput devices, mic permission is
+  //      granted (spec: labels are only exposed after a getUserMedia grant).
+  //   2. Permissions API — subscribe to onchange so an in-session grant
+  //      hides the button in real time (enumerateDevices only runs once).
+  //      Chrome's permissions.query sometimes returns "prompt" for
+  //      microphone even after grant, so we can't rely on the initial
+  //      value alone — but the onchange callback still fires reliably.
+  function detectMicPermissionAndHide() {
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+      navigator.mediaDevices
+        .enumerateDevices()
+        .then(function (devices) {
+          var hasLabeledMic = devices.some(function (d) {
+            return d.kind === "audioinput" && d.label && d.label.length > 0;
+          });
+          if (hasLabeledMic) hideMicButton();
+        })
+        .catch(function () {});
+    }
     if (navigator.permissions && navigator.permissions.query) {
       try {
         navigator.permissions
@@ -126,11 +143,13 @@
               if (status.state === "granted") hideMicButton();
             };
           })
-          .catch(function () {
-            // Some browsers throw for name:"microphone" — leave the button in.
-          });
+          .catch(function () {});
       } catch (e) {}
     }
+  }
+
+  if (micBtn) {
+    detectMicPermissionAndHide();
 
     micBtn.addEventListener("click", function () {
       log("requesting microphone…");
