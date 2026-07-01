@@ -2069,20 +2069,17 @@ function pbCtcDecorate() {
       btn.dataset.pbNum = t.number.replace(/[^\d]/g, "");
       if (t.recordId) btn.dataset.pbRecordId = t.recordId;
       if (t.objectType) btn.dataset.pbObjectType = t.objectType;
-      // Real PhoneBurner brand flame instead of the 🔥 emoji — the emoji's
-      // color varies across OS/font renderings, this is on-brand and
-      // consistent. Inline the SVG-like PNG via data URL so the DOM
-      // doesn't reference chrome-extension://<id>/icons/... and every
-      // pill renders without an HTTP round trip.
+      // Icon-only affordance: the PhoneBurner brand flame, no background,
+      // no text. Cleanest visual next to a phone number — the flame IS
+      // the button. The title attribute carries "Call with PhoneBurner"
+      // for the tooltip / screen-reader path.
       btn.innerHTML =
-        '<img src="' + PB_CTC_FLAME_ICON + '" alt="" width="12" height="12" ' +
-        'style="vertical-align:middle;margin-right:4px;">' +
-        'PhoneBurner';
+        '<img src="' + PB_CTC_FLAME_ICON + '" alt="" width="16" height="16" ' +
+        'style="display:block;">';
       btn.title = "Call with PhoneBurner";
       btn.style.cssText =
-        "margin-left:4px;padding:1px 6px;font:600 11px system-ui,sans-serif;" +
-        "color:#fff;background:#3e6ff0;border:0;border-radius:6px;cursor:pointer;" +
-        "vertical-align:middle;line-height:1.6;";
+        "margin-left:6px;padding:2px;background:transparent;border:0;" +
+        "cursor:pointer;vertical-align:middle;line-height:1;";
 
       (function (number, recordId, objectType) {
         btn.addEventListener("click", function (ev) {
