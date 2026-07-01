@@ -383,6 +383,45 @@
           </button>
         </div>
 
+        <!-- Inline Connect prompts — shown on the Dial tab when the user is
+             on a matching L3 CRM page AND that CRM isn't connected yet, so
+             they can act without having to go hunting in Settings. Each card
+             is gated by (isX && !X_STATE.connected) in popup.js. -->
+        <div id="hs-connect-inline-card" class="card hidden">
+          <div class="card-title">Connect HubSpot to get started</div>
+          <div class="help-text">
+            You're on a HubSpot page but haven't connected HubSpot yet.
+            Connect once to launch dial sessions from HubSpot records, lists,
+            and task queues.
+          </div>
+          <button id="hs-connect-inline-btn" class="primary mt-10">
+            Connect HubSpot
+          </button>
+        </div>
+
+        <div id="close-connect-inline-card" class="card hidden">
+          <div class="card-title">Connect Close to get started</div>
+          <div class="help-text">
+            You're on a Close page but haven't connected Close yet. Connect
+            once to launch dial sessions from Close leads and contacts.
+          </div>
+          <button id="close-connect-inline-btn" class="primary mt-10">
+            Connect Close
+          </button>
+        </div>
+
+        <div id="apollo-connect-inline-card" class="card hidden">
+          <div class="card-title">Connect Apollo to get started</div>
+          <div class="help-text">
+            You're on an Apollo page but haven't connected Apollo yet.
+            Connect once to launch dial sessions from Apollo contacts and
+            sequences.
+          </div>
+          <button id="apollo-connect-inline-btn" class="primary mt-10">
+            Connect Apollo
+          </button>
+        </div>
+
         <!-- Current Page (hidden on Level 3) -->
         <div id="card-current-page" class="card">
           <div class="card-title">Current Page</div>
