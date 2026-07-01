@@ -620,7 +620,11 @@
           <button id="apollo-disconnect" class="danger">Disconnect Apollo</button>
         </div>
 
-        <!-- Apollo Connect (when not connected) -->
+        <!-- Apollo Connect — only surfaces when the user is on an Apollo page
+             AND hasn't yet connected. Off-Apollo pages don't show this so
+             users landing on Settings for other CRMs don't see a stray
+             "Connect Apollo" card without context. Matches the HubSpot/Close
+             pattern (connect prompt lives in the CRM's own page context). -->
         <div id="apollo-apikey-card" class="card hidden">
           <div class="card-title">Apollo Connection</div>
           <div class="help-text">

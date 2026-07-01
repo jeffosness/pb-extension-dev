@@ -655,9 +655,16 @@ function applyContextVisibility(ctx, pbConnected) {
   // Apollo sequence card: show when Apollo connected + PB connected (works from any page)
   setVisible(apolloSequenceCard, APOLLO_STATE.connected && pbConnected);
   // Apollo settings card: show when Apollo is connected
+  // Apollo connect card: show ONLY when the user is on an Apollo page AND
+  // not yet connected. Previously this card was always visible for anyone
+  // without an Apollo connection, which was confusing for HubSpot/Close
+  // users who'd land on Settings after connecting their PB PAT and see an
+  // "Apollo Connection" card but no equivalent for the CRM they actually
+  // use. Aligns Apollo with the HubSpot/Close pattern where the "connect
+  // me" prompt only surfaces in the context where it's actionable.
   const apolloApiKeyCard = $("apollo-apikey-card");
   setVisible(apolloSettingsCard, APOLLO_STATE.connected);
-  setVisible(apolloApiKeyCard, !APOLLO_STATE.connected);
+  setVisible(apolloApiKeyCard, isApollo && !APOLLO_STATE.connected);
   if (APOLLO_STATE.connected) {
     const apolloSettingsStatus = $("apollo-settings-status");
     const apolloDisconnectBtn = $("apollo-disconnect");
