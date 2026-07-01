@@ -107,6 +107,13 @@ $cfg = [
       </details>
     </div>
     <script>window.PB_SOFTPHONE = <?= json_encode($cfg, JSON_UNESCAPED_SLASHES) ?>;</script>
-    <script src="softphone_host.js"></script>
+    <?php
+      // Cache-bust softphone_host.js on every deploy so browsers immediately
+      // pick up server-side JS changes without waiting for Chrome's heuristic
+      // freshness to expire the cached copy.
+      $spHostFile = __DIR__ . '/softphone_host.js';
+      $spHostVer = is_file($spHostFile) ? filemtime($spHostFile) : time();
+    ?>
+    <script src="softphone_host.js?v=<?= $spHostVer ?>"></script>
   </body>
 </html>
