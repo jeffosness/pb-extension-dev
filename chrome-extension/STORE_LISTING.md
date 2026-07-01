@@ -18,14 +18,22 @@ The PhoneBurner Dial Session Companion bridges your CRM workflow with PhoneBurne
 🚀 Key Features
 
 🔹 Launch Dial Sessions from Your CRM
-Two ways to start dialing:
+Three ways to start dialing:
 
 • Select & Launch: Choose records from any CRM list view and launch instantly
 • List-Based Launch (HubSpot): Pick a saved HubSpot list from a dropdown and dial up to 500 contacts or companies
+• Task-Based Launch: Dial straight from your HubSpot Task Queue or your AgencyZoom task list — turn your task queue into a power-dialing session
 
 ✅ Automatically sends contacts to PhoneBurner
 ✅ Eliminates manual CSV exports and imports
 ✅ Works with contacts, companies, and deals
+
+🔹 Click-to-Call — Single Calls Without a Full Dial Session (HubSpot)
+A small PhoneBurner flame icon appears next to phone numbers on HubSpot contact records, company records, and list views. Click it to place a single call in seconds — perfect for one-off follow-ups when you don't need a whole dial session.
+
+• Every phone field is dialable — Phone Number, Mobile, Home Phone, and any custom phone properties
+• Icon-only design stays out of your way; hover for context
+• Toggle it off in Settings if you already use another dialer's click-to-call
 
 🔹 Real-Time "Follow" Widget
 Stay in sync with your dialer:
@@ -68,6 +76,7 @@ Full API integration with Apollo:
 • HubSpot — Advanced Level 3 integration (API-based)
 • Close — Advanced Level 3 integration (API-based)
 • Apollo.io — Advanced Level 3 integration (API-based)
+• AgencyZoom — Optimized Level 2 support (task-list dialing)
 • Pipedrive — Optimized Level 2 support
 • Salesforce — Optimized Level 2 support
 • Zoho, monday.com, and others — Generic Level 1 support
@@ -111,12 +120,12 @@ This extension is ideal for:
 • PhoneBurner dial sessions support up to 500 contacts
 • Features may vary slightly by CRM platform
 
-🆕 What's New in v0.7.0
+🆕 What's New in v0.8.0
 
-✨ New production backend: PhoneBurner Dial Session Companion has migrated to a new production backend with better reliability and a stronger foundation for upcoming features.
+📞 Click-to-Call for HubSpot — a PhoneBurner flame icon next to every phone number on your HubSpot records and lists. Click it to place a single call without launching a full dial session. Great for one-off follow-ups.
 
-🔄 For most users this is invisible — your PhoneBurner, HubSpot, and Apollo connections carry over automatically. No action required.
+📋 AgencyZoom support — visit your AgencyZoom task list and launch a PhoneBurner dial session in one click. Leads with multiple open tasks are automatically deduped so you dial each contact once.
 
-🔐 Close users: you'll see a one-time reconnect prompt the next time you launch a Close dial session. Takes about 30 seconds.
+✨ Cleaner first-run experience — save your PhoneBurner PAT and stay on the Dial tab where you can act immediately. If your CRM isn't connected yet, an inline "Connect" prompt appears right there instead of hiding in Settings.
 
-Your data is untouched throughout — contacts, lists, call history, and CRM records all stay where they are.
+🐛 Follow widget fix — the live Follow widget now correctly navigates between contacts on CRMs where the record ID is in the URL's query string (AgencyZoom and similar).
