@@ -46,6 +46,10 @@ function selected_count_bucket(int $count): string {
 /**
  * Read all entries from a JSONL log file and aggregate into accumulators.
  * If $filterByDate is true, entries are filtered by timestamp against $startTs/$endTs.
+ * If $filterEventType is non-empty ('dial_session'|'click_to_call'), only entries
+ * matching that event type contribute to the accumulators. `byEventType` is
+ * always populated with the raw split (across every entry in the log, ignoring
+ * the filter) so callers can see the un-filtered breakdown.
  */
 function aggregate_log_file(
     string $logFile,
@@ -60,9 +64,11 @@ function aggregate_log_file(
     int &$selectedCountEntries,
     array &$selectedCountBuckets,
     array &$byUser,
+    array &$byEventType,
     bool $filterByDate = false,
     int $startTs = 0,
-    int $endTs = 0
+    int $endTs = 0,
+    string $filterEventType = ''
 ): void {
     $fh = @fopen($logFile, 'r');
     if ($fh === false) return;
@@ -80,6 +86,18 @@ function aggregate_log_file(
             if ($logTs < $startTs || $logTs > $endTs) {
                 continue;
             }
+        }
+
+        // event_type: missing on legacy entries = "dial_session" (all pre-CTC
+        // tracking events were dial-session launches). Count into the split
+        // BEFORE applying any event_type filter so the split reflects real
+        // traffic, not the filter's subset.
+        $eventType = $entry['event_type'] ?? 'dial_session';
+        $byEventType[$eventType] = ($byEventType[$eventType] ?? 0) + 1;
+
+        // Apply the event_type filter — skips entries that don't match.
+        if ($filterEventType !== '' && $eventType !== $filterEventType) {
+            continue;
         }
 
         $total++;
@@ -170,6 +188,13 @@ $today = date('Y-m-d');
 if (!$start) $start = $today;
 if (!$end) $end = $today;
 
+// Optional event_type filter — accepts 'dial_session' or 'click_to_call'.
+// When absent or blank, aggregate everything (existing behavior).
+$eventTypeFilter = (string)($_GET['event_type'] ?? '');
+if (!in_array($eventTypeFilter, ['', 'dial_session', 'click_to_call'], true)) {
+    $eventTypeFilter = '';
+}
+
 $dates = date_range_ymd($start, $end);
 if (count($dates) === 0) {
     api_error('Invalid date range', 'bad_request', 400);
@@ -194,6 +219,8 @@ $allSelCountTotal   = 0;
 $allSelCountEntries = 0;
 $allSelCountBuckets = [];
 $byUser             = [];
+$byEventType        = []; // dial_session vs click_to_call — always populated
+                          // with the unfiltered split for the requested date range
 
 // Per-day breakdown
 $perDay = [];
@@ -217,13 +244,17 @@ foreach ($dates as $d) {
     $daySelEntries = 0;
     $daySelBuckets = [];
     $dayByUser = [];
+    $dayByEventType = [];
 
     if ($dailyFile && is_file($dailyFile)) {
         $datesWithDailyFile[$d] = true;
         aggregate_log_file(
             $dailyFile,
             $dayCrm, $dayHost, $dayLevel, $dayObjType, $dayLaunchSrc, $dayTotal,
-            $dayUsers, $daySelTotal, $daySelEntries, $daySelBuckets, $dayByUser
+            $dayUsers, $daySelTotal, $daySelEntries, $daySelBuckets, $dayByUser,
+            $dayByEventType,
+            false, 0, 0,
+            $eventTypeFilter
         );
     }
 
@@ -238,6 +269,7 @@ foreach ($dates as $d) {
     $allSelCountTotal += $daySelTotal;
     $allSelCountEntries += $daySelEntries;
     foreach ($daySelBuckets as $k => $v) $allSelCountBuckets[$k] = ($allSelCountBuckets[$k] ?? 0) + $v;
+    foreach ($dayByEventType as $k => $v) $byEventType[$k] = ($byEventType[$k] ?? 0) + $v;
 
     foreach ($dayByUser as $uid => $info) {
         if (!isset($byUser[$uid])) {
@@ -255,6 +287,7 @@ foreach ($dates as $d) {
         'total_events'       => $dayTotal,
         'by_crm_id'          => $dayCrm ?: (object)[],
         'by_launch_source'   => $dayLaunchSrc ?: (object)[],
+        'by_event_type'      => $dayByEventType ?: (object)[],
         'unique_users'       => count($dayUsers),
         'avg_selected_count' => $daySelEntries > 0
             ? round($daySelTotal / $daySelEntries, 1) : 0,
@@ -276,7 +309,9 @@ if (count($datesNeedingLegacy) > 0 && file_exists($legacyFile)) {
         $byCrm, $byHost, $byLevel, $byObjectType, $byLaunchSource, $total,
         $allUniqueUsers, $allSelCountTotal, $allSelCountEntries, $allSelCountBuckets,
         $byUser,
-        true, $legacyStart, $legacyEnd
+        $byEventType,
+        true, $legacyStart, $legacyEnd,
+        $eventTypeFilter
     );
 }
 
@@ -292,6 +327,8 @@ if ($total === 0 && count($datesWithDailyFile) === 0 && !file_exists($legacyFile
         'selected_count'   => ['total' => 0, 'entries' => 0, 'avg' => 0, 'buckets' => (object)[]],
         'per_day'          => $perDay,
         'by_user'          => (object)[],
+        'by_event_type'    => (object)[],
+        'event_type_filter'=> $eventTypeFilter ?: null,
         'note'             => 'No CRM usage log files found',
     ]);
 }
@@ -319,4 +356,6 @@ api_ok([
     ],
     'per_day'          => $perDay,
     'by_user'          => $byUser ?: (object)[],
+    'by_event_type'    => $byEventType ?: (object)[],
+    'event_type_filter' => $eventTypeFilter ?: null,
 ]);

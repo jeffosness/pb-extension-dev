@@ -438,6 +438,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Routing every CRM through this one page means one registered iframe origin
     // and works even for CRMs we can't embed into.
     openSoftphoneWindow(dial);
+
+    // Fire-and-forget usage tracking for the CTC dashboard. Wrapped in try/catch
+    // + a promise the caller never awaits so a tracking failure never blocks
+    // the actual call. launch_source: "list" means the pill was in a list-view
+    // cell (msg carries per-row recordId); "record" means a single-record page
+    // (recordId came from the URL). event_type disambiguates from dial-session
+    // uses of the same launch_source values on the server side.
+    try {
+      api("core/track_crm_usage.php", {
+        event_type: "click_to_call",
+        crm_id: ctx.crmId || "unknown",
+        host: ctx.host || "",
+        path: ctx.path || "",
+        level: ctx.level || 3,
+        object_type: msg.objectType || ctx.objectType || "contact",
+        launch_source: msg.recordId ? "list" : "record",
+        selected_count: 1,
+      }).catch(function () {});
+    } catch (e) {}
+
     sendResponse({ ok: true });
     return true;
   }

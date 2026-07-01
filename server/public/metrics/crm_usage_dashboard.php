@@ -715,6 +715,7 @@ api_log('crm_usage_dashboard.view', [
       <button type="button" class="tab-btn"        data-tab="users"        role="tab" aria-selected="false" aria-controls="tab-users">👥 Users</button>
       <button type="button" class="tab-btn"        data-tab="productivity" role="tab" aria-selected="false" aria-controls="tab-productivity">📞 Productivity</button>
       <button type="button" class="tab-btn"        data-tab="sessions"     role="tab" aria-selected="false" aria-controls="tab-sessions">⚡ Sessions</button>
+      <button type="button" class="tab-btn"        data-tab="ctc"          role="tab" aria-selected="false" aria-controls="tab-ctc">🔥 Click-to-Call</button>
       <button type="button" class="tab-btn"        data-tab="detail"       role="tab" aria-selected="false" aria-controls="tab-detail">🔎 Detail</button>
     </nav>
 
@@ -823,6 +824,63 @@ api_log('crm_usage_dashboard.view', [
       </div>
     </div>
 
+    <!-- Tab: Click-to-Call (single-call pill usage, distinct from dial sessions) -->
+    <div class="tab-pane" data-tab="ctc" id="tab-ctc" role="tabpanel" hidden>
+      <h2 class="section-title">Click-to-Call Activity</h2>
+      <div class="alert alert-info" style="margin: 0 0 12px;">
+        Click-to-Call is the single-call pill embedded on CRM record pages
+        and list rows. Metrics here are separate from dial sessions —
+        <code>event_type=click_to_call</code> in the underlying log. Gated to
+        dev-only extensions today; expect zero prod traffic until launch.
+      </div>
+
+      <div class="grid-4" id="ctc-summary-grid"></div>
+
+      <div class="chart-row" style="margin-top: 12px;">
+        <div class="chart-box">
+          <h3>Calls per Day</h3>
+          <div class="chart-container"><canvas id="chart-ctc-daily"></canvas></div>
+        </div>
+        <div class="chart-box">
+          <h3>By CRM</h3>
+          <div class="chart-container"><canvas id="chart-ctc-by-crm"></canvas></div>
+        </div>
+      </div>
+
+      <div class="chart-row" style="margin-top: 12px;">
+        <div>
+          <h3 style="font-size:14px; color:#666; margin-bottom:8px;">By Object Type</h3>
+          <table id="ctc-by-object-table">
+            <thead><tr><th>Object Type</th><th>Calls</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div>
+          <h3 style="font-size:14px; color:#666; margin-bottom:8px;">By Page Type</h3>
+          <table id="ctc-by-page-table">
+            <thead><tr><th>Page</th><th>Calls</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <h2 class="section-title">Activity by User</h2>
+      <div class="alert alert-info" style="margin: 0 0 12px;">
+        Same privacy model as the Users tab — <code>member_user_id</code> only,
+        no names or emails. Look up specific agents in PhoneBurner admin.
+      </div>
+      <table id="ctc-by-user-table">
+        <thead>
+          <tr>
+            <th>Member User ID</th>
+            <th style="text-align:right;">CTC calls</th>
+            <th>CRMs used</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
     <!-- Tab: Detail (Detailed Breakdown by Hostname & Level) -->
     <div class="tab-pane" data-tab="detail" id="tab-detail" role="tabpanel" hidden>
       <!-- Section 8: Detail Breakdown -->
@@ -871,7 +929,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let autoRefreshTimer = null;
 
   // Last loaded data (for CSV export)
-  let lastSse = null, lastCrm = null, lastAgent = null;
+  let lastSse = null, lastCrm = null, lastAgent = null, lastCtc = null;
 
   // Cached "by user" rows for live filter without re-fetching
   let lastByUserRows = [];
@@ -942,21 +1000,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const t   = Date.now();
     const sseUrl   = sseEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
     const crmUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    const ctcUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call&t=" + t;
     const agentUrl = agentEndpoint + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
 
     Promise.all([
       fetch(sseUrl).then(r => { if (!r.ok) throw new Error("SSE HTTP " + r.status); return r.json(); }),
       fetch(crmUrl).then(r => { if (!r.ok) throw new Error("CRM HTTP " + r.status); return r.json(); }),
+      fetch(ctcUrl).then(r => r.ok ? r.json() : null).catch(() => null),
       fetch(agentUrl).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([sseResp, crmResp, agentResp]) => {
+    ]).then(([sseResp, crmResp, ctcResp, agentResp]) => {
       const sse   = normalize(sseResp);
       const crm   = normalize(crmResp);
+      const ctc   = ctcResp ? normalize(ctcResp) : null;
       const agent = agentResp ? normalize(agentResp) : null;
 
       if (!sseResp?.ok || !sse) { showError("SSE stats API error."); return; }
       if (!crmResp?.ok || !crm) { showError("CRM stats API error."); return; }
 
-      lastSse = sse; lastCrm = crm; lastAgent = agent;
+      lastSse = sse; lastCrm = crm; lastAgent = agent; lastCtc = ctc;
 
       msgEl.innerHTML = "";
       contentEl.style.display = "block";
@@ -1080,6 +1141,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }))
         .sort((a, b) => b.total - a.total);
       renderByUser(document.getElementById("user-search").value || "");
+
+      // ====================================================================
+      // Click-to-Call tab (populated from a filtered fetch of crm_usage_stats)
+      // ====================================================================
+      renderCtc(ctc);
 
       // ====================================================================
       // Section 4: Productivity
@@ -1284,6 +1350,89 @@ document.addEventListener("DOMContentLoaded", () => {
     countEl.textContent = q
       ? filtered.length + " of " + lastByUserRows.length
       : lastByUserRows.length + " user" + (lastByUserRows.length === 1 ? "" : "s");
+  }
+
+  // Render the Click-to-Call tab from a filtered crm_usage_stats response
+  // (event_type=click_to_call). ctc may be null if the API errored — the
+  // tab renders zeroed-out stats in that case so it always looks intentional.
+  function renderCtc(ctc) {
+    const summaryGrid = document.getElementById("ctc-summary-grid");
+    summaryGrid.innerHTML = "";
+
+    const total = ctc?.total_events || 0;
+    const uniqueUsers = ctc?.unique_users || 0;
+    const perDay = ctc?.per_day || [];
+    const daysActive = perDay.filter(d => (d.total_events || 0) > 0).length;
+    const crmCount = ctc ? Object.keys(ctc.by_crm_id || {}).length : 0;
+
+    summaryGrid.appendChild(statCard("Total CTC calls", String(total)));
+    summaryGrid.appendChild(statCard("Unique users", String(uniqueUsers)));
+    summaryGrid.appendChild(statCard("Days with activity", String(daysActive)));
+    summaryGrid.appendChild(statCard("CRMs using CTC", String(crmCount)));
+
+    // Time-series chart (calls per day)
+    if (hasChartJs) {
+      const dailyLabels = perDay.map(d => shortDate(d.date));
+      const dailyValues = perDay.map(d => d.total_events || 0);
+      renderLineChart("chart-ctc-daily", dailyLabels, [
+        { label: "CTC calls", data: dailyValues, color: "#ff7a59" },
+      ]);
+
+      // Per-CRM doughnut (only meaningful once multiple CRMs are wired up,
+      // but works fine with one slice too).
+      const byCrm = ctc?.by_crm_id || {};
+      const crmLabels = Object.keys(byCrm);
+      const crmValues = crmLabels.map(k => byCrm[k]);
+      const crmColors = crmLabels.map(k => crmColor(k));
+      if (crmLabels.length === 0) {
+        // Destroy any prior chart so the box shows empty, not stale data
+        destroyChart("chart-ctc-by-crm");
+      } else {
+        renderDoughnutChart("chart-ctc-by-crm", crmLabels, crmValues, crmColors);
+      }
+    }
+
+    // Object-type table (contacts / companies / deals)
+    fillTableFriendly("ctc-by-object-table", ctc?.by_object_type || {}, friendlyObjectType);
+
+    // Page-type table (record vs list). launch_source is the discriminator:
+    // "record" = pill on a single-record page, "list" = pill in a list-view row.
+    const byPage = {};
+    const bySource = ctc?.by_launch_source || {};
+    if (bySource.record) byPage["Record page"] = bySource.record;
+    if (bySource.list) byPage["List view"] = bySource.list;
+    fillTableFriendly("ctc-by-page-table", byPage, k => k);
+
+    // Per-user activity table (mirrors the main Users tab, but scoped to CTC)
+    const ctcUserTbody = document.querySelector("#ctc-by-user-table tbody");
+    ctcUserTbody.innerHTML = "";
+    const ctcByUser = ctc?.by_user || {};
+    const ctcRows = Object.entries(ctcByUser)
+      .map(([uid, info]) => ({
+        uid,
+        total: info.total || 0,
+        byCrm: info.by_crm || {},
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    if (ctcRows.length === 0) {
+      ctcUserTbody.innerHTML =
+        '<tr><td colspan="3" class="empty-msg">No click-to-call activity yet in this date range.</td></tr>';
+      return;
+    }
+
+    ctcRows.forEach(row => {
+      const crmList = Object.entries(row.byCrm)
+        .sort((a, b) => b[1] - a[1])
+        .map(([crm, n]) => esc(crm) + " (" + n + ")")
+        .join(", ");
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td><code>' + esc(row.uid) + '</code></td>' +
+        '<td class="num">' + row.total + '</td>' +
+        '<td>' + crmList + '</td>';
+      ctcUserTbody.appendChild(tr);
+    });
   }
 
   function fillTableFriendly(tableId, obj, labelFn) {
@@ -1546,7 +1695,7 @@ document.addEventListener("DOMContentLoaded", () => {
   //   first render; we fire a resize event after activation so they pick up
   //   the correct dimensions.
   // ========================================================================
-  const VALID_TABS = ["trends", "users", "productivity", "sessions", "detail"];
+  const VALID_TABS = ["trends", "users", "productivity", "sessions", "ctc", "detail"];
 
   function activateTab(name, opts) {
     if (!VALID_TABS.includes(name)) name = "trends";
