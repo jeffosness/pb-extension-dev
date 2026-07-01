@@ -107,7 +107,31 @@
   // Also greet immediately in case the iframe already finished loading.
   post({ type: MSG.HELLO });
 
+  function hideMicButton() {
+    if (micBtn) micBtn.style.display = "none";
+  }
+
   if (micBtn) {
+    // Hide the pre-emptive mic-priming button if the origin already has mic
+    // permission — Chrome remembers permission per-origin, so on second+ opens
+    // there's nothing for the button to do. Also react to state changes so
+    // clicking Allow in the prompt hides the button in real time.
+    if (navigator.permissions && navigator.permissions.query) {
+      try {
+        navigator.permissions
+          .query({ name: "microphone" })
+          .then(function (status) {
+            if (status.state === "granted") hideMicButton();
+            status.onchange = function () {
+              if (status.state === "granted") hideMicButton();
+            };
+          })
+          .catch(function () {
+            // Some browsers throw for name:"microphone" — leave the button in.
+          });
+      } catch (e) {}
+    }
+
     micBtn.addEventListener("click", function () {
       log("requesting microphone…");
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -119,8 +143,7 @@
         .then(function (s) {
           s.getTracks().forEach(function (t) { t.stop(); });
           log("✓ microphone granted");
-          micBtn.textContent = "🎤 Microphone enabled";
-          micBtn.disabled = true;
+          hideMicButton();
         })
         .catch(function (e) {
           log("✗ mic error: " + ((e && e.name) || "") + " " + ((e && e.message) || e));
