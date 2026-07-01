@@ -1094,7 +1094,18 @@ function isSameCrmRecord(currentUrl, targetUrl) {
       return cur.hash === tgt.hash;
     }
 
-    return cur.origin + cur.pathname === tgt.origin + tgt.pathname;
+    // Include the query string in the comparison so CRMs that put the record
+    // id in a query param — e.g. AgencyZoom's /lead/index?id={leadId} — are
+    // detected as different records. Prior code compared origin+pathname only,
+    // which returned "same record" for two different AgencyZoom leads and
+    // suppressed the Follow widget's auto-navigation between contacts.
+    // Safe for other CRMs: their record IDs live in the pathname (HubSpot
+    // /record/0-1/{id}, Close /lead/{id}, Salesforce /r/Lead/{id}/view, etc.)
+    // so their paths already differ and including search is a no-op there.
+    return (
+      cur.origin + cur.pathname + cur.search ===
+      tgt.origin + tgt.pathname + tgt.search
+    );
   } catch (e) {
     return false;
   }
