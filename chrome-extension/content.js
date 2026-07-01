@@ -768,6 +768,97 @@ function scanCloseContacts(maxContacts) {
 }
 
 // ============================================================================
+//  🧩 AGENCYZOOM-SPECIFIC SCANNER (LEVEL 2 — task list only)
+// ============================================================================
+// AgencyZoom is task-oriented: reps work a queue at /task/list. Each row is
+// one open task on one lead; the same lead can appear many times if it has
+// multiple open tasks (a lead with 5 open tasks = 5 rows). We dedup by lead
+// id so that lead becomes ONE dial-session entry — the rep dials the person
+// once, not five times. If any batch-checkbox in the table is checked we
+// honor that as an explicit selection; otherwise we scan every visible row.
+//
+// AgencyZoom has no public API we can hit here, so this is DOM-scraping only.
+// That means we can't auto-mark tasks complete after a call — users mark
+// tasks done in AgencyZoom's own UI (the "mark to done" checkbox on each row)
+// after their dial session.
+
+function scanAgencyZoomTasks(maxContacts) {
+  maxContacts = maxContacts || 500;
+
+  var host = window.location.hostname || "";
+  var path = window.location.pathname || "";
+  if (!host.includes("agencyzoom.com") || path.indexOf("/task/list") !== 0) return [];
+
+  var table = document.getElementById("taskTable");
+  if (!table) return [];
+
+  var rows = table.querySelectorAll("tbody tr");
+  if (!rows.length) return [];
+
+  // If any row-level checkbox is checked, only scan those rows (matches the
+  // Close / HubSpot pattern where partial selection means "dial these").
+  var checkedInputs = table.querySelectorAll('tbody tr input[type="checkbox"]:checked');
+  var restrictToChecked = checkedInputs.length > 0;
+
+  var contacts = [];
+  var seenLeadIds = {};
+  var phoneShape = /^\(?\d{3}\)?[\s.\-]*\d{3}[\s.\-]*\d{4}$/;
+
+  for (var i = 0; i < rows.length && contacts.length < maxContacts; i++) {
+    var row = rows[i];
+
+    if (restrictToChecked) {
+      var cb = row.querySelector('input[type="checkbox"]');
+      if (!cb || !cb.checked) continue;
+    }
+
+    // Customer name + lead id — the first <a> in the row that links to
+    // /lead/index?id=… on the same host.
+    var custLink = row.querySelector('a[href^="/lead/index?id="]');
+    if (!custLink) continue;
+
+    var name = (custLink.textContent || "").replace(/\s+/g, " ").trim();
+    var idMatch = (custLink.getAttribute("href") || "").match(/id=(\d+)/);
+    var leadId = idMatch ? idMatch[1] : null;
+    if (!leadId) continue;
+    if (seenLeadIds[leadId]) continue; // dedup: same lead across multiple tasks
+
+    // Phone — plain text in a <td>, no tel: link. Find the first cell whose
+    // trimmed textContent matches a US phone shape.
+    var phone = "";
+    var tds = row.querySelectorAll("td");
+    for (var j = 0; j < tds.length; j++) {
+      var txt = (tds[j].textContent || "").trim();
+      if (phoneShape.test(txt)) {
+        phone = txt;
+        break;
+      }
+    }
+    if (!phone) continue;
+
+    seenLeadIds[leadId] = true;
+
+    contacts.push({
+      name: name,
+      phone: phone,
+      email: "",
+      source_url: window.location.href,
+      source_label: document.title || "AgencyZoom Tasks",
+      record_url: "https://app.agencyzoom.com/lead/index?id=" + leadId,
+      crm_identifier: leadId,
+    });
+  }
+
+  console.log(
+    "[PB-CRM] AgencyZoom contacts extracted:",
+    contacts.length,
+    restrictToChecked ? "(from checked rows)" : "(from all visible rows)",
+    "— deduped by lead id",
+  );
+  return contacts;
+}
+
+// ============================================================================
 //  🧩 SALESFORCE-SPECIFIC SCANNER (LEVEL 2 with virtual scrolling support)
 // ============================================================================
 
@@ -921,6 +1012,8 @@ async function scanPageForContacts() {
     contacts = scanMondayContacts();
   } else if (crmId === "pipedrive") {
     contacts = scanPipedriveContacts();
+  } else if (crmId === "agencyzoom") {
+    contacts = scanAgencyZoomTasks();
   } else if (crmId === "salesforce") {
     // Use specialized Salesforce scanner with virtual scrolling support
     contacts = await scanSalesforceContactsWithSelection();
