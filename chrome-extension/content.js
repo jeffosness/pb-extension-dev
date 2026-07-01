@@ -1924,6 +1924,14 @@ var PB_CTC_BTN_CLASS = "pb-ctc-call-btn";
 var pbCtcObserver = null;
 var pbCtcDebounce = null;
 
+// 16x16 PhoneBurner brand flame, base64-encoded as a data URL. Inlined
+// (not loaded via chrome.runtime.getURL) so the injected pill has no
+// chrome-extension:// URL leaking the extension ID to CRM pages, no HTTP
+// request per pill, and no dependency on host_permissions for the icon
+// to render. Source: /icons/pb-flame-16.png (extracted from PB's favicon).
+var PB_CTC_FLAME_ICON =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAG9SURBVDhPjZJLa1NBGIbfpqioqPgfWoQqIriwK0VQCEiLtzNnTtLGlf0BoqgLXYlSEBduRHEjKBRB3AklS3deFl6gWhC0EgTjQhQxCXPyyEzTmEwv+sDA8M33vnyXkdagkWikPq4tcfy/IFERq6fzRW2I3/7J9yPanlsteIOe8EDPfW2ckeWUaGd6/3ZE60Ms02WsjsW5K4LVPSYFZYHVfZdoAqvPpKp9K2prnN/FpZoi1TRGPzGCkghGnZNbzdX2alOs65IbzYbkM0Nw9TBdk45RbvTI580PrTJYjGaYHIQ3VWj+hvN7IO0YlEU71VcyzbiTqiwbaivRgbykZ0xtgx91qM3B2V1/DTomZHKNRDv6xB5nVKYiSAvwahZeV+FEj9ifiTDUd0ub6aM5pp1YtULfVw4SuGnh6AAkQdg1WPFz+fWQ6lMo0wue3IDmL7hzGqq3FgebibbVh1U3gdXt0EbmS163KFzi+WPICr6CFw+lwVgbaBzXcG5VD6v0Jr7s6+Pw4Bxc2geVAs7qYqzro2W0Py/pZejXG/mZ+E0YOazuftmtzbFmGQuj2ojRodzoGlYfXaYLLaPROM/zBzxsM6qsXqD1AAAAAElFTkSuQmCC";
+
 // Normalize a displayed phone string ("(202) 838-8961") to a dialable number.
 // US-centric best-effort for v1; refine for international later.
 function pbCtcNormalizePhone(text) {
@@ -2061,7 +2069,15 @@ function pbCtcDecorate() {
       btn.dataset.pbNum = t.number.replace(/[^\d]/g, "");
       if (t.recordId) btn.dataset.pbRecordId = t.recordId;
       if (t.objectType) btn.dataset.pbObjectType = t.objectType;
-      btn.textContent = "🔥 PhoneBurner";
+      // Real PhoneBurner brand flame instead of the 🔥 emoji — the emoji's
+      // color varies across OS/font renderings, this is on-brand and
+      // consistent. Inline the SVG-like PNG via data URL so the DOM
+      // doesn't reference chrome-extension://<id>/icons/... and every
+      // pill renders without an HTTP round trip.
+      btn.innerHTML =
+        '<img src="' + PB_CTC_FLAME_ICON + '" alt="" width="12" height="12" ' +
+        'style="vertical-align:middle;margin-right:4px;">' +
+        'PhoneBurner';
       btn.title = "Call with PhoneBurner";
       btn.style.cssText =
         "margin-left:4px;padding:1px 6px;font:600 11px system-ui,sans-serif;" +
