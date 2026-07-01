@@ -592,6 +592,14 @@ function applyContextVisibility(ctx, pbConnected) {
   // Scan & Launch: any non-L3 page (generic scanner may work on obscure CRMs)
   setVisible(currentPageCard, !isHS && !isClose && !isApollo);
 
+  // Inline Connect prompts — shown on the Dial tab when the user is on a
+  // matching L3 CRM page AND that CRM isn't connected yet. Gives them a
+  // clear next step without having to hunt in Settings. Only ever one of
+  // these is visible at a time (a page is on exactly one CRM at a time).
+  setVisible($("hs-connect-inline-card"),     isHS     && !HS_STATE.connected);
+  setVisible($("close-connect-inline-card"),  isClose  && !CLOSE_STATE.connected);
+  setVisible($("apollo-connect-inline-card"), isApollo && !APOLLO_STATE.connected);
+
   // Selection card: HS list pages only
   setVisible(hsDialCard, isHS && pageType === "list");
 
@@ -1878,7 +1886,11 @@ async function savePAT() {
   if (resp && resp.ok) {
     await showAlert("PAT saved.");
     await refreshState();
-    activateTab("settings");
+    // Stay on the Dial tab so the user's next action is one click away —
+    // launching a dial session, or (if their CRM isn't connected yet)
+    // clicking an inline Connect prompt that appears right there. The
+    // previous auto-switch to Settings created a false dead-end: users
+    // saw the Settings tab and didn't know why they'd been moved.
   } else {
     const errorMsg = getErrorMessage(resp, "Unknown error");
     await showAlert("Error saving PAT: " + errorMsg);
@@ -2085,6 +2097,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("apollo-disconnect")?.addEventListener("click", disconnectApollo);
   $("apollo-oauth-connect")?.addEventListener("click", startApolloOAuth);
   $("apollo-sequence-select")?.addEventListener("change", onApolloSequenceChange);
+
+  // Inline Connect prompts on the Dial tab (issue #113). Each button just
+  // delegates to the existing OAuth-start function for that CRM.
+  $("hs-connect-inline-btn")?.addEventListener("click", startHubSpotOAuth);
+  $("close-connect-inline-btn")?.addEventListener("click", startCloseOAuth);
+  $("apollo-connect-inline-btn")?.addEventListener("click", startApolloOAuth);
   $("apollo-task-filter")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-sequence-launch")?.addEventListener("click", launchApolloFromTasks);
   $("apollo-phone-pref")?.addEventListener("change", onApolloPhonePrefChange);
