@@ -70,6 +70,8 @@ The extension supports two integration levels. The level determines which featur
 | "Call notes not in CRM" / "Activity not logged" | [Call logging issues](#17-call-logging-issues) |
 | "More than 500 contacts" / "Why is my session truncated" | [500-contact limit](#18-500-contact-limit) |
 | "I selected 100 but only X showed up" / "Counts vary on the same list" / "Some of my selected contacts are missing from the dial session" | [Fewer contacts than selected](#24-fewer-contacts-in-dial-session-than-selected) |
+| "The flame icon isn't showing" / "Click-to-call button missing" / "Two call buttons on every record" / "Mic prompt on click-to-call" | [Click-to-Call (HubSpot)](#25-click-to-call-hubspot) |
+| "Can I use AgencyZoom?" / "AgencyZoom tasks not dialing" / "Multiple tasks per lead" | [AgencyZoom](#26-agencyzoom) |
 | "HubSpot phone overwritten" / "Phone field changed in HubSpot" | [HubSpot Data Sync conflict](#19-hubspot-data-sync-conflict) |
 | "Is my data safe" / Privacy questions | [Privacy and security](#20-privacy-and-security) |
 | "Extension completely broken" / Nothing works | [Emergency reset](#21-emergency-reset) |
@@ -725,6 +727,84 @@ PhoneBurner has an account-level setting "Don't add duplicate phone numbers to t
 - The count is consistently the same wrong number every time (e.g., always exactly 50 out of 100) — that's a different kind of bug.
 
 Ask for: the list name, exactly how they selected (Select all / individual checks / list dropdown), screenshot of the CRM page with the selection visible, and a screenshot of the PhoneBurner dial session summary with the contact count.
+
+---
+
+## 25. Click-to-Call (HubSpot)
+
+**What it is:** A small PhoneBurner flame icon appears next to phone numbers on HubSpot record pages and list views. Clicking it opens a small PhoneBurner softphone window and places a single call to that number — no dial session, no batch. It's for one-off follow-ups where launching a full dial session would be overkill.
+
+**Where it appears:**
+- HubSpot contact record pages — one flame icon next to each phone-typed property (Phone Number, Mobile Phone Number, custom phone fields, etc.).
+- HubSpot company record pages — same.
+- HubSpot contacts and companies list views — one flame icon next to each row's phone value.
+
+The icon does NOT appear on non-HubSpot CRMs yet (Close, Apollo, Pipedrive, etc. planned for future releases).
+
+### First-time microphone prompt
+
+The very first time a customer clicks a flame icon in a new browser profile, Chrome will prompt to allow microphone access. This is Chrome's normal WebRTC permission flow — the softphone needs the mic to place a call. After the customer clicks Allow, the permission is remembered per-origin and they won't see the prompt again.
+
+**Symptom:** Customer clicks the flame, softphone window opens, then hangs at "Setting up call…" or fails.
+
+**Likely cause:** Chrome mic permission was dismissed / blocked on the first prompt.
+
+**Resolution:**
+1. Ask the customer to close the softphone window
+2. In Chrome, click the lock icon in the address bar for the softphone page → set Microphone to Allow
+3. Retry the click-to-call
+
+### The Click-to-Call button doesn't appear
+
+**Common causes and fixes:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| No flame icon anywhere on HubSpot | Customer turned it off in Settings | Popup → Settings → "Show click-to-call buttons on CRM phone fields" → turn back on |
+| Icon appears but the phone number column is too narrow | List-view column width | Widen the Phone Number column in HubSpot until the icon has room |
+| Icon appears on Phone Number field but not Mobile / Home | Only should happen on very old versions of the extension | Confirm extension is v0.8.0 or newer; if so, escalate with a screenshot of the contact showing multiple phone fields |
+| Two "call this number" buttons on every phone (ours + another dialer's) | Customer has RingCentral or another dialer extension also installed | Popup → Settings → turn OFF "Show click-to-call buttons on CRM phone fields" to keep only the other one, OR remove the other dialer to keep ours |
+
+### Calls placed via click-to-call
+
+- **Logging in HubSpot**: calls placed via click-to-call are logged to the contact's HubSpot record through the same PhoneBurner ↔ HubSpot integration that handles dial sessions. Customer needs the native PB↔HS integration activated in PhoneBurner's admin — same requirement as dial sessions.
+- **What if the customer isn't set up with the native PB↔HS integration?** The call still connects, but the activity won't appear in HubSpot. Direct them to https://www.phoneburner.com/myaccount/integrations/hubspot/index to activate it.
+- **Recording, disposition, call notes**: same as dial session calls — the softphone in the popup window has the same UI as PhoneBurner's regular dialer.
+
+### Escalate if
+
+- Softphone window opens but stays blank / white screen for more than 5 seconds
+- Mic permission is granted but the call still won't connect
+- Calls dial but never appear in HubSpot even though the customer has the native integration activated
+- Ask for: extension version, HubSpot portal ID (from any HubSpot URL), timestamp of the attempt, screenshot of the softphone window state
+
+---
+
+## 26. AgencyZoom
+
+**What it is:** The extension detects AgencyZoom's task list page (`app.agencyzoom.com/task/list`) and adds a "Scan & Launch Dial Session" affordance in the popup. Reps working through their AgencyZoom task queue can launch a PhoneBurner dial session for every visible task's lead in one click.
+
+**Key behavior:**
+
+- **One dial-session contact per lead, not per task.** AgencyZoom shows one row per open task, so a lead with 5 open tasks shows as 5 rows. The extension collapses those to a single dial-session contact (using the lead's phone number). The customer dials the person once, not five times.
+- **If the customer checks specific task-row checkboxes** (top-left of each row) BEFORE clicking Scan & Launch, the extension only includes those rows in the scan. If nothing is checked, all visible rows are scanned.
+- **Tasks do NOT auto-complete after a call.** AgencyZoom has no public API we can use for that. Customers manually mark tasks done in AgencyZoom's own UI (the "mark to done" checkbox on the right side of each row) after their dial session finishes.
+
+**Common questions and fixes:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| No "Scan & Launch" card in popup on AgencyZoom | Not on `/task/list` | The scanner only runs on the task list page. Other AgencyZoom pages (lead records, dashboards) aren't currently supported. |
+| Fewer contacts than expected in the dial session | Multiple tasks per lead got deduped (working as intended) | Explain the "one contact per lead" collapse. If customer wants every task as a separate contact, that's a feature request. |
+| Contact missing entirely | The row had no visible phone number in the Phone column | AgencyZoom shows the lead's stored phone. If the phone field is empty, we can't dial. Add a phone to the lead in AgencyZoom. |
+| Follow widget doesn't open the correct AgencyZoom lead on next contact | Fixed in v0.8.0 (the record-ID-in-query-string bug) — earlier versions had this issue | Confirm customer is on v0.8.0 or newer. |
+
+**Escalate if:**
+- Task list has ~N visible tasks but the scan returns <<N distinct leads (dedup is over-collapsing)
+- Scan finds contacts but the dial session opens with 0 records
+- Follow widget lands on the wrong AgencyZoom lead when navigating between calls
+
+Ask for: URL of the task list (with any filter/sort visible), extension version, count expected vs. count actually in the PhoneBurner session.
 
 ---
 

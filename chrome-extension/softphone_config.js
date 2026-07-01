@@ -9,8 +9,8 @@
 // (extension-dev.phoneburner.biz vs extension.phoneburner.biz), they need
 // TWO separate PB softphone registrations:
 //
-//   • DEV  — slug below; webhook → extension-dev.phoneburner.biz
-//   • PROD — slug TBD; webhook → extension.phoneburner.biz
+//   • DEV  — "Chrome Extension Dev" registration; webhook → extension-dev.phoneburner.biz
+//   • PROD — "Chrome Extension" registration;      webhook → extension.phoneburner.biz
 //
 // Each registration has its OWN HMAC secret. The matching secret lives in
 // the corresponding backend's config.php (never in extension code).
