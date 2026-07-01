@@ -49,16 +49,19 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // ── Click-to-Call feature gate ────────────────────────────────────────────
-// Click-to-call (the softphone pill + hosted softphone window) is NOT yet
-// released to the public extension. It is active ONLY on the dev backend, so:
-//   • published/prod users never see it (DEFAULT_ENV = "prod"), and
-//   • the hosted softphone page (softphone.php) only exists on dev anyway.
-// This lets us publish unrelated extension updates without click-to-call going
-// live. TO LAUNCH: change this to `return true;` (or gate on a launch flag)
-// once softphone.php is deployed to prod and PhoneBurner's prod softphone app
-// is wired up.
+// Click-to-call is live in v0.8.0. Both prod and dev backends have the
+// softphone infrastructure fully wired up — softphone.php is deployed,
+// each backend has its own PhoneBurner softphone registration (with its
+// own HMAC secret in config.php), and both are ready to serve. The user
+// can still switch off the in-page pill via Settings (see
+// CTC_USER_ENABLED + ctcShouldShowPills below), but the underlying
+// feature is no longer env-gated.
+//
+// This function stays as a named check so future gated features can copy
+// the pattern (e.g. `return CURRENT_ENV === "dev"` for the next feature
+// we want to soak-test with just us before shipping to customers).
 function clickToCallEnabled() {
-  return CURRENT_ENV === "dev";
+  return true;
 }
 
 // Per-user toggle for the in-page pill. Default true. The popup writes this
