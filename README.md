@@ -19,6 +19,7 @@ A Chrome extension that connects supported CRMs (HubSpot, Salesforce, Zoho, Pipe
 | **Add a new CRM (L1/L2/L3)** | [CRMS.md](CRMS.md) — level-picker + walkthroughs for each level |
 | **Provision the backend on a new host** | [SERVER_SETUP.md](SERVER_SETUP.md) |
 | **Change something in `utils.php` or `bootstrap.php`** | [SHARED_CODE.md](SHARED_CODE.md) — blast-radius reference first |
+| **Run or add automated tests** | [TESTING.md](TESTING.md) |
 | **Change anything security-relevant** | [SECURITY.md](SECURITY.md) — threat model + known gaps |
 | **Troubleshoot a customer issue** | [KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md) — same source that renders at extension.phoneburner.biz/kb.php |
 
@@ -56,7 +57,7 @@ composer install    # installs PHPUnit
 composer test       # runs the suite (~1 second)
 ```
 
-CI runs the same suite on every PR — merging is blocked on a red run. See [CLAUDE.md → Automated tests](CLAUDE.md) for what's covered and how to add more.
+CI runs the same suite on every PR — merging is blocked on a red run. See [TESTING.md](TESTING.md) for what's covered, how to add more tests, and the "Test Impact" declaration requirement on PRs that touch security-critical files.
 
 ## License
 

@@ -28,6 +28,18 @@ A change a customer or support rep might notice or ask about. Examples:
 
 If unsure, treat it as customer-visible and update the KB or open a follow-up.
 
+## Test Impact
+
+This PR's effect on automated tests. **Required if this PR touched `server/public/utils.php`, `server/public/api/core/bootstrap.php`, anything under `tests/`, `composer.json`, `composer.lock`, or `phpunit.xml`.** For PRs that don't touch those files, the section is optional (leave it or delete it — CI won't fail).
+
+**Check exactly one box if the section is required.**
+
+- [ ] **No new testable behavior** — refactor, docs, config, formatting, or purely UI change. No PHP logic changed that would benefit from a new test.
+- [ ] **Tests added or updated in this PR** — see `tests/` in the diff.
+- [ ] **Test follow-up tracked** — paste the follow-up issue/PR link and a one-line rationale for deferring: `<link>` — <why>
+
+See [TESTING.md](../TESTING.md) for what's covered today, how to run locally, and the follow-up test targets.
+
 ## Test Plan
 
-<!-- Bulleted checklist of what was tested. -->
+<!-- Bulleted checklist of what was manually tested (as opposed to automated tests above). -->
