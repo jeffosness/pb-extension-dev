@@ -788,7 +788,7 @@ The very first time a customer clicks a flame icon in a new browser profile, Chr
 
 - **One dial-session contact per lead, not per task.** AgencyZoom shows one row per open task, so a lead with 5 open tasks shows as 5 rows. The extension collapses those to a single dial-session contact (using the lead's phone number). The customer dials the person once, not five times.
 - **If the customer checks specific task-row checkboxes** (top-left of each row) BEFORE clicking Scan & Launch, the extension only includes those rows in the scan. If nothing is checked, all visible rows are scanned.
-- **Tasks do NOT auto-complete after a call.** AgencyZoom has no public API we can use for that. Customers manually mark tasks done in AgencyZoom's own UI (the "mark to done" checkbox on the right side of each row) after their dial session finishes.
+- **Tasks do NOT auto-complete after a call** (AgencyZoom has no public API we can use for that) — but the Follow widget lands the rep on each contact's lead page during the call, and the open task on that lead page carries **"Mark Completed"** and **"Mark Completed + Note"** buttons right on the activity. The rep clicks Mark Completed (or + Note) as the call wraps and moves on. Result: task closure fits naturally into the flow without needing to leave the record.
 
 **Common questions and fixes:**
 

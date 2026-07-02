@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PhoneBurner Dial Session Companion — Dial from your CRM</title>
-  <meta name="description" content="The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, and more. Reach 4x more people per hour without leaving your CRM." />
+  <meta name="description" content="The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more. Reach 4x more people per hour without leaving your CRM." />
   <meta property="og:title" content="PhoneBurner Dial Session Companion — Dial from your CRM" />
-  <meta property="og:description" content="Free Chrome extension that turns your CRM into a power-dialing workstation. Works with HubSpot, Close, Apollo, Salesforce, Pipedrive, and more." />
+  <meta property="og:description" content="Free Chrome extension that turns your CRM into a power-dialing workstation. Works with HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="https://extension.phoneburner.biz/og-image.png" />
 
@@ -197,6 +197,7 @@
     .crm-pill[data-crm="apollo"]    .crm-pill__dot { background: #0095ff; }
     .crm-pill[data-crm="sf"]        .crm-pill__dot { background: #00a1e0; }
     .crm-pill[data-crm="pipedrive"] .crm-pill__dot { background: #1a1a1a; }
+    .crm-pill[data-crm="agencyzoom"] .crm-pill__dot { background: #f26722; }
     .crm-pill[data-crm="more"]      .crm-pill__dot { background: var(--orange); }
 
     /* ------------------------------------------------------------------ */
@@ -464,7 +465,7 @@
           <span class="eyebrow">Free Chrome Extension</span>
           <h1>Dial from your CRM.<br /><span class="accent">Stay in your CRM.</span></h1>
           <p class="hero__sub">
-            The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, and more. Reach <strong>4× more people per hour</strong> without leaving your CRM tab.
+            The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more. Reach <strong>4× more people per hour</strong> without leaving your CRM tab.
           </p>
           <div class="hero__ctas">
             <a class="btn btn--primary btn--lg" href="https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj" target="_blank" rel="noopener">Install Free on Chrome Web Store ↗</a>
@@ -503,6 +504,7 @@
         <a class="crm-pill" data-crm="apollo"    href="#crm-apollo"><span class="crm-pill__dot"></span>Apollo.io</a>
         <a class="crm-pill" data-crm="sf"        href="#crm-sf"><span class="crm-pill__dot"></span>Salesforce</a>
         <a class="crm-pill" data-crm="pipedrive" href="#crm-pipedrive"><span class="crm-pill__dot"></span>Pipedrive</a>
+        <a class="crm-pill" data-crm="agencyzoom" href="#crm-agencyzoom"><span class="crm-pill__dot"></span>AgencyZoom</a>
         <a class="crm-pill" data-crm="more"      href="#crm-more"><span class="crm-pill__dot"></span>Many more</a>
       </div>
       <p class="muted" style="text-align:center;margin-top:24px;font-size:0.95rem;max-width:680px;margin-left:auto;margin-right:auto;">
@@ -526,7 +528,7 @@
         <div class="feature-card">
           <div class="feature-card__icon">✓</div>
           <h3>Select &amp; Launch</h3>
-          <p>Pick the contacts, companies, or deals you want to dial from any CRM list view and launch instantly. Works across HubSpot, Close, Apollo, Salesforce, Pipedrive, and more.</p>
+          <p>Pick the contacts, companies, or deals you want to dial from any CRM list view and launch instantly. Works across HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more.</p>
         </div>
         <div class="feature-card">
           <div class="feature-card__icon">≡</div>
@@ -705,6 +707,18 @@
           <li>Optimized page scraping for the Pipedrive Persons list</li>
           <li>Dial all visible person rows with one click</li>
           <li>Follow widget tracks the active contact in Pipedrive during the session</li>
+          <li>No OAuth required</li>
+        </ul>
+      </article>
+
+      <article class="crm-detail" id="crm-agencyzoom">
+        <h3>AgencyZoom <span class="level-badge level-badge--2">Level 2 · Optimized</span></h3>
+        <p style="color:var(--ink-2);margin-bottom:14px;">Built for insurance agencies working task queues at scale. Turn your AgencyZoom task list into a PhoneBurner power-dialing session in one click.</p>
+        <ul>
+          <li><strong>Launch from your AgencyZoom task list</strong> — one click builds a dial session from every visible task's lead</li>
+          <li><strong>Automatic dedup</strong> — a lead with five open tasks appears once in the dial session, not five times</li>
+          <li><strong>Follow widget navigates to each lead's page in AgencyZoom during the call</strong> — the "Mark Completed" and "Mark Completed + Note" buttons on the open task are one click away when the call ends</li>
+          <li>Selection-aware — check specific task rows to dial only those, or leave nothing checked to dial the whole visible queue</li>
           <li>No OAuth required</li>
         </ul>
       </article>
