@@ -83,6 +83,27 @@ This is the honest part. These are known gaps:
 
 The honest takeaway: we're at industry-standard third-party-SaaS OAuth handling. We are NOT at "best possible." The gaps above are Tier 2 / Tier 3 improvements tracked in the security roadmap.
 
+## Known implementation gaps (finer-grained)
+
+Separate from the strategic gaps above, these are specific implementation weaknesses we're aware of but haven't fixed yet. They're smaller in scope but real.
+
+**Medium risk (bugs worth fixing before broad-deployment growth):**
+
+1. **Session state files are world-readable + world-writable.** `save_session_state()` currently creates `server/public/sessions/{token}.json` with permission 0777. Contents include contacts_map (names, phones), `current` contact, and stats — a filesystem-level attacker can read them. Fix: convert `save_session_state()` to use `atomic_write_json()` with 0600.
+2. **PhoneBurner webhooks are unauthenticated.** `webhooks/contact_displayed.php` and `webhooks/call_done.php` accept `?s=session_token` in the URL and trust that PhoneBurner sent it. HMAC signature validation would give defense-in-depth if PB ever leaks a webhook URL upstream. (v0.8.0 introduced `softphone_call_done.php` WITH HMAC validation — that pattern is the template for retrofitting the other webhooks.)
+3. **`server/public/metrics/` directory is under the webroot.** Contents include `sse_usage-*.log`, `sse_presence/*.json`, and `crm_usage-*.log`. Directory listing is disabled, but individual files are guessable and publicly fetchable if paths are known. Fix: move to `/var/lib/pb-extension-dev/metrics/` or add explicit Apache deny rules.
+
+**Low risk (harden when time permits):**
+
+1. **Webhook handlers log full payloads with PII.** `webhooks/call_done.php` and `webhooks/contact_displayed.php` currently `log_msg()` the raw PB webhook body, which contains names, phone numbers, and emails. Should route through `redact_pii_recursive()`.
+2. **No CSP on the extension popup.** Chrome's default CSP for MV3 extensions is strict, so injected inline JS won't run, but explicit CSP hardening in `manifest.json` would document our stance.
+3. **Stale presence files aren't cleaned up automatically.** SSE presence files at `metrics/sse_presence/*.json` accumulate if a session disconnects unexpectedly. Cron cleanup entry in [SERVER_SETUP.md](SERVER_SETUP.md) exists but has been observed to miss edge cases.
+4. **Date fields are not range-checked.** Anywhere we accept a date from a client (stats endpoints, user settings), we don't reject future-dated or ancient timestamps. Minor risk since these end up in per-user stats files, not query keys.
+
+**Data integrity (customer-facing, document don't fix):**
+
+1. **PhoneBurner ↔ HubSpot Data Sync overwrite.** If a customer has PhoneBurner's built-in HubSpot Data Sync app enabled, PB will sync the primary phone number from dial sessions back to HubSpot's "Phone Number" property. This can overwrite the original value if PB used a different alternate phone during dialing. Customers should either disable phone-number sync in the Data Sync app or rely exclusively on this extension for phone-number handling. This is PB platform behavior, not something our code controls.
+
 ## Threat model summary
 
 | Threat | Mitigated today? | Notes |
