@@ -853,8 +853,8 @@ server/public/api/crm/{provider}/
    - Review server logs for errors/PII
 
 3. **Verify no regressions**
-   - Test both L1/L2 (generic scan) and L3 (HubSpot) flows
-   - Test existing CRMs (BnTouch, Pipedrive, Close, HubSpot)
+   - Test both L1/L2 (generic scan) and L3 (OAuth API) flows
+   - Test a representative CRM at each level — for L2, pick one from `crm_config.js` with `level: 2` (Pipedrive/BnTouch/AgencyZoom/Salesforce). For L3, at minimum test HubSpot + Close since they're the highest-usage L3 providers.
    - Verify existing sessions still work
 
 ---
@@ -872,10 +872,10 @@ php -S 127.0.0.1:8000
 cp config.sample.php config.php
 # Edit config.php with your credentials
 
-# 3. Create secure token directory
-mkdir -p /var/lib/pb-extension-dev/tokens/{pb,hubspot}
+# 3. Create secure token directories (one per L3 provider you're testing)
+mkdir -p /var/lib/pb-extension-dev/tokens/{pb,hubspot,close,apollo}
 chmod 0700 /var/lib/pb-extension-dev/tokens
-chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
+chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot,close,apollo}
 
 # 4. Load extension in Chrome
 # chrome://extensions → Developer Mode → Load Unpacked
@@ -891,11 +891,12 @@ chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
 ### Debug Endpoints
 
 ```bash
-# Health check
+# Health check (includes version + env)
 curl http://127.0.0.1:8000/health.php
 
-# Version info
-curl http://127.0.0.1:8000/version.php
+# Version info (JSON — note the ".json.php" — version.php itself is a
+# PHP-return array meant to be require()'d, not HTTP-fetched directly)
+curl http://127.0.0.1:8000/version.json.php
 
 # Test API endpoint
 curl -X POST http://127.0.0.1:8000/api/core/state.php \
@@ -905,19 +906,19 @@ curl -X POST http://127.0.0.1:8000/api/core/state.php \
 
 ### Browser Console Debugging
 
-```javascript
-// Check CRM context
-chrome.tabs.query({ active: true }, (tabs) => {
-  chrome.tabs.sendMessage(tabs[0].id, { type: "GET_CONTEXT" }, console.log);
-});
+Run these from the popup's DevTools (F12 on the popup) or the background service worker's DevTools (via chrome://extensions → Inspect service worker). `chrome.runtime.sendMessage` targets background handlers; the popup and background share the extension origin.
 
-// Get session status
+```javascript
+// Check CRM context (asks background, which merges cached tab context + URL detection)
+chrome.runtime.sendMessage({ type: "GET_CONTEXT" }, console.log);
+
+// Get session status for the active tab
 chrome.runtime.sendMessage({ type: "GET_ACTIVE_SESSION_FOR_TAB" }, console.log);
 
 // Get stored client ID
 chrome.storage.local.get(["pb_unified_client_id"], console.log);
 
-// Emergency reset (if extension gets stuck)
+// Emergency reset (clears all extension state — tokens still live server-side)
 chrome.runtime.sendMessage({ type: "FORCE_RESET_ALL_STATE" }, console.log);
 ```
 
