@@ -11,6 +11,7 @@
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — shape of the system: components, three-level CRM model, provider adapter contract, auth flows, session/SSE lifecycle. Read this before you can't picture where a change lands.
 - **[CRMS.md](CRMS.md)** — how-to for adding new CRM providers (L1/L2/L3 walkthroughs), plus HubSpot-specific reference (object types, list-based dial sessions, ID-uniqueness narrative) and patterns learned from adding CRMs (testing checklist, dropdown-styling gotcha, shared-helpers refactor pattern).
 - **[SHARED_CODE.md](SHARED_CODE.md)** — blast-radius reference: which files and functions are most-depended-on, what breaks if you change them, and how to change them safely. Consult before touching `utils.php`, `bootstrap.php`, or any function called from 15+ sites.
+- **[TESTING.md](TESTING.md)** — automated tests: what's covered, how to run locally, how to add tests. CI enforces green tests + a `## Test Impact` declaration on PRs that touch security-critical files.
 - **[SECURITY.md](SECURITY.md)** — security model, what we protect against, what we explicitly DON'T, and the files that trigger the **Security Impact CI check**. Read this before touching `utils.php` token functions, OAuth endpoints, call loggers, webhooks, or `sse.php`.
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook for standing up the backend on a fresh host.
 - **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** — customer-facing knowledge base (also surfaced at `https://extension.phoneburner.biz/kb.php`).
@@ -101,7 +102,7 @@ Before committing, verify:
 - [ ] No credentials in URLs (use temp codes)
 - [ ] CORS origins still whitelisted (no origin reflection)
 - [ ] Input validation on all user-controlled data
-- [ ] **If you touched `utils.php` (or any function tested in `tests/`), PHPUnit is green.** Run `composer test` locally before pushing. CI (`.github/workflows/tests.yml`) blocks PRs on red tests, but you should catch failures locally so you're not roundtripping through CI. See the "Automated tests" section below for what's covered and how to add more.
+- [ ] **If you touched `utils.php` (or any function tested in `tests/`), PHPUnit is green.** Run `composer test` locally. CI blocks red PRs and requires a `## Test Impact` declaration for changes to security-critical files — see [TESTING.md](TESTING.md).
 
 ### Critical Security Utilities (ALWAYS USE)
 
@@ -553,42 +554,11 @@ if (!myNewFeatureEnabled()) return;   // no-op for customers
 
 ## Testing & Debugging
 
-### Automated tests (PHPUnit)
+### Automated tests
 
-**Real customers depend on this backend every day. Security-critical `utils.php` functions have PHPUnit tests and CI blocks red PRs. If you're an AI editing this repo: this is non-negotiable — see below.**
+**Rule: if you touched `utils.php` or a function in [SHARED_CODE.md](SHARED_CODE.md), run `composer test` locally before pushing, and add tests for any new shared function in the same PR.** CI (`.github/workflows/tests.yml`) blocks red PRs, and (`.github/workflows/test-impact-check.yml`) blocks PRs that touched security-critical/tested files without declaring a `## Test Impact` in the PR body.
 
-**Run locally before pushing:**
-
-```bash
-composer install    # once, on a fresh clone
-composer test       # or: vendor/bin/phpunit
-```
-
-Should be ~1 second and print `OK`. If it doesn't, don't push.
-
-**What's covered today** (see `tests/`):
-
-- `safe_file_path()` — every path-traversal defense case
-- `atomic_write_json()` — restrictive-permissions guarantee + atomicity
-- `temp_code_store()` / `temp_code_retrieve_and_delete()` — single-use + TTL
-
-**When you must run tests / add tests:**
-
-- **Any edit to `server/public/utils.php`** — run the whole suite. If your change adds a new security-critical function, add tests for it in the same PR.
-- **Any edit to a function listed in [SHARED_CODE.md](SHARED_CODE.md)** — treat this the same way. High blast radius = tests required.
-- **New function that other code will depend on** — add tests in the same PR, don't defer.
-
-**CI enforcement:**
-
-`.github/workflows/tests.yml` runs the suite on every PR and every push to `main`. A red run shows as a failed check on the PR — merging is blocked. This is the automated backstop; the local run is the fast feedback loop.
-
-**Follow-up test targets** (not yet covered, ordered by priority):
-
-- `redact_pii_recursive()` (lives in `api/core/bootstrap.php`, not `utils.php` — needs a testable-in-isolation approach; PII leakage is high-severity)
-- `rate_limit_or_fail()` (filesystem + time-dependent, needs cache-dir override)
-- `get_client_id_or_fail()` (calls `api_error()`, needs framework interaction)
-
-If you're adding a new provider or shared helper and it feels testable, write a test — the file `tests/SafeFilePathTest.php` is a good template.
+See **[TESTING.md](TESTING.md)** for what's covered today, how to run locally, how to add new tests, and the follow-up test targets (redact_pii_recursive, rate_limit_or_fail, get_client_id_or_fail).
 
 ### Local Development Setup
 
@@ -902,4 +872,4 @@ A: No. All data is used exclusively for dial session creation via the PhoneBurne
 
 If a rule you need isn't captured here — new CRM pattern, unfamiliar edge case, ambiguous policy — either **update this file in the same PR** (preferred) or open an issue so it doesn't get lost. The goal is that a new contributor (human or AI) can trust this file to reflect current invariants without cross-referencing outdated tribal knowledge.
 
-Companion docs cover the depth: **[SECURITY.md](SECURITY.md)** for the threat model, **[SERVER_SETUP.md](SERVER_SETUP.md)** for provisioning, **[SHARED_CODE.md](SHARED_CODE.md)** for blast-radius before touching shared utilities, **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** for customer-facing behavior.
+Companion docs cover the depth: **[SECURITY.md](SECURITY.md)** for the threat model, **[SERVER_SETUP.md](SERVER_SETUP.md)** for provisioning, **[SHARED_CODE.md](SHARED_CODE.md)** for blast-radius before touching shared utilities, **[TESTING.md](TESTING.md)** for automated tests, **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** for customer-facing behavior.
