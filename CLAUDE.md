@@ -255,7 +255,7 @@ Session state schema, SSE connection lifecycle, and webhook handler responsibili
 
 - **`contacts_map` keys MUST match the `crm_id` values sent to PhoneBurner in `external_crm_data`.** If they diverge, webhook lookups fail silently and the follow-me overlay stops navigating. See CLAUDE.md's "CRM ID Uniqueness Across Object Types" section for the disambiguation rules.
 - **`webhooks/call_done.php` is a pure dispatcher.** No provider-specific logic in the file itself — dispatch to `{provider}_call_logger.php` based on `state.crm_name`.
-- **Session files still write with insecure permissions (0777) — MEDIUM risk.** Tracked in SECURITY.md; new code that writes session state should use `atomic_write_json()` with 0600, not the legacy `save_session_state()`.
+- **Session files are group-readable (0660), not owner-only (0600).** Mismatch with the token-file standard. Tracked in SECURITY.md. New code that writes session state should use `atomic_write_json()` (which enforces 0600) instead of the legacy `save_session_state()`.
 - **Webhook payload shape is a stability contract.** Extension code depends on the field names PhoneBurner sends; changing how we parse them breaks active sessions across all deployed extensions. Test the full webhook path end-to-end before merging.
 
 ---
@@ -753,17 +753,17 @@ Before refactoring, `pb_dialsession_selection.php` contained 500+ lines of inlin
 
 When adding list-based dial sessions, we needed the same logic. Instead of duplicating 500 lines, we:
 
-1. **Created `hs_helpers.php`** with shared functions:
+1. **Created `hs_helpers.php`** with HubSpot-specific shared functions:
    ```php
    // hs_helpers.php
-   function hs_refresh_access_token_or_fail($client_id, $hs) { ... }
+   function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): array { ... }
    function hs_api_get_json($access_token, $url) { ... }
    function hs_api_post_json($access_token, $url, $body) { ... }
    function hs_discover_phone_properties($access_token, $objectType, $hubId) { ... }
    function hs_fetch_contacts_by_ids($access_token, $contactIds, $phoneProps) { ... }
    function hs_fetch_companies_by_ids($access_token, $companyIds, $phoneProps) { ... }
-   function pb_call_dialsession($pat, $payload) { ... }
    ```
+   Cross-provider helpers like `pb_call_dialsession()` live in `utils.php` (moved there from hs_helpers.php once Close became the second L3 consumer — see the Lessons Learned table below).
 
 2. **Updated existing endpoint**:
    ```php
@@ -885,7 +885,7 @@ chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
 # Open the popup → Settings → Developer Options → toggle to "dev"
 # The dev env resolves to the URL set in background.js (currently
 # https://extension-dev.phoneburner.biz). To point at a fully local
-# stack, temporarily edit ENV_BASE_URLS.dev in background.js.
+# stack, temporarily edit BASE_URLS.dev in background.js.
 ```
 
 ### Debug Endpoints
@@ -1284,8 +1284,8 @@ When creating a PR that includes **user-facing changes** (new features, UI chang
 - [ ] CORS whitelist configured (no origin reflection)
 - [ ] All endpoints use rate limiting
 - [ ] PII redaction enabled in logging
-- [ ] Session files use secure permissions (0600) — **TODO: currently 0777**
-- [ ] Webhooks have origin validation — **TODO: currently missing**
+- [ ] Session files use owner-only permissions (0600) — **TODO: currently 0660 (group-readable)**
+- [ ] Webhooks have origin validation — **PARTIAL: `softphone_call_done.php` HMAC-signed; `call_done.php` + `contact_displayed.php` still trust `?s=session_token`**
 - [ ] All file operations use `safe_file_path()`
 
 ### Server Setup

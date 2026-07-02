@@ -29,18 +29,20 @@
                               ↓ HTTPS (fetch + credentials)
 ┌──────────────────────────────────────────────────────────────────┐
 │ PHP BACKEND (served from server/public/)                         │
-│  ├─ utils.php               Token mgmt, PII redaction, safe file │
-│  │                           ops, rate limiting, temp codes,     │
-│  │                           pb_call_dialsession()               │
+│  ├─ utils.php               Token mgmt, safe file ops, rate     │
+│  │                           limiting, temp codes,               │
+│  │                           pb_call_dialsession(), log_msg()    │
 │  ├─ api/core/                                                    │
-│  │  ├─ bootstrap.php         CORS, security headers, logging,    │
-│  │  │                         api_ok / api_error / api_log       │
+│  │  ├─ bootstrap.php         CORS, security headers, api_log,    │
+│  │  │                         redact_pii_recursive,              │
+│  │  │                         api_ok / api_error                 │
 │  │  ├─ oauth_pb_save.php     Save + validate PhoneBurner PAT     │
 │  │  ├─ state.php             Connection readiness flags          │
 │  │  ├─ user_settings_*.php   Per-user profile settings           │
 │  │  ├─ track_crm_usage.php   Dashboard telemetry endpoint        │
 │  │  ├─ refresh_sse_code.php  Mint fresh temp codes for SSE       │
-│  │  ├─ softphone_auth_code.php  Signed launch token for softphone│
+│  │  ├─ softphone_auth_code.php  Single-use code → client_id      │
+│  │  │                            for click-to-call launch        │
 │  │  └─ *_stats.php           Metrics endpoints for dashboards    │
 │  ├─ api/crm/generic/                                             │
 │  │  └─ dialsession_from_scan.php  L1/L2 scraped-contact intake   │
@@ -263,7 +265,44 @@ PhoneBurner calls back to the extension server as calls happen:
 | `webhooks/contact_displayed.php` | PB is about to dial the next contact | Look up the contact in `contacts_map`, update `current` in the session file |
 | `webhooks/call_done.php` | A call finishes (any disposition) | Update `stats`, update `last_call`, dispatch to `{provider}_call_logger.php` if the session has a `crm_name` |
 
-Both webhooks currently identify the session via `?s=session_token` in the URL. This is trusted because the traffic comes from PhoneBurner's backend, but HMAC signing is a defense-in-depth improvement tracked as future work.
+Both webhooks currently identify the session via `?s=session_token` in the URL. This is trusted because the traffic comes from PhoneBurner's backend, but HMAC signing is a defense-in-depth improvement tracked as future work. The `softphone_call_done.php` webhook (see Click-to-Call below) already implements the HMAC-signed pattern.
+
+---
+
+## Click-to-Call (v0.8.0)
+
+Parallel to the dial-session flow, not part of it. A user clicks a small "flame" pill next to a phone number on a supported CRM record page and a single call is placed via an embedded PhoneBurner generic-softphone in a Chrome popup window — no dial session, no session-state file, no SSE.
+
+```
+CRM record page
+  ↓ content.js injects pill next to each phone number
+  ↓ user clicks →  CLICK_TO_CALL message
+  ↓
+background.js
+  ↓ POST /api/core/softphone_auth_code.php  → single-use code (5-min TTL)
+  ↓ opens BASE_URL/softphone.php?code=...&number=...&runtime=... in popup
+  ↓
+softphone.php
+  ↓ exchanges code → client_id → PAT (server-side)
+  ↓ embeds PB softphone iframe with ?token=<PAT> in its src
+  ↓ softphone_host.js drives dial via postMessage
+  ↓
+PhoneBurner platform places call
+  ↓
+POST /webhooks/softphone_call_done.php
+  ↓ X-PB-Signature: sha256=<hex hmac_sha256(rawBody, SOFTPHONE_HMAC_SECRET)>
+  ↓ v1: verify signature, parse, log non-PII disposition, return 200
+```
+
+The v1 webhook handler intentionally stays minimal — it verifies the signature, extracts identity/disposition fields, and logs them non-PII. Forwarding the disposition into the CRM (via each provider's call logger) and relaying to a side-panel UI are follow-up phases; the file header calls this out explicitly.
+
+Security properties that differ from the dial-session flow:
+
+- **Bearer token confinement.** The PAT never leaves the softphone.php document — it's placed directly into the iframe `src` attribute, and the iframe's origin (PB's platform) reads it and drops it before making onward API calls. The extension never sees it, and it isn't in postMessage payloads or the top-window URL.
+- **Webhook auth is HMAC, not session-token.** Because there is no session, the webhook can't identify itself with `?s=session_token`. `SOFTPHONE_HMAC_SECRET` (per-environment) is the trust boundary. This pattern is what SECURITY.md points at for retrofitting the dial-session webhooks.
+- **Softphone runtime hosting.** The softphone runtime itself is served from PhoneBurner's platform (via a registered slug in `softphone_config.js`) — `softphone.php` on our backend is just the host page that mints the iframe. Dev and prod each register a separate slug.
+
+Per-CRM click-to-call activation is gated in `background.js` via `ctcShouldShowPills()` — an AND of the feature gate `clickToCallEnabled()` and the user-level "Show click-to-call buttons" preference. Both must be true for pills to render.
 
 ---
 
