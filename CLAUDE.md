@@ -1380,6 +1380,13 @@ function scanMyNewCrmContacts(maxContacts) {
 - Use `/api/crm/generic/dialsession_from_scan.php`
 - No server changes needed (generic endpoint handles all L1/L2)
 
+**Step 5:** Update customer-facing surfaces so the new CRM is discoverable. **Skipping any of these is a common miss** — the code works but customers can't find out about it:
+
+- **`server/public/index.html`** (marketing site at `https://extension.phoneburner.biz`) — add a `<article class="crm-detail">` block for the new CRM inside the Integration Depth section, add a `<a class="crm-pill">` in the hero, add a `.crm-pill[data-crm="..."] .crm-pill__dot` color rule, update meta descriptions that name-drop CRMs. Follow AgencyZoom's shape (Pipedrive-adjacent) as a template.
+- **`chrome-extension/STORE_LISTING.md`** — add the new CRM to the Multi-CRM Compatibility list at the appropriate level.
+- **`KB_EXTENSION_TROUBLESHOOTING.md`** — add a numbered section covering: what the extension detects (host + page pattern), how the customer launches, dedup or per-row selection semantics, task-completion behavior (auto vs manual), common issues + resolutions. Also add the CRM name to the Symptom Index at the top.
+- **`chrome-extension/changelog.js`** — one short line in the next version entry announcing support.
+
 **⚠️ Content Script Safety Rules (learned the hard way):**
 
 1. **Test one file at a time** — Edit `crm_config.js` first, reload, verify popup loads. Then edit `content.js`, reload, verify again. A broken content script silently kills the entire extension (popup hangs on "Loading...") with no console errors.
