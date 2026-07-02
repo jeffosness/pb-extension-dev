@@ -9,31 +9,65 @@
 ## Components
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ CHROME EXTENSION (MV3)                                      │
-│  ├─ manifest.json          Service worker config            │
-│  ├─ background.js          Message router, API client       │
-│  ├─ popup.js               UI logic (PAT, OAuth, tabs)      │
-│  └─ content.js             CRM scraping, SSE follow-me      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ CHROME EXTENSION (MV3)                                           │
+│  ├─ manifest.json           Extension manifest, MV3 permissions  │
+│  ├─ background.js           Service worker: message router,      │
+│  │                           API client, env toggle, CTC gating  │
+│  ├─ content.js              Injected into CRM tabs: page         │
+│  │                           scraping, SSE follow-me overlay,    │
+│  │                           click-to-call pill rendering        │
+│  ├─ popup.html + popup.js   Toolbar popup UI (PAT, OAuth,        │
+│  │                           dial cards, settings tabs)          │
+│  ├─ crm_config.js           Shared CRM registry (id, level,      │
+│  │                           hostMatch) — used by both scripts   │
+│  ├─ softphone_config.js     Softphone slugs + HMAC settings for  │
+│  │                           click-to-call (dev/prod pair)       │
+│  ├─ changelog.js            Version-gated welcome/changelog data │
+│  └─ icons/                  Toolbar + store icons                │
+└──────────────────────────────────────────────────────────────────┘
                               ↓ HTTPS (fetch + credentials)
-┌─────────────────────────────────────────────────────────────┐
-│ PHP BACKEND API                                             │
-│  ├─ bootstrap.php          CORS, security headers, logging  │
-│  ├─ utils.php              Token mgmt, PII redaction, safe  │
-│  │                          file ops, rate limiting          │
-│  ├─ /api/core/             PAT, settings, state, stats      │
-│  ├─ /api/crm/generic/      L1/L2 providers (scan-based)     │
-│  ├─ /api/crm/{provider}/   L3 providers (OAuth + API)       │
-│  ├─ /webhooks/             PhoneBurner callbacks            │
-│  └─ sse.php                Real-time SSE stream             │
-└─────────────────────────────────────────────────────────────┘
-                              ↓ REST API
-┌─────────────────────────────────────────────────────────────┐
-│ EXTERNAL APIS                                               │
-│  ├─ PhoneBurner API        /rest/1/dialsession, /members/me │
-│  └─ CRM APIs               HubSpot, Close, Apollo, ...      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ PHP BACKEND (served from server/public/)                         │
+│  ├─ utils.php               Token mgmt, PII redaction, safe file │
+│  │                           ops, rate limiting, temp codes,     │
+│  │                           pb_call_dialsession()               │
+│  ├─ api/core/                                                    │
+│  │  ├─ bootstrap.php         CORS, security headers, logging,    │
+│  │  │                         api_ok / api_error / api_log       │
+│  │  ├─ oauth_pb_save.php     Save + validate PhoneBurner PAT     │
+│  │  ├─ state.php             Connection readiness flags          │
+│  │  ├─ user_settings_*.php   Per-user profile settings           │
+│  │  ├─ track_crm_usage.php   Dashboard telemetry endpoint        │
+│  │  ├─ refresh_sse_code.php  Mint fresh temp codes for SSE       │
+│  │  ├─ softphone_auth_code.php  Signed launch token for softphone│
+│  │  └─ *_stats.php           Metrics endpoints for dashboards    │
+│  ├─ api/crm/generic/                                             │
+│  │  └─ dialsession_from_scan.php  L1/L2 scraped-contact intake   │
+│  ├─ api/crm/{provider}/       L3 providers (OAuth + full API):   │
+│  │                             hubspot/, close/, apollo/         │
+│  ├─ webhooks/                 PhoneBurner callbacks:             │
+│  │                             contact_displayed.php,            │
+│  │                             call_done.php,                    │
+│  │                             softphone_call_done.php           │
+│  ├─ sse.php                   Real-time follow-me event stream   │
+│  ├─ softphone.php +           Embedded generic-softphone host    │
+│  │  softphone_host.js          for click-to-call                 │
+│  ├─ kb.php                    KB rendered from repo markdown     │
+│  ├─ index.html, privacy.html  Marketing site + privacy policy    │
+│  ├─ health.php, version.php   Liveness + build info              │
+│  ├─ config.php                Secrets, env-specific config       │
+│  └─ (state dirs, git-ignored) sessions/, tokens/, cache/,        │
+│                                metrics/, daily_stats/,           │
+│                                user_settings/                    │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓ REST APIs
+┌──────────────────────────────────────────────────────────────────┐
+│ EXTERNAL APIS                                                    │
+│  ├─ PhoneBurner API         /rest/1/dialsession, /members/me,    │
+│  │                           /contacts, /webhooks                │
+│  └─ CRM APIs                HubSpot, Close, Apollo, ...          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 The extension is stateless from the backend's perspective — a `client_id` (UUID stored in `chrome.storage.local`) is the only identity tying a browser to its saved tokens.
@@ -62,30 +96,31 @@ Which CRMs sit at which level lives in [`chrome-extension/crm_config.js`](chrome
 
 ---
 
-## Server Directory Layout
+## L3 Provider Directory Layout
 
 ```
 server/public/api/crm/
 ├── generic/
-│   └── dialsession_from_scan.php    # L1/L2: Accepts scraped contacts
+│   └── dialsession_from_scan.php     # L1/L2 scraped-contact intake
 │
-├── hubspot/                         # L3: Full API integration
-│   ├── oauth_hs_start.php           # OAuth flow initiation
-│   ├── oauth_hs_finish.php          # OAuth callback handler
-│   ├── oauth_disconnect.php         # Disconnect
-│   ├── hs_helpers.php               # Shared HubSpot API functions
-│   ├── hs_call_logger.php           # Writes call activity back to HubSpot
-│   ├── pb_dialsession_selection.php # Dial from selected records
-│   ├── pb_dialsession_from_list.php # Dial from saved list
-│   ├── hs_lists.php                 # Fetch user's lists
-│   └── state.php                    # Connection status
+├── hubspot/                          # L3
+│   ├── oauth_hs_start.php            # OAuth start
+│   ├── oauth_hs_finish.php           # OAuth callback (HTML response)
+│   ├── oauth_disconnect.php          # Clear tokens
+│   ├── state.php                     # Connection status
+│   ├── hs_helpers.php                # Shared API client, refresh, etc.
+│   ├── hs_call_logger.php            # Writes call activity back to HubSpot
+│   ├── hs_lists.php                  # Fetch user's saved lists
+│   ├── hs_phone_properties.php       # Discover custom phone fields
+│   ├── pb_dialsession_selection.php  # Dial from selected records
+│   ├── pb_dialsession_from_list.php  # Dial from a saved list
+│   └── pb_dialsession_from_tasks.php # Dial from a task queue
 │
-├── close/                           # L3: Close CRM
-├── apollo/                          # L3: Apollo.io
-└── {future providers}/
+├── close/                            # L3 (contacts + leads model)
+└── apollo/                           # L3 (sequence-task dialing)
 ```
 
-Every L3 provider follows the same file layout — enforced by convention, not code. New provider directories should mirror this shape.
+The minimum contract every L3 provider must implement is the adapter contract below. HubSpot has grown extra endpoints (lists, tasks, phone-property discovery) as its L3 depth expanded — those are provider-specific extensions, not required. New provider directories should mirror the minimum shape and add their own extensions as needed.
 
 ---
 
@@ -152,7 +187,7 @@ Return profile to extension
 7. Redirect back to extension UI (HTML page, not JSON)
 ```
 
-Access tokens are refreshed lazily — `load_{provider}_token()` checks `expires_at` and calls `{provider}_refresh_access_token_or_fail()` if within 60s of expiry. `expires_at` is stamped with a 60s safety margin at save time so the check is cheap.
+Access tokens are refreshed lazily. `load_{provider}_tokens()` returns the stored token record; callers explicitly check `{provider}_token_is_expired()` and invoke `{provider}_refresh_access_token_or_fail()` when needed. `expires_at` is stamped with a 60-second safety margin at save time (`time() + expires_in - 60`), so a "not expired" reading is always safely non-expired for at least a minute.
 
 ---
 

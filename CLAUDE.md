@@ -54,10 +54,10 @@
 ### 🎯 Architecture Rules
 
 7. **Keep provider logic isolated**
-   - HubSpot (L3) lives in `/api/crm/hubspot/`
+   - Each L3 provider lives in `/api/crm/{provider}/` (e.g., `/api/crm/hubspot/`)
    - Generic (L1/L2) lives in `/api/crm/generic/`
    - Provider-specific code stays in provider directories
-   - Shared code goes in `utils.php` or `bootstrap.php`
+   - Shared code goes in `utils.php`; provider-specific shared code goes in `{provider}_helpers.php`
 
 8. **Minimal diff mentality**
    - Small PRs — one behavior change per PR when possible
@@ -145,14 +145,21 @@ Directory layout and the full L3 adapter contract live in **[ARCHITECTURE.md](AR
 
 ### bootstrap.php (API Framework)
 
-**Include at top of EVERY API endpoint:**
+Lives at `server/public/api/core/bootstrap.php` and is required by every API endpoint. It sets up CORS, security headers, request-scoped logging, the `api_ok*`/`api_error`/`api_log` helpers, and loads `config.php` for you.
+
+**Include at top of every API endpoint** — the relative path depends on where the endpoint lives:
 
 ```php
-<?php
-require_once __DIR__ . '/../../config.php';
-require_once __DIR__ . '/../../utils.php';
+// server/public/api/core/{anything}.php  — bootstrap is a sibling
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../../utils.php';
+
+// server/public/api/crm/{provider}/{anything}.php  — up two, then into core
+require_once __DIR__ . '/../../core/bootstrap.php';
+require_once __DIR__ . '/../../../utils.php';
 ```
+
+Grep an existing endpoint at your target directory depth and mirror its include paths — don't guess.
 
 **Key Features:**
 
@@ -193,7 +200,10 @@ api_log('event_name', [
 | `rate_limit_or_fail($id, $max)`        | Enforce rate limits        | **HIGH**       |
 | `get_client_id_or_fail($data)`         | Validate client ID         | **HIGH**       |
 | `load_pb_token($client_id)`            | Load PAT (migrates legacy) | **HIGH**       |
-| `load_hs_token($client_id)`            | Load HubSpot tokens        | **HIGH**       |
+| `load_hs_tokens($client_id)`           | Load HubSpot OAuth tokens  | **HIGH**       |
+| `load_close_tokens($client_id)`        | Load Close OAuth tokens    | **HIGH**       |
+| `load_apollo_tokens($client_id)`       | Load Apollo OAuth tokens   | **HIGH**       |
+| `pb_call_dialsession($pat, $payload)`  | Create PB dial session     | **HIGH**       |
 
 **Token Migration Logic:**
 
@@ -949,21 +959,9 @@ data: { current: {...}, stats: {...}, last_call: {...} }
 
 ### Message Types (Extension Internal)
 
-Chrome extension message types (handled in `background.js`):
+Message types flowing between `background.js`, `popup.js`, and `content.js` (e.g., `GET_CONTEXT`, `SAVE_PAT`, `HS_LAUNCH_FROM_SELECTED`, `CLICK_TO_CALL`, `REFRESH_SSE_CODE`, ...) are a stability contract — the full set drifts with every feature, so grep `msg.type ===` in [`chrome-extension/background.js`](chrome-extension/background.js) for the canonical list.
 
-- `GET_CONTEXT` — Get current CRM context
-- `SCAN_AND_LAUNCH` — Scan page + create dial session (L1/L2)
-- `HS_LAUNCH_FROM_SELECTED` — Create dial from selected records (L3)
-- `SCANNED_CONTACTS` — Content script returns contacts
-- `GET_STATE` — Get connection status (PAT + HubSpot)
-- `SAVE_PAT` — Save PhoneBurner PAT
-- `CLEAR_PAT` — Clear PAT
-- `START_FOLLOW_SESSION` — Register follow-me session
-- `STOP_FOLLOW_SESSION` — Unregister follow-me
-- `CLOSE_LAUNCH_FROM_SELECTED` — Launch Close dial from visible/selected contacts
-- `CLOSE_GET_SELECTED_IDS` — Content script extracts Close contact/lead IDs from DOM
-
-**Rule:** Changing message types requires updating all handlers.
+**Rule:** Changing a message type name — or the shape of its payload — requires updating every sender and every handler in lockstep. Renaming without a compatibility shim will break in-flight dial sessions on customers who haven't reloaded the extension.
 
 ### Session State Schema
 
@@ -1349,7 +1347,7 @@ Keep these answers in sync:
 **Current Privacy Stance:**
 
 - ✅ Collect: CRM contact data (name, phone, email) for dial session creation
-- ✅ Store: PhoneBurner PAT, HubSpot OAuth tokens (local only, not transmitted to third parties)
+- ✅ Store server-side: PhoneBurner PAT + OAuth tokens for every connected L3 CRM (currently HubSpot, Close, Apollo — see `server/public/tokens/` for the live set). Tokens stored outside webroot with 0600 permissions; not transmitted to third parties.
 - ❌ Sell or share: No data sold or shared with third parties
 - ✅ Data retention: Session data deleted when session ends; logs rotated after 90 days
 - ✅ Data transmission: Only to PhoneBurner API and CRM APIs (user-initiated)
@@ -1357,7 +1355,7 @@ Keep these answers in sync:
 ### Review Response Template
 
 **Q: Why do you need broad host permissions?**
-A: The extension operates on various CRM websites (Salesforce, HubSpot, Zoho, Pipedrive, Monday.com). Permissions are optional and only requested when the user initiates a dial session on a detected CRM page.
+A: The extension operates on a variety of CRM websites — the current supported list is defined in `chrome-extension/crm_config.js` (HubSpot, Salesforce, Zoho, Pipedrive, Monday.com, Close, Apollo, BnTouch, AgencyZoom at time of writing). Host permissions are requested per-CRM only when the user activates the integration; they are not granted at install time.
 
 **Q: What personal data do you collect?**
 A: Contact information (name, phone, email) from CRM lists to create dial sessions. Data is only collected when the user clicks "Launch Dial Session" and is immediately transmitted to PhoneBurner's API. No data is stored permanently or shared with third parties.
