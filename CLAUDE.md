@@ -111,9 +111,9 @@
 
 | Level  | Method                | CRMs                         | Capabilities                                 |
 | ------ | --------------------- | ---------------------------- | -------------------------------------------- |
-| **L1** | Generic HTML scraping | Zoho, Monday.com             | Extract from HTML tables/ARIA grids          |
-| **L2** | CRM-specific scraping | Salesforce, Pipedrive        | Custom DOM selectors per CRM                 |
-| **L3** | Full API integration  | HubSpot, Close               | OAuth + server-side API calls + call logging |
+| **L1** | Generic HTML scraping | Zoho, Monday.com                 | Extract from HTML tables/ARIA grids          |
+| **L2** | CRM-specific scraping | Pipedrive, BnTouch, AgencyZoom   | Custom DOM selectors per CRM                 |
+| **L3** | Full API integration  | HubSpot, Close, Apollo           | OAuth + server-side API calls + call logging |
 
 **Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
 
@@ -408,7 +408,7 @@ Location: `server/public/sessions/{session_token}.json`
 **IMPORTANT:** Session files currently created with insecure permissions (MEDIUM RISK). When creating/updating session files, use:
 
 ```php
-// TODO: Fix session file permissions (see SECURITY_REVIEW.md)
+// TODO: Fix session file permissions (see SECURITY.md)
 save_session_state($session_token, $state);
 // Should use atomic_write_json() with 0600 permissions
 ```
@@ -1109,9 +1109,11 @@ chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
 # chrome://extensions → Developer Mode → Load Unpacked
 # Select chrome-extension/ directory
 
-# 5. Update BASE_URL in extension
-# Edit chrome-extension/background.js and popup.js
-# Set BASE_URL to http://127.0.0.1:8000
+# 5. Point extension at your local server
+# Open the popup → Settings → Developer Options → toggle to "dev"
+# The dev env resolves to the URL set in background.js (currently
+# https://extension-dev.phoneburner.biz). To point at a fully local
+# stack, temporarily edit ENV_BASE_URLS.dev in background.js.
 ```
 
 ### Debug Endpoints
