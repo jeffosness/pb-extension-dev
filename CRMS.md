@@ -14,6 +14,17 @@
 
 ## Adding a new CRM provider
 
+### Two halves of every CRM add
+
+**Every new CRM has two halves that ship together:**
+
+1. **The code** — register in `crm_config.js`, scan or API-integrate, wire up the launch handlers, (for L3) build the OAuth flow + provider directory + call logger.
+2. **Discoverability** — marketing site, `STORE_LISTING.md`, KB entry, changelog, `manifest.json` description. Without this half, the integration works, but no customer knows it exists — support tickets follow, or worse, nobody uses the feature.
+
+Both halves are covered in this doc. The code work lives in the L1/L2/L3 walkthroughs below; the discoverability work lives in the [shared customer-facing surfaces checklist](#customer-facing-surfaces-shared-checklist). **Don't estimate "time to add a CRM" without accounting for both.** The discoverability half is where AgencyZoom's launch (PR #141) got caught — the code shipped, but PR #152 had to catch up the marketing/KB/listing gaps after the fact. External reviewers (human and AI) tend to compartmentalize this as "not really part of the integration"; our position is that it's half the work.
+
+---
+
 ### Which level should I pick?
 
 | Level | When to use | What's involved | Reference add |
