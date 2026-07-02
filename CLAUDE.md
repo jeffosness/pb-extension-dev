@@ -865,6 +865,43 @@ const mergedContext = {
 sendResponse({ context: mergedContext });
 ```
 
+### Feature Gating for Soak-Testing New Work
+
+**The pattern:** When shipping a new feature that we want to test in the real extension-plus-server flow — but not yet expose to customers — gate it on `CURRENT_ENV === "dev"`. The customer default is `CURRENT_ENV === "prod"`, so gated features are invisible to them until we're ready.
+
+**Why this exists:** Chrome Web Store distributes ONE binary to everyone. There's no beta channel, no per-user targeting, no way to ship code to some customers and not others. But every version bump requires a full CWS release. So the only lever we have between "in development" and "customers see it" is what the code CHOOSES to do based on runtime state.
+
+**How to use it:**
+
+```javascript
+// background.js — one named check per feature so future contributors can grep for the gate
+function myNewFeatureEnabled() {
+  return CURRENT_ENV === "dev";
+}
+
+// Anywhere the feature activates
+if (!myNewFeatureEnabled()) return;   // no-op for customers
+// ... rest of feature code
+```
+
+**Development flow:**
+
+1. Add the gate with `return CURRENT_ENV === "dev";` at the top of a new feature.
+2. Land the feature on `main` — it auto-deploys to dev backend, is live for anyone toggled to dev in Settings → Developer Options.
+3. Soak-test locally: unpacked extension + dev toggle. Everything works end-to-end because dev backend has all the code too.
+4. When it's ready for customers, change the gate to `return true;`. Bump manifest, add changelog, ship.
+
+**Live example:** [click-to-call in v0.8.0](https://github.com/jeffosness/pb-extension-dev/pull/146). The gate lived at `background.js:clickToCallEnabled()` for about a week while we tested the softphone popup, mic permission flow, PhoneBurner webhook signing, and per-CRM finder DOMs. Real bugs we caught during that soak period would have shipped to every customer otherwise. When we flipped the gate to `return true` in PR #146, the whole tree of work was already exercised.
+
+**Important rules:**
+
+- **Every gated feature keeps its named function.** Don't inline `if (CURRENT_ENV === "dev")` scattered across the code — always route through a single `xxxEnabled()` function so future contributors can find every gate point with one grep.
+- **Comment WHY the gate exists** (e.g., "TO LAUNCH: change this to return true once softphone.php is deployed to prod"). Prevents future contributors from thinking the gate is old scaffolding they should remove.
+- **Flip the gate BEFORE bumping the manifest.** If manifest goes from 0.8.1 to 0.9.0 with a "click-to-call now available!" changelog entry, but the gate still returns `CURRENT_ENV === "dev"`, customers will see the changelog and no feature. Support tickets follow. This class of mistake is worth a future CI check ([#144](https://github.com/jeffosness/pb-extension-dev/issues/144) tracks a related one for DEFAULT_ENV consistency; a similar check could catch open gates in production releases).
+- **User-level toggles are a separate concern.** If a launched feature needs an off-switch for individual customers (e.g., click-to-call's "Show click-to-call buttons" checkbox in Settings), that's a per-user `chrome.storage.local` flag, layered ON TOP of the env gate — not a replacement for it. See `ctcShouldShowPills()` in background.js for the pattern (both gates checked together).
+
+**What NOT to do:** Don't build a full "beta program" with customer opt-in flags to soak-test features on willing customers. We considered it (2026-07-02). The extra CWS release cadence + toggle infrastructure isn't worth it while dev-toggle-plus-internal-testing keeps catching real bugs. If a specific future feature genuinely can't be validated without diverse customer CRM configurations we don't have access to, we'll revisit. Until then, the env-gate pattern above IS our soak strategy.
+
 ### HubSpot List-Based Dial Sessions
 
 **Added in v0.4.0** - Allows users to launch dial sessions from saved HubSpot lists (up to 500 contacts/companies).
