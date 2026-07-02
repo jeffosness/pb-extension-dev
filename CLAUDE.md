@@ -109,11 +109,13 @@
 
 ### Three-Level CRM Integration Model
 
-| Level  | Method                | CRMs                         | Capabilities                                 |
-| ------ | --------------------- | ---------------------------- | -------------------------------------------- |
-| **L1** | Generic HTML scraping | Zoho, Monday.com                 | Extract from HTML tables/ARIA grids          |
-| **L2** | CRM-specific scraping | Pipedrive, BnTouch, AgencyZoom   | Custom DOM selectors per CRM                 |
-| **L3** | Full API integration  | HubSpot, Close, Apollo           | OAuth + server-side API calls + call logging |
+| Level  | Method                | Capabilities                                 |
+| ------ | --------------------- | -------------------------------------------- |
+| **L1** | Generic HTML scraping | Extract from HTML tables / ARIA grids        |
+| **L2** | CRM-specific scraping | Custom DOM selectors per CRM                 |
+| **L3** | Full API integration  | OAuth + server-side API calls + call logging |
+
+Which CRMs sit at which level lives in [`chrome-extension/crm_config.js`](chrome-extension/crm_config.js) — the single source of truth. Don't duplicate the list here; it drifts.
 
 **Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
 
