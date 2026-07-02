@@ -285,6 +285,40 @@ Parameters available:
 - **Close dispositions:** Ignored on external calls (`call_method: "external"` always stores `answered`). Use custom Outcomes instead — they work correctly on external calls.
 - **Close recording_url:** Must be HTTPS. Only include for answered calls (Close may override disposition if recording present).
 
+#### L3 Pre-PR Wiring Checklist
+
+L3 providers are wired into eight places across the extension + server. It's easy to miss one — an outside AI reviewer specifically flagged this as the #1 concrete risk in the L3 flow. Before opening your PR, tick through each touchpoint (grep for an existing provider's slug like `close` or `apollo` to find each one):
+
+**Extension side:**
+
+- [ ] **`chrome-extension/crm_config.js`** — new entry with `level: 3` and correct `hostMatch`
+- [ ] **`chrome-extension/content.js`** — provider added to the L3 guard at the top of `scanPageForContacts()` (the `if (crmId === "hubspot" || crmId === "close" || ...)` line)
+- [ ] **`chrome-extension/content.js`** — `{PROVIDER}_GET_SELECTED_IDS` message handler that extracts record IDs from the DOM
+- [ ] **`chrome-extension/background.js`** — `{PROVIDER}_LAUNCH_FROM_SELECTED` message handler
+- [ ] **`chrome-extension/background.js`** — `track_crm_usage.php` fire-and-forget call inside the launch handler (dashboard telemetry won't show your CRM without this)
+- [ ] **`chrome-extension/popup.js`** — global state (`{PROVIDER}_STATE`), detection (`is{Provider}L3`), connection check (`check{Provider}ConnectionState`), OAuth start/disconnect, launch, UI refresh, and event listeners in `DOMContentLoaded`
+- [ ] **`chrome-extension/popup.js`** — `applyContextVisibility()` shows/hides the new provider's dial card and settings card based on the active tab context
+- [ ] **`chrome-extension/popup.html`** — dial card + settings card (both `class="hidden"` initially)
+
+**Server side:**
+
+- [ ] **`server/public/utils.php`** — 4 token helpers: `{provider}_token_path`, `save_{provider}_tokens`, `load_{provider}_tokens`, `clear_{provider}_tokens`
+- [ ] **`server/public/api/crm/{provider}/`** — provider directory with `{provider}_helpers.php`, `oauth_{provider}_start.php`, `oauth_{provider}_finish.php`, `oauth_disconnect.php`, `state.php`, `pb_dialsession_selection.php`
+- [ ] **`server/public/config.php` + `config.sample.php`** — `{PROVIDER}_CLIENT_ID` + `{PROVIDER}_CLIENT_SECRET` keys
+- [ ] **`/var/lib/pb-extension-dev/tokens/{provider}/`** — directory created on the server with 0700 permissions
+
+**If you also added Phase 3 (call logging) in this PR:**
+
+- [ ] **`server/public/api/crm/{provider}/{prefix}_call_logger.php`** — provider's call logger file (function named after `crm_name`, not directory prefix — see Phase 3 for the hubspot vs hs asymmetry)
+- [ ] **`server/public/webhooks/call_done.php`** — dispatcher case (`if ($crmName === '{crm_name}') { ... }`)
+
+**Cross-cutting:**
+
+- [ ] **PHPUnit** — `composer test` green if you touched anything in `utils.php` or added tests
+- [ ] **[Customer-facing surfaces checklist](#customer-facing-surfaces-shared-checklist)** — marketing site, STORE_LISTING, KB, changelog, manifest version bump (see Phase 4)
+
+If any box above is unchecked and you're not sure whether it applies, grep the file for an existing provider name (`close` is the cleanest reference) and compare shapes side-by-side.
+
 #### Phase 4: Customer-Facing Surfaces + Ship
 
 Same [shared checklist](#customer-facing-surfaces-shared-checklist) as L1/L2: marketing site, STORE_LISTING, KB, changelog, manifest version bump.
