@@ -49,7 +49,8 @@ The counts below are hand-curated snapshots — not auto-generated. Refresh them
 1. **Find every caller before you edit.** `grep -rl "\bfunction_name(" server/public --include="*.php"` (the `\b` matters — `pb_call_dialsession` and `pb_call_dialsession_wrapper` are different callers).
 2. **Additive changes only** — add a new function, add an optional parameter, add a new field to a return value. Never rename in place. Never remove a parameter that has existing callers.
 3. **If you must break a signature,** rename the function first (e.g. `api_error` → `api_error_v2`), migrate callers incrementally in follow-up PRs, then delete the old signature.
-4. **For extension message types**, the same rule applies AND the extension is auto-updated by Chrome — meaning you have both old and new versions in the field for ~24 hours. Server code that handles a message must accept BOTH old and new payload shapes until the old version has aged out of Chrome Web Store.
+4. **Run PHPUnit before pushing.** `safe_file_path`, `atomic_write_json`, `temp_code_store`, and `temp_code_retrieve_and_delete` have automated tests under `tests/`. Run `composer test` locally — CI blocks PRs on red tests but you should catch failures before pushing. If your change touches a function that isn't tested yet, add tests in the same PR (see [CLAUDE.md → Automated tests](CLAUDE.md) for the template and priority list).
+5. **For extension message types**, the same rule applies AND the extension is auto-updated by Chrome — meaning you have both old and new versions in the field for ~24 hours. Server code that handles a message must accept BOTH old and new payload shapes until the old version has aged out of Chrome Web Store.
 
 ## How to refresh this file
 

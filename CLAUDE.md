@@ -101,6 +101,7 @@ Before committing, verify:
 - [ ] No credentials in URLs (use temp codes)
 - [ ] CORS origins still whitelisted (no origin reflection)
 - [ ] Input validation on all user-controlled data
+- [ ] **If you touched `utils.php` (or any function tested in `tests/`), PHPUnit is green.** Run `composer test` locally before pushing. CI (`.github/workflows/tests.yml`) blocks PRs on red tests, but you should catch failures locally so you're not roundtripping through CI. See the "Automated tests" section below for what's covered and how to add more.
 
 ### Critical Security Utilities (ALWAYS USE)
 
@@ -551,6 +552,43 @@ if (!myNewFeatureEnabled()) return;   // no-op for customers
 ---
 
 ## Testing & Debugging
+
+### Automated tests (PHPUnit)
+
+**Real customers depend on this backend every day. Security-critical `utils.php` functions have PHPUnit tests and CI blocks red PRs. If you're an AI editing this repo: this is non-negotiable — see below.**
+
+**Run locally before pushing:**
+
+```bash
+composer install    # once, on a fresh clone
+composer test       # or: vendor/bin/phpunit
+```
+
+Should be ~1 second and print `OK`. If it doesn't, don't push.
+
+**What's covered today** (see `tests/`):
+
+- `safe_file_path()` — every path-traversal defense case
+- `atomic_write_json()` — restrictive-permissions guarantee + atomicity
+- `temp_code_store()` / `temp_code_retrieve_and_delete()` — single-use + TTL
+
+**When you must run tests / add tests:**
+
+- **Any edit to `server/public/utils.php`** — run the whole suite. If your change adds a new security-critical function, add tests for it in the same PR.
+- **Any edit to a function listed in [SHARED_CODE.md](SHARED_CODE.md)** — treat this the same way. High blast radius = tests required.
+- **New function that other code will depend on** — add tests in the same PR, don't defer.
+
+**CI enforcement:**
+
+`.github/workflows/tests.yml` runs the suite on every PR and every push to `main`. A red run shows as a failed check on the PR — merging is blocked. This is the automated backstop; the local run is the fast feedback loop.
+
+**Follow-up test targets** (not yet covered, ordered by priority):
+
+- `redact_pii_recursive()` (lives in `api/core/bootstrap.php`, not `utils.php` — needs a testable-in-isolation approach; PII leakage is high-severity)
+- `rate_limit_or_fail()` (filesystem + time-dependent, needs cache-dir override)
+- `get_client_id_or_fail()` (calls `api_error()`, needs framework interaction)
+
+If you're adding a new provider or shared helper and it feels testable, write a test — the file `tests/SafeFilePathTest.php` is a good template.
 
 ### Local Development Setup
 

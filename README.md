@@ -47,6 +47,17 @@ scripts/                Build + one-off tooling (currently: CWS zip builder)
 - User-facing changes bump `chrome-extension/manifest.json` + add a `changelog.js` entry.
 - Merge to `main` auto-deploys to the dev backend; tagging `prod-vX.Y.Z` triggers the prod deploy.
 
+## Running tests
+
+Security-critical utilities have PHPUnit coverage. On a fresh clone:
+
+```bash
+composer install    # installs PHPUnit
+composer test       # runs the suite (~1 second)
+```
+
+CI runs the same suite on every PR — merging is blocked on a red run. See [CLAUDE.md → Automated tests](CLAUDE.md) for what's covered and how to add more.
+
 ## License
 
 Proprietary. All rights reserved.
