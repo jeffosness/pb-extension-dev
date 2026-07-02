@@ -83,6 +83,27 @@ This is the honest part. These are known gaps:
 
 The honest takeaway: we're at industry-standard third-party-SaaS OAuth handling. We are NOT at "best possible." The gaps above are Tier 2 / Tier 3 improvements tracked in the security roadmap.
 
+## Known implementation gaps (finer-grained)
+
+Separate from the strategic gaps above, these are specific implementation weaknesses we're aware of but haven't fixed yet. They're smaller in scope but real.
+
+**Medium risk (bugs worth fixing before broad-deployment growth):**
+
+1. **Session state files are group-readable, not owner-only.** `save_session_state()` in `utils.php` currently creates `server/public/sessions/{token}.json` with permission 0660 (dir 0770). That's a mismatch with the 0600/0700 standard we apply to token files via `atomic_write_json()`. Session contents include the contacts_map (names, phones), `current` contact, and stats — group-readability doesn't matter on the current single-user vhost, but any future host with additional local users would expose PII. Fix: rewrite `save_session_state()` to use `atomic_write_json()` (which enforces 0600 / 0700).
+2. **PhoneBurner webhooks are unauthenticated.** `webhooks/contact_displayed.php` and `webhooks/call_done.php` accept `?s=session_token` in the URL and trust that PhoneBurner sent it. HMAC signature validation would give defense-in-depth if PB ever leaks a webhook URL upstream. (v0.8.0 introduced `softphone_call_done.php` WITH HMAC validation — that pattern is the template for retrofitting the other webhooks.)
+3. **`server/public/metrics/` directory is under the webroot but relies on `.htaccess` for protection.** Contents include `sse_usage-*.log`, `sse_presence/*.json`, `crm_usage-*.log`, and `app.log`. Currently protected by a `FilesMatch` deny rule for `.log|.json|.txt` — that works, but any misconfigured web server (nginx swap, missing AllowOverride, admin editing the vhost) silently disables the guard. Defense-in-depth would be moving the whole directory to `/var/lib/pb-extension-dev/metrics/` so security doesn't ride on a per-file allowlist inside the docroot.
+
+**Low risk (harden when time permits):**
+
+1. **DEBUG_MODE dumps full webhook payloads including PII.** When `DEBUG_MODE` is `true` in `config.php`, `softphone_call_done.php` logs the raw request body (and other diagnostic endpoints unlock too). The dial-session webhooks (`call_done.php` and `contact_displayed.php`) log only selective, non-PII fields in normal operation, but any future contributor who adds a `log_msg($raw)` for debugging would leak PII. Best defense: keep `DEBUG_MODE` off in prod (config.php is `chattr +i`), and route future debug logging through `redact_pii_recursive()` — noting that this helper currently lives in `bootstrap.php`, which webhooks don't include (needs to move to `utils.php` or be duplicated).
+2. **No CSP on the extension popup.** Chrome's default CSP for MV3 extensions is strict, so injected inline JS won't run, but explicit CSP hardening in `manifest.json` would document our stance.
+3. **Stale presence files aren't cleaned up automatically.** SSE presence files at `metrics/sse_presence/*.json` accumulate if a session disconnects unexpectedly. Cron cleanup entry in [SERVER_SETUP.md](SERVER_SETUP.md) exists but has been observed to miss edge cases.
+4. **Date fields are not range-checked.** Anywhere we accept a date from a client (stats endpoints, user settings), we don't reject future-dated or ancient timestamps. Minor risk since these end up in per-user stats files, not query keys.
+
+**Data integrity (customer-facing, document don't fix):**
+
+1. **PhoneBurner ↔ HubSpot Data Sync overwrite.** If a customer has PhoneBurner's built-in HubSpot Data Sync app enabled, PB will sync the primary phone number from dial sessions back to HubSpot's "Phone Number" property. This can overwrite the original value if PB used a different alternate phone during dialing. Customers should either disable phone-number sync in the Data Sync app or rely exclusively on this extension for phone-number handling. This is PB platform behavior, not something our code controls.
+
 ## Threat model summary
 
 | Threat | Mitigated today? | Notes |

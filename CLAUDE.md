@@ -6,38 +6,12 @@
 
 ---
 
-## 📋 Table of Contents
-
-1. [Golden Rules (Read First)](#golden-rules-read-first)
-2. [Architecture Overview](#architecture-overview)
-3. [Security First: Non-Negotiable Requirements](#security-first-non-negotiable-requirements)
-4. [CRM Provider Isolation Model](#crm-provider-isolation-model)
-5. [Critical Utilities & Patterns](#critical-utilities--patterns)
-6. [Authentication & Token Management](#authentication--token-management)
-7. [Session Management & Real-Time Streaming](#session-management--real-time-streaming)
-8. [Chrome Extension Development Patterns](#chrome-extension-development-patterns)
-9. [Mandatory "Think-Check-Code" Workflow](#mandatory-think-check-code-workflow)
-10. [Testing & Debugging](#testing--debugging)
-11. ["Do Not Break" List (Stability Contracts)](#do-not-break-list-stability-contracts)
-12. [Adding New CRM Providers](#adding-new-crm-providers)
-13. [Deployment Checklist](#deployment-checklist)
-
----
-
 ## Companion documents
 
 - **[PROJECT_MAP.md](PROJECT_MAP.md)** — auto-generated dependency map of the entire codebase. Consult before modifying shared code to trace blast radius.
 - **[SECURITY.md](SECURITY.md)** — security model, what we protect against, what we explicitly DON'T, and the files that trigger the **Security Impact CI check**. Read this before touching `utils.php` token functions, OAuth endpoints, call loggers, webhooks, or `sse.php`.
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook for standing up the backend on a fresh host.
 - **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** — customer-facing knowledge base (also surfaced at `https://extension.phoneburner.biz/kb.php`).
-
-## Dependency Map
-
-**[PROJECT_MAP.md](PROJECT_MAP.md)** is an auto-generated dependency map of the entire codebase. **Consult it before modifying shared code** — it shows every function, message type, endpoint, and their callers so you can trace the blast radius of any change.
-
-- **Regenerate:** `./scripts/generate-project-map.sh`
-- **Auto-updated:** A Claude Code hook regenerates and stages the map before every `git commit`
-- **Never edit manually** — it's derived from the code and will be overwritten
 
 ---
 
@@ -135,11 +109,13 @@
 
 ### Three-Level CRM Integration Model
 
-| Level  | Method                | CRMs                         | Capabilities                                 |
-| ------ | --------------------- | ---------------------------- | -------------------------------------------- |
-| **L1** | Generic HTML scraping | Zoho, Monday.com             | Extract from HTML tables/ARIA grids          |
-| **L2** | CRM-specific scraping | Salesforce, Pipedrive        | Custom DOM selectors per CRM                 |
-| **L3** | Full API integration  | HubSpot, Close               | OAuth + server-side API calls + call logging |
+| Level  | Method                | Capabilities                                 |
+| ------ | --------------------- | -------------------------------------------- |
+| **L1** | Generic HTML scraping | Extract from HTML tables / ARIA grids        |
+| **L2** | CRM-specific scraping | Custom DOM selectors per CRM                 |
+| **L3** | Full API integration  | OAuth + server-side API calls + call logging |
+
+Which CRMs sit at which level lives in [`chrome-extension/crm_config.js`](chrome-extension/crm_config.js) — the single source of truth. Don't duplicate the list here; it drifts.
 
 **Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
 
@@ -147,14 +123,7 @@
 
 ## Security First: Non-Negotiable Requirements
 
-### Recent Security Fixes (DO NOT REGRESS)
-
-✅ **CORS Origin Whitelist** — Only whitelisted origins can make credentialed requests
-✅ **Tokens Outside Webroot** — Stored in `/var/lib/` with 0600 permissions
-✅ **Temporary Session Codes** — Single-use 5-minute codes instead of tokens in URLs
-✅ **PII Redaction** — Recursive pattern-based redaction before logging
-✅ **Path Traversal Protection** — `safe_file_path()` with `realpath()` validation
-✅ **Rate Limiting** — Per-client rolling-window rate limits
+See **[SECURITY.md](SECURITY.md)** for the full security model, threat surfaces, and file-level Security Impact CI triggers.
 
 ### Security Checklist for Every Change
 
@@ -194,26 +163,6 @@ rate_limit_or_fail($client_id, 60); // 60 req/min
 // 6. Input sanitization
 $client_id = get_client_id_or_fail($data); // Validates + sanitizes
 ```
-
-### Known Remaining Security Issues
-
-**MEDIUM RISK (fix before production):**
-
-1. Session state file permissions are 0777 — should be 0700/0600
-2. Webhooks lack origin validation — add HMAC signature or origin check
-3. Webhook session tokens in URLs — consider webhook signature verification
-4. Metrics directories exposed under web root — `metrics/` and `metrics/sse_presence/` contain operational data (SSE usage logs, presence files) that are publicly accessible if directory listing is enabled. Move to `/var/lib/pb-extension-dev/metrics/` or add Apache deny rules.
-
-**LOW RISK (harden when time permits):**
-
-1. Date validation allows future dates
-2. No cleanup of stale presence files
-3. No CSP on extension popup
-4. Webhook handlers log full payloads with PII — `log_msg('call_done: ' . $raw)` and `log_msg('contact_displayed: ' . $raw)` in webhook handlers log complete payloads containing names, phone numbers, emails, and CRM IDs. Use selective logging or debug flag.
-
-**DATA INTEGRITY (document for customers):**
-
-1. PhoneBurner ↔ HubSpot Data Sync conflict — If a customer has the PhoneBurner Data Sync app connected to HubSpot, PhoneBurner will sync the primary phone number from dial sessions back to HubSpot's "Phone Number" field. This can overwrite the original value in HubSpot. **Mitigation:** Customers should disable phone number syncing in the PhoneBurner Data Sync app and rely on the extension to feed phone numbers into dial sessions. This is a PhoneBurner platform behavior, not something our code controls.
 
 ---
 
@@ -461,7 +410,7 @@ Location: `server/public/sessions/{session_token}.json`
 **IMPORTANT:** Session files currently created with insecure permissions (MEDIUM RISK). When creating/updating session files, use:
 
 ```php
-// TODO: Fix session file permissions (see SECURITY_REVIEW.md)
+// TODO: Fix session file permissions (see SECURITY.md)
 save_session_state($session_token, $state);
 // Should use atomic_write_json() with 0600 permissions
 ```
@@ -1162,9 +1111,11 @@ chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
 # chrome://extensions → Developer Mode → Load Unpacked
 # Select chrome-extension/ directory
 
-# 5. Update BASE_URL in extension
-# Edit chrome-extension/background.js and popup.js
-# Set BASE_URL to http://127.0.0.1:8000
+# 5. Point extension at your local server
+# Open the popup → Settings → Developer Options → toggle to "dev"
+# The dev env resolves to the URL set in background.js (currently
+# https://extension-dev.phoneburner.biz). To point at a fully local
+# stack, temporarily edit ENV_BASE_URLS.dev in background.js.
 ```
 
 ### Debug Endpoints
@@ -1200,54 +1151,6 @@ chrome.storage.local.get(["pb_unified_client_id"], console.log);
 chrome.runtime.sendMessage({ type: "FORCE_RESET_ALL_STATE" }, console.log);
 ```
 
-### Recovery from Stuck Permission Dialog
-
-If Chrome's permission dialog gets stuck and blocks your browser:
-
-**Quick Fixes (Try First):**
-1. Press `Esc` - Should dismiss most dialogs
-2. Press `Enter` - May accept or close the dialog
-3. Click outside the dialog area - May dismiss it
-
-**If Browser is Completely Stuck:**
-
-4. **Task Manager Approach** (Recommended):
-   - Press `Shift+Esc` in Chrome to open Task Manager
-   - Find "Extension: PhoneBurner Dial Session Companion"
-   - Click "End process"
-   - This kills only the extension, not your whole browser
-
-5. **Command Line Approach** (Linux/Mac):
-   ```bash
-   # Kill only Chrome extension processes
-   pkill -f "chrome.*--type=extension"
-
-   # Or restart Chrome without extensions
-   google-chrome-stable --disable-extensions
-   ```
-
-6. **Windows Task Manager**:
-   - Open Task Manager (`Ctrl+Shift+Esc`)
-   - Find Chrome processes
-   - Look for "Extension: PhoneBurner" or similar
-   - End that specific process
-
-**After Recovery:**
-
-Clear extension state from browser console (F12):
-```javascript
-// Force reset all extension state
-chrome.runtime.sendMessage({ type: "FORCE_RESET_ALL_STATE" }, (resp) => {
-  console.log("Reset complete:", resp);
-  location.reload(); // Reload CRM tab
-});
-```
-
-**Prevention:**
-- The extension now has a 30-second timeout on permission requests
-- If you see "Permission request timed out", close and reopen the popup
-- Permission dialogs only appear when launching dial sessions
-
 ### Server Log Monitoring
 
 ```bash
@@ -1260,17 +1163,6 @@ tail -f server/public/metrics/sse_usage-$(date +%Y-%m-%d).log | jq
 # Check session file
 cat server/public/sessions/{session_token}.json | jq
 ```
-
-### Common Issues & Solutions
-
-| Issue                  | Diagnosis                           | Solution                                      |
-| ---------------------- | ----------------------------------- | --------------------------------------------- |
-| "PAT invalid"          | PAT expired or wrong format         | Re-save PAT in popup                          |
-| "No dialable contacts" | Missing phone/email in scraped data | Check content.js scanner output               |
-| SSE not connecting     | CORS or permissions issue           | Check browser console + Network tab           |
-| Webhooks not firing    | PhoneBurner config issue            | Verify webhook URLs in PB admin               |
-| Session file not found | Session token mismatch              | Check logs for session creation error         |
-| CORS error             | Origin not whitelisted              | Add origin to `PB_CORS_ORIGINS` in config.php |
 
 ---
 
@@ -1432,29 +1324,7 @@ function scanMyNewCrmContacts(maxContacts) {
 4. **Use stable DOM selectors** — Avoid hashed/minified class names (e.g., `_hcsbn_134`). Prefer `[data-*]` attributes, `[aria-label]`, `[role]`, semantic HTML tags, and `[href*="pattern"]`.
 5. **`node -c content.js`** validates JS syntax but NOT CSS selector validity — bad selectors only fail at runtime in the browser.
 
-**Close.com DOM Reference (used by L3 ID extraction in content.js):**
-
-| Data | Stable Selector | Notes |
-|------|----------------|-------|
-| Rows | `tr[data-index]` | Skip `aria-hidden="true"` placeholders |
-| Name | `a[href*="/lead/"]` textContent | Link contains lead ID; contacts page also has `#contactId=cont_xxx` |
-| Phone | `button[aria-label^="Call "]` | Parse phone from aria-label, not cell text |
-| Contact ID | `href` hash: `#contactId=cont_xxx` | Only on `/contacts/` page, NOT on `/leads/` page |
-| Lead ID | `href` path: `/lead/lead_xxx/` | On both `/contacts/` and `/leads/` pages |
-| Selection | `input[type="checkbox"]` checked state | If any checked, use only those rows |
-
-**Close.com L3 API Reference (v0.5.2):**
-
-| Endpoint | Purpose | Notes |
-|----------|---------|-------|
-| `GET /api/v1/contact/{id}/` | Fetch full contact (phones[], emails[], name) | Returns arrays not flat fields |
-| `GET /api/v1/contact/?lead_id=lead_xxx` | Get contacts for a lead | Used when launched from `/leads/` page |
-| `GET /api/v1/me/` | Verify token + get org info | Used by state.php |
-| `POST /api/v1/activity/call/` | Log call activity | Requires `lead_id`, `contact_id`, `<body>` wrapped note_html |
-| `POST /api/v1/activity/note/` | Create note on lead | Used for user-entered call notes |
-| `POST /oauth2/token/` | Exchange code or refresh token | Access tokens expire in 3600s |
-
-**Close data model:** Leads contain Contacts. `name` is a single field (split on first space for first/last). Phones and emails are arrays of `{phone, type}` and `{email, type}`.
+**Close.com specifics** (DOM selectors, API endpoints, data model quirks) — see the code for the canonical reference: [`content.js`](chrome-extension/content.js) `scanCloseContacts()` for row/ID extraction, [`close_helpers.php`](server/public/api/crm/close/close_helpers.php) for the API surface. Notable data-model gotcha: Close nests Contacts inside Leads; `name` is a single field (split on first space); `phones` and `emails` are arrays of `{phone|email, type}`.
 
 ### Adding L3 Provider (Full API Integration)
 
@@ -1662,30 +1532,7 @@ When creating a PR that includes **user-facing changes** (new features, UI chang
 
 ### Server Setup
 
-```bash
-# 1. Create secure token directory
-sudo mkdir -p /var/lib/pb-extension-dev/tokens/{pb,hubspot}
-sudo chown www-data:www-data /var/lib/pb-extension-dev/tokens
-sudo chmod 0700 /var/lib/pb-extension-dev/tokens
-sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
-
-# 2. Create log directory
-sudo mkdir -p /opt/pb-extension-dev/var/log
-sudo chown www-data:www-data /opt/pb-extension-dev/var/log
-sudo chmod 0775 /opt/pb-extension-dev/var/log
-
-# 3. Copy config
-sudo cp /opt/pb-extension-dev/public/config.sample.php \
-        /opt/pb-extension-dev/public/config.php
-sudo chmod 0600 /opt/pb-extension-dev/public/config.php
-
-# 4. Configure Apache/nginx
-# Document root: /opt/pb-extension-dev/public
-# Ensure .htaccess or nginx config blocks access to:
-#   - config.php (via RewriteRule or location block)
-#   - sessions/ directory
-#   - cache/ directory
-```
+See **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook (token directories, log dir, Apache/nginx config, systemd, config.php bootstrap, cron cleanup, monitoring, webhook + OAuth app registration).
 
 ### Server Config File Management
 
@@ -1714,90 +1561,11 @@ lsattr /opt/pb-extension-dev/server/public/config.php
 
 **DEBUG_MODE:** To enable debug endpoints (`scan_debug.php`, `scan_debug_view.php`, `_debug_get.php`), unlock config.php, set `'DEBUG_MODE' => true`, then lock it again when done. These endpoints return 404 when DEBUG_MODE is false or absent.
 
-### Configuration (config.php)
+### Configuration, Webhooks, OAuth Apps, Cron, Log Rotation
 
-```php
-return [
-  'BASE_URL' => 'https://extension-dev.phoneburner.biz',
-  'TOKENS_DIR' => '/var/lib/pb-extension-dev/tokens',
-  'LOG_FILE' => '/opt/pb-extension-dev/var/log/app.log',
+All operational configuration lives in **[SERVER_SETUP.md](SERVER_SETUP.md)** — including the `config.php` shape (see also `server/public/config.sample.php`), PhoneBurner webhook registration, HubSpot/Close/Apollo OAuth app setup, logrotate config, and stale-file cleanup cron entries.
 
-  // PhoneBurner
-  'PB_API_BASE' => 'https://www.phoneburner.com/rest/1',
-  'PB_WEBHOOK_SECRET' => env('PB_WEBHOOK_SECRET'), // Set in environment
-
-  // HubSpot OAuth
-  'HS_CLIENT_ID' => env('HS_CLIENT_ID'),
-  'HS_CLIENT_SECRET' => env('HS_CLIENT_SECRET'),
-  'HS_SCOPES' => 'crm.objects.contacts.read crm.lists.read crm.objects.deals.read crm.objects.companies.read',
-
-  // Debug (set to true only when needed, then revert)
-  'DEBUG_MODE' => false,
-
-  // CORS (production)
-  'PB_CORS_ORIGINS' => [
-    'https://extension.phoneburner.biz',
-    'https://extension-dev.phoneburner.biz',
-  ],
-];
-```
-
-### Extension Manifest Updates
-
-```json
-{
-  "version": "0.3.0",
-  "host_permissions": ["https://extension-dev.phoneburner.biz/*"]
-}
-```
-
-Update `BASE_URL` in:
-
-- `chrome-extension/background.js`
-- `chrome-extension/popup.js`
-
-### PhoneBurner Webhook Configuration
-
-Configure webhooks in PhoneBurner admin:
-
-- `api_contact_displayed` → `https://extension-dev.phoneburner.biz/webhooks/contact_displayed.php`
-- `api_calldone` → `https://extension-dev.phoneburner.biz/webhooks/call_done.php`
-
-### HubSpot OAuth App Configuration
-
-1. Create app at [HubSpot Developer Portal](https://developers.hubspot.com/)
-2. Set Redirect URI: `https://extension-dev.phoneburner.biz/api/crm/hubspot/oauth_hs_finish.php`
-3. Request scopes: `crm.objects.contacts.read crm.lists.read crm.objects.deals.read crm.objects.companies.read`
-4. Copy Client ID + Secret to `config.php`
-
-### Monitoring & Maintenance
-
-**Log Rotation:**
-
-```bash
-# /etc/logrotate.d/pb-extension
-/opt/pb-extension-dev/var/log/*.log {
-    daily
-    rotate 90
-    compress
-    missingok
-    notifempty
-    create 0664 www-data www-data
-}
-```
-
-**Stale File Cleanup (cron):**
-
-```bash
-# Cleanup old presence files (daily at 3am)
-0 3 * * * find /opt/pb-extension-dev/public/metrics/sse_presence -type f -mtime +1 -delete
-
-# Cleanup old rate limit cache (hourly)
-0 * * * * find /opt/pb-extension-dev/public/cache/rl_*.txt -type f -mmin +60 -delete
-
-# Cleanup expired temp codes (every 15 min)
-*/15 * * * * find /opt/pb-extension-dev/public/cache/temp_code_*.json -type f -mmin +10 -delete
-```
+Extension `BASE_URL` is no longer hardcoded — the extension toggles between dev and prod at runtime via `DEFAULT_ENV` in `chrome-extension/background.js` (see the **Feature Gating for Soak-Testing** section above for the runtime env toggle pattern).
 
 ---
 
@@ -1839,92 +1607,8 @@ A: No. All data is used exclusively for dial session creation via the PhoneBurne
 
 ---
 
-## Quick Reference Card
+## When this guide is missing something
 
-### Most-Used Functions
+If a rule you need isn't captured here — new CRM pattern, unfamiliar edge case, ambiguous policy — either **update this file in the same PR** (preferred) or open an issue so it doesn't get lost. The goal is that a new contributor (human or AI) can trust this file to reflect current invariants without cross-referencing outdated tribal knowledge.
 
-```php
-// Security
-safe_file_path($base, $relative)
-atomic_write_json($path, $data)
-redact_pii_recursive($data)
-rate_limit_or_fail($client_id, $maxPerMin)
-
-// Token Management
-load_pb_token($client_id)
-load_hs_token($client_id)
-hs_refresh_access_token_or_fail($client_id)
-
-// Session Management
-temp_code_store($session_token, $ttl)
-temp_code_retrieve_and_delete($code)
-save_session_state($session_token, $state)
-load_session_state($session_token)
-
-// API Responses
-api_ok($data)
-api_ok_flat($data)
-api_error($msg, $code, $status)
-api_log($event, $fields)
-
-// Input Validation
-get_client_id_or_fail($data)
-json_input()
-```
-
-### Most-Used Extension APIs
-
-```javascript
-// Storage
-chrome.storage.local.get(['pb_unified_client_id'], callback)
-chrome.storage.local.set({ key: value })
-
-// Messaging
-chrome.runtime.sendMessage({ type: "...", ... }, callback)
-chrome.tabs.sendMessage(tabId, { type: "..." }, callback)
-
-// Scripting
-chrome.scripting.executeScript({
-  target: { tabId, frameIds: [0] },
-  files: ['content.js']
-})
-
-// Permissions
-chrome.permissions.request({ origins: [...] })
-```
-
-### File Paths
-
-```
-Server:
-  /var/lib/pb-extension-dev/tokens/pb/{client_id}.json
-  /var/lib/pb-extension-dev/tokens/hubspot/{client_id}.json
-  /opt/pb-extension-dev/public/sessions/{session_token}.json
-  /opt/pb-extension-dev/public/user_settings/{member_user_id}.json
-  /opt/pb-extension-dev/var/log/app.log
-
-Extension:
-  chrome.storage.local['pb_unified_client_id']
-  chrome.storage.local['pb_current_session']
-```
-
----
-
-## Questions or Clarifications?
-
-If anything in this guide is unclear or you need expanded rules for:
-
-- Naming conventions
-- Linting setup
-- Test commands
-- CI/CD pipeline
-- Additional CRM providers
-- Performance optimization
-
-...update this file or create an issue in the repo.
-
----
-
-**Last Updated:** 2026-01-23
-**Version:** 1.0
-**Security Status:** See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for current risk assessment
+Companion docs cover the depth: **[SECURITY.md](SECURITY.md)** for the threat model, **[SERVER_SETUP.md](SERVER_SETUP.md)** for provisioning, **[PROJECT_MAP.md](PROJECT_MAP.md)** for the dependency graph, **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** for customer-facing behavior.
