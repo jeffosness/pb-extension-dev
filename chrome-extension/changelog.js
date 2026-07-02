@@ -19,12 +19,12 @@ const PB_CHANGELOG = {
   "0.8.0": {
     title: "What's New in v0.8.0",
     items: [
-      "Click-to-Call for HubSpot — a small PhoneBurner flame icon now appears next to phone numbers on HubSpot contact records, company records, and list views. Click it to place a single call without opening a full dial session. Great for one-off follow-ups.",
-      "Every phone field is dialable — the click-to-call icon picks up all your HubSpot phone properties (Phone Number, Mobile, Home Phone, custom phone fields), so you can dial whichever number you want directly from the record.",
-      "AgencyZoom support — visit your AgencyZoom task list and launch a PhoneBurner dial session in one click. Leads with multiple open tasks are automatically deduped so you dial each contact once.",
-      "Cleaner first-run experience — after saving your PhoneBurner PAT you now stay on the Dial tab. If you're on a HubSpot / Close / Apollo page and haven't connected that CRM yet, a \"Connect\" prompt appears right there instead of hiding in Settings.",
-      "Fix: the Follow widget now correctly navigates between contacts on CRMs where the record ID lives in the URL's query string (AgencyZoom and similar). Previously it could get stuck on the first contact.",
-      "Click-to-Call can be turned off in Settings if you already use another dialer's click-to-call and don't want two buttons on every record."
+      "Click-to-Call for HubSpot — click the PhoneBurner flame next to any phone number for a quick single call, no dial session needed",
+      "Every HubSpot phone field is dialable — Phone Number, Mobile, Home Phone, and custom phone fields",
+      "AgencyZoom support — launch a dial session from your AgencyZoom task list in one click",
+      "Cleaner setup — stay on the Dial tab after saving your PAT, with inline \"Connect\" prompts for your CRM",
+      "Follow widget fix — now navigates between contacts correctly on all supported CRMs",
+      "Turn Click-to-Call off in Settings if you use another dialer's version"
     ]
   },
   "0.7.1": {
