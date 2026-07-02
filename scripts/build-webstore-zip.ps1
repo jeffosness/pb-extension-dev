@@ -75,8 +75,8 @@ if ($Version -eq "") {
     $Version = $manifestVersion
     Write-Host "Version: $Version (from manifest.json)"
 } elseif ($Version -ne $manifestVersion) {
-    throw "Version mismatch: -Version arg is '$Version' but manifest.json says '$manifestVersion'. " +
-          "Bump manifest.json first, or run without -Version to use the manifest value."
+    throw ("Version mismatch: -Version arg is '$Version' but manifest.json says '$manifestVersion'. " +
+           "Bump manifest.json first, or run without -Version to use the manifest value.")
 } else {
     Write-Host "Version: $Version (matches manifest.json)"
 }
@@ -85,8 +85,8 @@ if ($Version -eq "") {
 # Validate output directory
 # -----------------------------------------------------------------------------
 if (-not (Test-Path $OutputDir)) {
-    throw "Output directory does not exist: $OutputDir`n" +
-          "Pass -OutputDir <path> to override the default, or create the directory first."
+    throw ("Output directory does not exist: $OutputDir`n" +
+           "Pass -OutputDir <path> to override the default, or create the directory first.")
 }
 
 $zipName = "version $Version.zip"
@@ -112,6 +112,7 @@ $includeNames = @(
     "changelog.js",
     "content.js",
     "crm_config.js",
+    "softphone_config.js",
     "icons"
 )
 
@@ -128,8 +129,8 @@ foreach ($name in $includeNames) {
 $actualEntries = Get-ChildItem $extensionDir -Force | Where-Object { $_.Name -ne "STORE_LISTING.md" }
 foreach ($entry in $actualEntries) {
     if ($includeNames -notcontains $entry.Name) {
-        Write-Warning "chrome-extension/ contains '$($entry.Name)' but it is NOT in the include list. " +
-                      "If it's required at runtime, add it to `$includeNames in this script."
+        Write-Warning ("chrome-extension/ contains '$($entry.Name)' but it is NOT in the include list. " +
+                       "If it's required at runtime, add it to `$includeNames in this script.")
     }
 }
 
