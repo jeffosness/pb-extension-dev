@@ -8,6 +8,7 @@
 
 ## Companion documents
 
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — shape of the system: components, three-level CRM model, provider adapter contract, auth flows, session/SSE lifecycle. Read this before you can't picture where a change lands.
 - **[PROJECT_MAP.md](PROJECT_MAP.md)** — auto-generated dependency map of the entire codebase. Consult before modifying shared code to trace blast radius.
 - **[SECURITY.md](SECURITY.md)** — security model, what we protect against, what we explicitly DON'T, and the files that trigger the **Security Impact CI check**. Read this before touching `utils.php` token functions, OAuth endpoints, call loggers, webhooks, or `sse.php`.
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook for standing up the backend on a fresh host.
@@ -77,47 +78,9 @@
 
 ## Architecture Overview
 
-### Components
+Component diagram, three-level CRM taxonomy, and full data-flow lives in **[ARCHITECTURE.md](ARCHITECTURE.md)**. Read it if you can't picture where a change lands.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ CHROME EXTENSION (MV3)                                      │
-│  ├─ manifest.json          Service worker config            │
-│  ├─ background.js          Message router, API client       │
-│  ├─ popup.js               UI logic (PAT, OAuth, tabs)      │
-│  └─ content.js             CRM scraping, SSE follow-me      │
-└─────────────────────────────────────────────────────────────┘
-                              ↓ HTTPS (fetch + credentials)
-┌─────────────────────────────────────────────────────────────┐
-│ PHP BACKEND API                                             │
-│  ├─ bootstrap.php          CORS, security headers, logging  │
-│  ├─ utils.php              Token mgmt, PII redaction, safe  │
-│  │                          file ops, rate limiting          │
-│  ├─ /api/core/             PAT, settings, state, stats      │
-│  ├─ /api/crm/generic/      L1/L2 providers (scan-based)     │
-│  ├─ /api/crm/hubspot/      L3 (full OAuth + API)            │
-│  ├─ /webhooks/             PhoneBurner callbacks            │
-│  └─ sse.php                Real-time SSE stream             │
-└─────────────────────────────────────────────────────────────┘
-                              ↓ REST API
-┌─────────────────────────────────────────────────────────────┐
-│ EXTERNAL APIS                                               │
-│  ├─ PhoneBurner API        /rest/1/dialsession, /members/me │
-│  └─ CRM APIs               HubSpot v3, Salesforce, etc.     │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Three-Level CRM Integration Model
-
-| Level  | Method                | Capabilities                                 |
-| ------ | --------------------- | -------------------------------------------- |
-| **L1** | Generic HTML scraping | Extract from HTML tables / ARIA grids        |
-| **L2** | CRM-specific scraping | Custom DOM selectors per CRM                 |
-| **L3** | Full API integration  | OAuth + server-side API calls + call logging |
-
-Which CRMs sit at which level lives in [`chrome-extension/crm_config.js`](chrome-extension/crm_config.js) — the single source of truth. Don't duplicate the list here; it drifts.
-
-**Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
+**One invariant to keep here:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory. Once a CRM has an L3 provider directory, don't fall back to L1/L2 scraping for it.
 
 ---
 
@@ -166,64 +129,15 @@ $client_id = get_client_id_or_fail($data); // Validates + sanitizes
 
 ---
 
-## CRM Provider Isolation Model
+## CRM Provider Isolation
 
-### Directory Structure
-
-```
-server/public/api/crm/
-├── generic/
-│   └── dialsession_from_scan.php    # L1/L2: Accepts scraped contacts
-│
-├── hubspot/                         # L3: Full API integration
-│   ├── oauth_hs_start.php           # OAuth flow initiation
-│   ├── oauth_hs_finish.php          # OAuth callback handler
-│   ├── oauth_disconnect.php         # Disconnect
-│   ├── hs_helpers.php               # Shared HubSpot API functions
-│   ├── pb_dialsession_selection.php # Dial from selected records
-│   ├── pb_dialsession_from_list.php # Dial from saved list
-│   ├── hs_lists.php                 # Fetch user's lists
-│   └── state.php                    # Connection status
-│
-└── close/                           # L3: Close CRM integration
-    ├── oauth_close_start.php        # OAuth flow initiation
-    ├── oauth_close_finish.php       # OAuth callback handler
-    ├── oauth_disconnect.php         # Disconnect
-    ├── close_helpers.php            # Shared Close API functions
-    ├── pb_dialsession_selection.php  # Dial from contacts/leads
-    └── state.php                    # Connection status
-```
-
-### Provider Isolation Rules
+Directory layout and the full L3 adapter contract live in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The rules that MUST hold when adding or modifying a provider:
 
 1. **Each L3 provider gets its own directory:** `/api/crm/{provider}/`
 2. **Provider-specific code stays in provider directory** — no cross-provider coupling
 3. **Shared logic goes in `utils.php`** — normalize to common format before calling PhoneBurner
 4. **L1/L2 providers share `/api/crm/generic/`** — detection happens in `content.js`
-
-### Provider Adapter Contract
-
-Every L3 provider must implement:
-
-```php
-// 1. OAuth flow
-oauth_{provider}_start.php    // Return auth URL
-oauth_{provider}_finish.php   // Exchange code for tokens
-oauth_disconnect.php          // Clear tokens
-
-// 2. Token refresh
-{provider}_refresh_access_token_or_fail($client_id)
-// → Returns fresh access token or calls api_error()
-
-// 3. Dial session creation
-pb_dialsession_selection.php
-// → Accept: { object_ids, object_type, portal_id, ... }
-// → Return: { session_token, temp_code, launch_url, ... }
-
-// 4. Connection state
-state.php
-// → Return: { connected: bool, profile: {...} }
-```
+5. **`webhooks/call_done.php` MUST NOT contain provider-specific logic** — dispatch to `{provider}_call_logger.php`
 
 ---
 
@@ -293,63 +207,11 @@ migrate_token_file_if_needed($legacyPath, $newPath);
 
 ## Authentication & Token Management
 
-### PhoneBurner PAT Flow
-
-```
-User pastes PAT in popup
-  ↓
-popup.js → sendMessage({ type: "SAVE_PAT", pat })
-  ↓
-background.js → POST /api/core/oauth_pb_save.php
-  ↓
-Server validates via PhoneBurner /members/me
-  ↓
-Save token: /var/lib/.../tokens/pb/{client_id}.json (0600)
-Save profile: .../user_settings/{member_user_id}.json
-  ↓
-Return profile to extension
-```
-
-**Implementation:**
-
-```php
-// In oauth_pb_save.php
-$pat = $data['pat'] ?? null;
-$memberInfo = pb_validate_pat($pat); // Calls PB API
-atomic_write_json(pb_token_path($client_id), [
-  'pat' => $pat,
-  'member_user_id' => $memberInfo['member_user_id'],
-  'created_at' => date('c'),
-]);
-```
-
-### HubSpot OAuth Flow (L3)
-
-```
-1. popup.js → POST /api/crm/hubspot/oauth_hs_start.php
-2. Server returns auth_url with state=client_id
-3. User approves at HubSpot
-4. HubSpot redirects to oauth_hs_finish.php?code=...&state=...
-5. Server exchanges code for refresh_token + access_token
-6. Save tokens with expiry: /var/lib/.../tokens/hubspot/{client_id}.json
-7. Redirect back to extension UI
-```
-
-**Token Refresh:**
-
-```php
-// Automatically refresh expired tokens
-$hsToken = load_hs_token($client_id);
-if (time() > $hsToken['expires_at']) {
-  $hsToken = hs_refresh_access_token_or_fail($client_id);
-}
-```
+PAT flow, per-provider OAuth flow, and lazy-refresh behavior are diagrammed in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The rules that MUST hold in code:
 
 ### Session Token Security
 
-**NEVER expose session tokens directly in URLs.**
-
-**Correct Pattern:**
+**NEVER expose session tokens directly in URLs.** Wrap them in a single-use, 5-minute temp code:
 
 ```php
 // 1. Create session token
@@ -369,96 +231,22 @@ if (!$session_token) {
 }
 ```
 
+Exception: webhooks from PhoneBurner use `?s=session_token` because the backend is trusted and webhooks fire multiple times over the lifetime of a session (temp codes are single-use).
+
+### Token Storage
+
+PATs and OAuth tokens live outside the webroot in `TOKENS_DIR` (see `config.php`) with 0600 file / 0700 dir permissions. Always write via `atomic_write_json(pb_token_path($client_id), ...)` — never `file_put_contents`.
+
 ---
 
 ## Session Management & Real-Time Streaming
 
-### Session State File Structure
+Session state schema, SSE connection lifecycle, and webhook handler responsibilities are all in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The invariants that MUST hold when touching this code:
 
-Location: `server/public/sessions/{session_token}.json`
-
-```json
-{
-  "session_token": "abc123...",
-  "dialsession_id": "ds-123456",
-  "client_id": "uuid-...",
-  "created_at": "2026-01-23T10:00:00Z",
-
-  "current": {
-    "received_at": "2026-01-23T10:05:00Z",
-    "name": "John Doe",
-    "phone": "555-1234567",
-    "email": "john@example.com",
-    "record_url": "https://app.hubspot.com/...",
-    "crm_name": "hubspot"
-  },
-
-  "stats": {
-    "total_calls": 47,
-    "connected": 31,
-    "appointments": 8
-  },
-
-  "contacts_map": {
-    "{contactId}": {
-      /* contact details */
-    }
-  }
-}
-```
-
-**IMPORTANT:** Session files currently created with insecure permissions (MEDIUM RISK). When creating/updating session files, use:
-
-```php
-// TODO: Fix session file permissions (see SECURITY.md)
-save_session_state($session_token, $state);
-// Should use atomic_write_json() with 0600 permissions
-```
-
-### SSE Stream (sse.php)
-
-**Purpose:** Real-time follow-me updates from PhoneBurner webhooks to extension overlay.
-
-**Connection Flow:**
-
-```
-Browser: new EventSource('/sse.php?code=temp_code')
-  ↓
-Server: Exchange code for session_token (one-time)
-  ↓
-Server: Watch session file with filemtime() polling
-  ↓
-On file change: Send "update" event with session state
-  ↓
-Browser: content.js receives update → render overlay → navigate CRM
-```
-
-**Implementation Notes:**
-
-- SSE endpoint opts out of JSON response via `PB_BOOTSTRAP_NO_JSON`
-- Uses `text/event-stream` content type
-- Emits `event: update` with JSON payload
-- Heartbeat every 30 seconds to keep connection alive
-- Cleanup presence file on disconnect via `register_shutdown_function()`
-
-### Webhook Handlers
-
-**contact_displayed.php** — PhoneBurner sends when now calling a contact
-
-```php
-// PhoneBurner calls: /webhooks/contact_displayed.php?s=session_token
-// Payload: { external_crm_data: { crm_identifier: "123" } }
-// Action: Lookup contact in contacts_map → update "current"
-```
-
-**call_done.php** — PhoneBurner sends when call finishes
-
-```php
-// Payload: { status: "Set Appointment", duration: 245, connected: "1" }
-// Action: Update stats, last_call, daily_stats/{member_user_id}.json
-```
-
-**Security Note:** Webhooks currently accept session_token in URL (trusted backend). Consider adding HMAC signature validation for defense-in-depth.
+- **`contacts_map` keys MUST match the `crm_id` values sent to PhoneBurner in `external_crm_data`.** If they diverge, webhook lookups fail silently and the follow-me overlay stops navigating. See CLAUDE.md's "CRM ID Uniqueness Across Object Types" section for the disambiguation rules.
+- **`webhooks/call_done.php` is a pure dispatcher.** No provider-specific logic in the file itself — dispatch to `{provider}_call_logger.php` based on `state.crm_name`.
+- **Session files still write with insecure permissions (0777) — MEDIUM risk.** Tracked in SECURITY.md; new code that writes session state should use `atomic_write_json()` with 0600, not the legacy `save_session_state()`.
+- **Webhook payload shape is a stability contract.** Extension code depends on the field names PhoneBurner sends; changing how we parse them breaks active sessions across all deployed extensions. Test the full webhook path end-to-end before merging.
 
 ---
 
@@ -466,35 +254,11 @@ Browser: content.js receives update → render overlay → navigate CRM
 
 ### Context Management & State Flow
 
-**Purpose:** Understanding how CRM context flows through the extension prevents bugs related to cached state, missing fields, and stale data.
+Context flow diagram (URL detection → content script scan → background cache → popup) is in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The invariants that MUST hold when touching context code:
 
-**Context Flow:**
+1. **URL-based context is authoritative for `objectType`.** Content scripts may not have full context, especially on initial page load. Always detect from URL patterns (e.g., `/objects/0-2/` = companies).
 
-```
-URL Detection (background.js)
-  ↓ detectCrmFromUrl() → { crmId, level, objectType }
-  ↓
-Content Script Scan (content.js)
-  ↓ Scrapes page → { selectedIds, portalId, title }
-  ↓
-Background Script Cache (background.js)
-  ↓ Merges + caches → tabContexts[tabId]
-  ↓
-Popup UI (popup.js)
-  ↓ GET_CONTEXT message → ACTIVE_CTX
-  ↓
-Button Visibility Logic
-  ↓ Shows/hides buttons based on objectType
-```
-
-**Critical Rules:**
-
-1. **URL-based context is authoritative for object type**
-   - Always detect `objectType` from URL patterns (e.g., `/objects/0-2/` = companies)
-   - Content scripts may not have full context, especially on initial page load
-   - When caching context, preserve ALL fields from both URL and content sources
-
-2. **Context caching must merge, not replace**
+2. **Context caching must merge, not replace:**
    ```javascript
    // ❌ WRONG: Replaces context, loses objectType
    tabContexts[tabId] = contentScriptContext;
@@ -507,11 +271,7 @@ Button Visibility Logic
    };
    ```
 
-3. **Adding new context fields? Update all sources**
-   - URL detection in `background.js` → `detectCrmFromUrl()`
-   - Content script in `content.js` → message handlers
-   - Background cache in `background.js` → `tabContexts`
-   - Popup state in `popup.js` → `ACTIVE_CTX`
+3. **Adding new context fields? Update ALL sources:** URL detection in `background.js:detectCrmFromUrl()`, content script message handlers, `tabContexts` cache, popup `ACTIVE_CTX`. Miss one and the field silently defaults to `undefined` in whichever path skipped it.
 
 ### HubSpot Object Types & URL Patterns
 
