@@ -296,12 +296,19 @@
         padding: 16px;
         max-width: 300px;
         width: 90%;
+        /* Cap the dialog height so a long "What's New" body can't push the
+           OK button off the bottom of the popup. Flex column keeps the
+           buttons pinned; the message is the scrollable middle. */
+        max-height: calc(100vh - 32px);
+        display: flex;
+        flex-direction: column;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
       }
       .modal-title {
         font-weight: 900;
         font-size: 14px;
         margin-bottom: 10px;
+        flex-shrink: 0;
       }
       .modal-message {
         font-size: 12px;
@@ -309,6 +316,11 @@
         margin-bottom: 16px;
         line-height: 1.5;
         white-space: pre-wrap;
+        /* Scroll long content within the modal instead of growing the
+           dialog to fit — keeps the buttons always visible. */
+        overflow-y: auto;
+        flex: 1 1 auto;
+        min-height: 0;
       }
       .modal-message a {
         color: var(--primary);
@@ -320,6 +332,7 @@
       .modal-buttons {
         display: flex;
         gap: 8px;
+        flex-shrink: 0;
       }
       .modal-buttons button {
         margin: 0;
