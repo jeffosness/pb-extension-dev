@@ -48,7 +48,7 @@
 [CmdletBinding()]
 param(
     [string]$Version = "",
-    [string]$OutputDir = "D:\Camtasia Studio\Phone Burner\PhoneBurner 2025\Integrations\Extension\webstore resources",
+    [string]$OutputDir = "D:\Camtasia Studio\Phone Burner\webstore resources",
     [switch]$Force
 )
 
