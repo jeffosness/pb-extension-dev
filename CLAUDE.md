@@ -10,7 +10,7 @@
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — shape of the system: components, three-level CRM model, provider adapter contract, auth flows, session/SSE lifecycle. Read this before you can't picture where a change lands.
 - **[CRMS.md](CRMS.md)** — how-to for adding new CRM providers (L1/L2/L3 walkthroughs), plus HubSpot-specific reference (object types, list-based dial sessions, ID-uniqueness narrative) and patterns learned from adding CRMs (testing checklist, dropdown-styling gotcha, shared-helpers refactor pattern).
-- **[PROJECT_MAP.md](PROJECT_MAP.md)** — auto-generated dependency map of the entire codebase. Consult before modifying shared code to trace blast radius.
+- **[SHARED_CODE.md](SHARED_CODE.md)** — blast-radius reference: which files and functions are most-depended-on, what breaks if you change them, and how to change them safely. Consult before touching `utils.php`, `bootstrap.php`, or any function called from 15+ sites.
 - **[SECURITY.md](SECURITY.md)** — security model, what we protect against, what we explicitly DON'T, and the files that trigger the **Security Impact CI check**. Read this before touching `utils.php` token functions, OAuth endpoints, call loggers, webhooks, or `sse.php`.
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook for standing up the backend on a fresh host.
 - **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** — customer-facing knowledge base (also surfaced at `https://extension.phoneburner.biz/kb.php`).
@@ -864,4 +864,4 @@ A: No. All data is used exclusively for dial session creation via the PhoneBurne
 
 If a rule you need isn't captured here — new CRM pattern, unfamiliar edge case, ambiguous policy — either **update this file in the same PR** (preferred) or open an issue so it doesn't get lost. The goal is that a new contributor (human or AI) can trust this file to reflect current invariants without cross-referencing outdated tribal knowledge.
 
-Companion docs cover the depth: **[SECURITY.md](SECURITY.md)** for the threat model, **[SERVER_SETUP.md](SERVER_SETUP.md)** for provisioning, **[PROJECT_MAP.md](PROJECT_MAP.md)** for the dependency graph, **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** for customer-facing behavior.
+Companion docs cover the depth: **[SECURITY.md](SECURITY.md)** for the threat model, **[SERVER_SETUP.md](SERVER_SETUP.md)** for provisioning, **[SHARED_CODE.md](SHARED_CODE.md)** for blast-radius before touching shared utilities, **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** for customer-facing behavior.

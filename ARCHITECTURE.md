@@ -363,5 +363,5 @@ Selection data (which specific record IDs the user picked) is NOT part of this c
 - **[CLAUDE.md](CLAUDE.md)** — invariants, security rules, adding-new-CRM checklist, PR/release process
 - **[SECURITY.md](SECURITY.md)** — threat model, Security Impact CI triggers
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — provisioning, config.php, webhook + OAuth app registration
-- **[PROJECT_MAP.md](PROJECT_MAP.md)** — auto-generated dependency map (functions, endpoints, callers)
+- **[SHARED_CODE.md](SHARED_CODE.md)** — blast-radius reference: most-depended-on files and functions, and rules for changing them safely
 - **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** — customer-facing behavior and known issues
