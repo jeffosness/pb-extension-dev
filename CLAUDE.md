@@ -8,6 +8,7 @@
 
 ## Companion documents
 
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — shape of the system: components, three-level CRM model, provider adapter contract, auth flows, session/SSE lifecycle. Read this before you can't picture where a change lands.
 - **[PROJECT_MAP.md](PROJECT_MAP.md)** — auto-generated dependency map of the entire codebase. Consult before modifying shared code to trace blast radius.
 - **[SECURITY.md](SECURITY.md)** — security model, what we protect against, what we explicitly DON'T, and the files that trigger the **Security Impact CI check**. Read this before touching `utils.php` token functions, OAuth endpoints, call loggers, webhooks, or `sse.php`.
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook for standing up the backend on a fresh host.
@@ -53,10 +54,10 @@
 ### 🎯 Architecture Rules
 
 7. **Keep provider logic isolated**
-   - HubSpot (L3) lives in `/api/crm/hubspot/`
+   - Each L3 provider lives in `/api/crm/{provider}/` (e.g., `/api/crm/hubspot/`)
    - Generic (L1/L2) lives in `/api/crm/generic/`
    - Provider-specific code stays in provider directories
-   - Shared code goes in `utils.php` or `bootstrap.php`
+   - Shared code goes in `utils.php`; provider-specific shared code goes in `{provider}_helpers.php`
 
 8. **Minimal diff mentality**
    - Small PRs — one behavior change per PR when possible
@@ -77,47 +78,9 @@
 
 ## Architecture Overview
 
-### Components
+Component diagram, three-level CRM taxonomy, and full data-flow lives in **[ARCHITECTURE.md](ARCHITECTURE.md)**. Read it if you can't picture where a change lands.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ CHROME EXTENSION (MV3)                                      │
-│  ├─ manifest.json          Service worker config            │
-│  ├─ background.js          Message router, API client       │
-│  ├─ popup.js               UI logic (PAT, OAuth, tabs)      │
-│  └─ content.js             CRM scraping, SSE follow-me      │
-└─────────────────────────────────────────────────────────────┘
-                              ↓ HTTPS (fetch + credentials)
-┌─────────────────────────────────────────────────────────────┐
-│ PHP BACKEND API                                             │
-│  ├─ bootstrap.php          CORS, security headers, logging  │
-│  ├─ utils.php              Token mgmt, PII redaction, safe  │
-│  │                          file ops, rate limiting          │
-│  ├─ /api/core/             PAT, settings, state, stats      │
-│  ├─ /api/crm/generic/      L1/L2 providers (scan-based)     │
-│  ├─ /api/crm/hubspot/      L3 (full OAuth + API)            │
-│  ├─ /webhooks/             PhoneBurner callbacks            │
-│  └─ sse.php                Real-time SSE stream             │
-└─────────────────────────────────────────────────────────────┘
-                              ↓ REST API
-┌─────────────────────────────────────────────────────────────┐
-│ EXTERNAL APIS                                               │
-│  ├─ PhoneBurner API        /rest/1/dialsession, /members/me │
-│  └─ CRM APIs               HubSpot v3, Salesforce, etc.     │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Three-Level CRM Integration Model
-
-| Level  | Method                | Capabilities                                 |
-| ------ | --------------------- | -------------------------------------------- |
-| **L1** | Generic HTML scraping | Extract from HTML tables / ARIA grids        |
-| **L2** | CRM-specific scraping | Custom DOM selectors per CRM                 |
-| **L3** | Full API integration  | OAuth + server-side API calls + call logging |
-
-Which CRMs sit at which level lives in [`chrome-extension/crm_config.js`](chrome-extension/crm_config.js) — the single source of truth. Don't duplicate the list here; it drifts.
-
-**Rule:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory.
+**One invariant to keep here:** Never mix levels. L1/L2 use `/api/crm/generic/`, L3 gets its own provider directory. Once a CRM has an L3 provider directory, don't fall back to L1/L2 scraping for it.
 
 ---
 
@@ -166,64 +129,15 @@ $client_id = get_client_id_or_fail($data); // Validates + sanitizes
 
 ---
 
-## CRM Provider Isolation Model
+## CRM Provider Isolation
 
-### Directory Structure
-
-```
-server/public/api/crm/
-├── generic/
-│   └── dialsession_from_scan.php    # L1/L2: Accepts scraped contacts
-│
-├── hubspot/                         # L3: Full API integration
-│   ├── oauth_hs_start.php           # OAuth flow initiation
-│   ├── oauth_hs_finish.php          # OAuth callback handler
-│   ├── oauth_disconnect.php         # Disconnect
-│   ├── hs_helpers.php               # Shared HubSpot API functions
-│   ├── pb_dialsession_selection.php # Dial from selected records
-│   ├── pb_dialsession_from_list.php # Dial from saved list
-│   ├── hs_lists.php                 # Fetch user's lists
-│   └── state.php                    # Connection status
-│
-└── close/                           # L3: Close CRM integration
-    ├── oauth_close_start.php        # OAuth flow initiation
-    ├── oauth_close_finish.php       # OAuth callback handler
-    ├── oauth_disconnect.php         # Disconnect
-    ├── close_helpers.php            # Shared Close API functions
-    ├── pb_dialsession_selection.php  # Dial from contacts/leads
-    └── state.php                    # Connection status
-```
-
-### Provider Isolation Rules
+Directory layout and the full L3 adapter contract live in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The rules that MUST hold when adding or modifying a provider:
 
 1. **Each L3 provider gets its own directory:** `/api/crm/{provider}/`
 2. **Provider-specific code stays in provider directory** — no cross-provider coupling
 3. **Shared logic goes in `utils.php`** — normalize to common format before calling PhoneBurner
 4. **L1/L2 providers share `/api/crm/generic/`** — detection happens in `content.js`
-
-### Provider Adapter Contract
-
-Every L3 provider must implement:
-
-```php
-// 1. OAuth flow
-oauth_{provider}_start.php    // Return auth URL
-oauth_{provider}_finish.php   // Exchange code for tokens
-oauth_disconnect.php          // Clear tokens
-
-// 2. Token refresh
-{provider}_refresh_access_token_or_fail($client_id)
-// → Returns fresh access token or calls api_error()
-
-// 3. Dial session creation
-pb_dialsession_selection.php
-// → Accept: { object_ids, object_type, portal_id, ... }
-// → Return: { session_token, temp_code, launch_url, ... }
-
-// 4. Connection state
-state.php
-// → Return: { connected: bool, profile: {...} }
-```
+5. **`webhooks/call_done.php` MUST NOT contain provider-specific logic** — dispatch to `{provider}_call_logger.php`
 
 ---
 
@@ -231,14 +145,21 @@ state.php
 
 ### bootstrap.php (API Framework)
 
-**Include at top of EVERY API endpoint:**
+Lives at `server/public/api/core/bootstrap.php` and is required by every API endpoint. It sets up CORS, security headers, request-scoped logging, the `api_ok*`/`api_error`/`api_log` helpers, and loads `config.php` for you.
+
+**Include at top of every API endpoint** — the relative path depends on where the endpoint lives:
 
 ```php
-<?php
-require_once __DIR__ . '/../../config.php';
-require_once __DIR__ . '/../../utils.php';
+// server/public/api/core/{anything}.php  — bootstrap is a sibling
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../../utils.php';
+
+// server/public/api/crm/{provider}/{anything}.php  — up two, then into core
+require_once __DIR__ . '/../../core/bootstrap.php';
+require_once __DIR__ . '/../../../utils.php';
 ```
+
+Grep an existing endpoint at your target directory depth and mirror its include paths — don't guess.
 
 **Key Features:**
 
@@ -279,7 +200,10 @@ api_log('event_name', [
 | `rate_limit_or_fail($id, $max)`        | Enforce rate limits        | **HIGH**       |
 | `get_client_id_or_fail($data)`         | Validate client ID         | **HIGH**       |
 | `load_pb_token($client_id)`            | Load PAT (migrates legacy) | **HIGH**       |
-| `load_hs_token($client_id)`            | Load HubSpot tokens        | **HIGH**       |
+| `load_hs_tokens($client_id)`           | Load HubSpot OAuth tokens  | **HIGH**       |
+| `load_close_tokens($client_id)`        | Load Close OAuth tokens    | **HIGH**       |
+| `load_apollo_tokens($client_id)`       | Load Apollo OAuth tokens   | **HIGH**       |
+| `pb_call_dialsession($pat, $payload)`  | Create PB dial session     | **HIGH**       |
 
 **Token Migration Logic:**
 
@@ -293,63 +217,11 @@ migrate_token_file_if_needed($legacyPath, $newPath);
 
 ## Authentication & Token Management
 
-### PhoneBurner PAT Flow
-
-```
-User pastes PAT in popup
-  ↓
-popup.js → sendMessage({ type: "SAVE_PAT", pat })
-  ↓
-background.js → POST /api/core/oauth_pb_save.php
-  ↓
-Server validates via PhoneBurner /members/me
-  ↓
-Save token: /var/lib/.../tokens/pb/{client_id}.json (0600)
-Save profile: .../user_settings/{member_user_id}.json
-  ↓
-Return profile to extension
-```
-
-**Implementation:**
-
-```php
-// In oauth_pb_save.php
-$pat = $data['pat'] ?? null;
-$memberInfo = pb_validate_pat($pat); // Calls PB API
-atomic_write_json(pb_token_path($client_id), [
-  'pat' => $pat,
-  'member_user_id' => $memberInfo['member_user_id'],
-  'created_at' => date('c'),
-]);
-```
-
-### HubSpot OAuth Flow (L3)
-
-```
-1. popup.js → POST /api/crm/hubspot/oauth_hs_start.php
-2. Server returns auth_url with state=client_id
-3. User approves at HubSpot
-4. HubSpot redirects to oauth_hs_finish.php?code=...&state=...
-5. Server exchanges code for refresh_token + access_token
-6. Save tokens with expiry: /var/lib/.../tokens/hubspot/{client_id}.json
-7. Redirect back to extension UI
-```
-
-**Token Refresh:**
-
-```php
-// Automatically refresh expired tokens
-$hsToken = load_hs_token($client_id);
-if (time() > $hsToken['expires_at']) {
-  $hsToken = hs_refresh_access_token_or_fail($client_id);
-}
-```
+PAT flow, per-provider OAuth flow, and lazy-refresh behavior are diagrammed in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The rules that MUST hold in code:
 
 ### Session Token Security
 
-**NEVER expose session tokens directly in URLs.**
-
-**Correct Pattern:**
+**NEVER expose session tokens directly in URLs.** Wrap them in a single-use, 5-minute temp code:
 
 ```php
 // 1. Create session token
@@ -369,96 +241,22 @@ if (!$session_token) {
 }
 ```
 
+Exception: webhooks from PhoneBurner use `?s=session_token` because the backend is trusted and webhooks fire multiple times over the lifetime of a session (temp codes are single-use).
+
+### Token Storage
+
+PATs and OAuth tokens live outside the webroot in `TOKENS_DIR` (see `config.php`) with 0600 file / 0700 dir permissions. Always write via `atomic_write_json(pb_token_path($client_id), ...)` — never `file_put_contents`.
+
 ---
 
 ## Session Management & Real-Time Streaming
 
-### Session State File Structure
+Session state schema, SSE connection lifecycle, and webhook handler responsibilities are all in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The invariants that MUST hold when touching this code:
 
-Location: `server/public/sessions/{session_token}.json`
-
-```json
-{
-  "session_token": "abc123...",
-  "dialsession_id": "ds-123456",
-  "client_id": "uuid-...",
-  "created_at": "2026-01-23T10:00:00Z",
-
-  "current": {
-    "received_at": "2026-01-23T10:05:00Z",
-    "name": "John Doe",
-    "phone": "555-1234567",
-    "email": "john@example.com",
-    "record_url": "https://app.hubspot.com/...",
-    "crm_name": "hubspot"
-  },
-
-  "stats": {
-    "total_calls": 47,
-    "connected": 31,
-    "appointments": 8
-  },
-
-  "contacts_map": {
-    "{contactId}": {
-      /* contact details */
-    }
-  }
-}
-```
-
-**IMPORTANT:** Session files currently created with insecure permissions (MEDIUM RISK). When creating/updating session files, use:
-
-```php
-// TODO: Fix session file permissions (see SECURITY.md)
-save_session_state($session_token, $state);
-// Should use atomic_write_json() with 0600 permissions
-```
-
-### SSE Stream (sse.php)
-
-**Purpose:** Real-time follow-me updates from PhoneBurner webhooks to extension overlay.
-
-**Connection Flow:**
-
-```
-Browser: new EventSource('/sse.php?code=temp_code')
-  ↓
-Server: Exchange code for session_token (one-time)
-  ↓
-Server: Watch session file with filemtime() polling
-  ↓
-On file change: Send "update" event with session state
-  ↓
-Browser: content.js receives update → render overlay → navigate CRM
-```
-
-**Implementation Notes:**
-
-- SSE endpoint opts out of JSON response via `PB_BOOTSTRAP_NO_JSON`
-- Uses `text/event-stream` content type
-- Emits `event: update` with JSON payload
-- Heartbeat every 30 seconds to keep connection alive
-- Cleanup presence file on disconnect via `register_shutdown_function()`
-
-### Webhook Handlers
-
-**contact_displayed.php** — PhoneBurner sends when now calling a contact
-
-```php
-// PhoneBurner calls: /webhooks/contact_displayed.php?s=session_token
-// Payload: { external_crm_data: { crm_identifier: "123" } }
-// Action: Lookup contact in contacts_map → update "current"
-```
-
-**call_done.php** — PhoneBurner sends when call finishes
-
-```php
-// Payload: { status: "Set Appointment", duration: 245, connected: "1" }
-// Action: Update stats, last_call, daily_stats/{member_user_id}.json
-```
-
-**Security Note:** Webhooks currently accept session_token in URL (trusted backend). Consider adding HMAC signature validation for defense-in-depth.
+- **`contacts_map` keys MUST match the `crm_id` values sent to PhoneBurner in `external_crm_data`.** If they diverge, webhook lookups fail silently and the follow-me overlay stops navigating. See CLAUDE.md's "CRM ID Uniqueness Across Object Types" section for the disambiguation rules.
+- **`webhooks/call_done.php` is a pure dispatcher.** No provider-specific logic in the file itself — dispatch to `{provider}_call_logger.php` based on `state.crm_name`.
+- **Session files are group-readable (0660), not owner-only (0600).** Mismatch with the token-file standard. Tracked in SECURITY.md. New code that writes session state should use `atomic_write_json()` (which enforces 0600) instead of the legacy `save_session_state()`.
+- **Webhook payload shape is a stability contract.** Extension code depends on the field names PhoneBurner sends; changing how we parse them breaks active sessions across all deployed extensions. Test the full webhook path end-to-end before merging.
 
 ---
 
@@ -466,35 +264,11 @@ Browser: content.js receives update → render overlay → navigate CRM
 
 ### Context Management & State Flow
 
-**Purpose:** Understanding how CRM context flows through the extension prevents bugs related to cached state, missing fields, and stale data.
+Context flow diagram (URL detection → content script scan → background cache → popup) is in **[ARCHITECTURE.md](ARCHITECTURE.md)**. The invariants that MUST hold when touching context code:
 
-**Context Flow:**
+1. **URL-based context is authoritative for `objectType`.** Content scripts may not have full context, especially on initial page load. Always detect from URL patterns (e.g., `/objects/0-2/` = companies).
 
-```
-URL Detection (background.js)
-  ↓ detectCrmFromUrl() → { crmId, level, objectType }
-  ↓
-Content Script Scan (content.js)
-  ↓ Scrapes page → { selectedIds, portalId, title }
-  ↓
-Background Script Cache (background.js)
-  ↓ Merges + caches → tabContexts[tabId]
-  ↓
-Popup UI (popup.js)
-  ↓ GET_CONTEXT message → ACTIVE_CTX
-  ↓
-Button Visibility Logic
-  ↓ Shows/hides buttons based on objectType
-```
-
-**Critical Rules:**
-
-1. **URL-based context is authoritative for object type**
-   - Always detect `objectType` from URL patterns (e.g., `/objects/0-2/` = companies)
-   - Content scripts may not have full context, especially on initial page load
-   - When caching context, preserve ALL fields from both URL and content sources
-
-2. **Context caching must merge, not replace**
+2. **Context caching must merge, not replace:**
    ```javascript
    // ❌ WRONG: Replaces context, loses objectType
    tabContexts[tabId] = contentScriptContext;
@@ -507,21 +281,19 @@ Button Visibility Logic
    };
    ```
 
-3. **Adding new context fields? Update all sources**
-   - URL detection in `background.js` → `detectCrmFromUrl()`
-   - Content script in `content.js` → message handlers
-   - Background cache in `background.js` → `tabContexts`
-   - Popup state in `popup.js` → `ACTIVE_CTX`
+3. **Adding new context fields? Update ALL sources:** URL detection in `background.js:detectCrmFromUrl()`, content script message handlers, `tabContexts` cache, popup `ACTIVE_CTX`. Miss one and the field silently defaults to `undefined` in whichever path skipped it.
 
 ### HubSpot Object Types & URL Patterns
 
 **URL Pattern Detection:**
 
-| Object Type | URL Pattern | Object Type ID | Record URL Format |
-|-------------|-------------|----------------|-------------------|
-| Contacts | `/objects/0-1/` or `/contact/` | `0-1` | `https://app.hubspot.com/contacts/{portalId}/record/0-1/{contactId}` |
-| Companies | `/objects/0-2/` or `/company/` | `0-2` | `https://app.hubspot.com/contacts/{portalId}/record/0-2/{companyId}` |
-| Deals | `/objects/0-3/` or `/deal/` | `0-3` | `https://app.hubspot.com/contacts/{portalId}/record/0-3/{dealId}` |
+| Object Type | List URL Pattern | Record URL Pattern | Object Type ID |
+|-------------|------------------|--------------------|----------------|
+| Contact | `/objects/0-1/` | `/record/0-1/{contactId}` | `0-1` |
+| Company | `/objects/0-2/` | `/record/0-2/{companyId}` | `0-2` |
+| Deal | `/objects/0-3/` | `/record/0-3/{dealId}` | `0-3` |
+
+The full record URL is `https://app.hubspot.com/contacts/{portalId}/record/0-X/{recordId}` (or `app.{region}.hubspot.com/...` for regional subdomains — the extension supports these via the `hs_host` param, validated against `app(\.[a-z0-9-]+)?\.hubspot\.com` in `pb_dialsession_selection.php`). URL detection lives in `detectCrmFromUrl()` in `background.js` — grep there for the canonical regexes.
 
 **Field Name Differences:**
 
@@ -700,8 +472,10 @@ Each PB contact's `external_crm_data` array MUST contain exactly ONE entry: the 
 | Object being dialed | `crm_id` | `crm_name` |
 |--------------------|----------|------------|
 | Contact | raw HubSpot ID (`"12345"`) | `"hubspot"` |
-| Company | raw HubSpot ID (`"12345"`) | `"hubspotcompany"` |
-| Deal | raw HubSpot ID (`"12345"`) | `"hubspotdeal"` |
+| Company (dialed directly) | raw HubSpot ID (`"12345"`) | `"hubspotcompany"` |
+| Deal (dialed directly, e.g., click-to-call) | raw HubSpot ID (`"12345"`) | `"hubspotdeal"` |
+
+Note: dial sessions launched *from* a deal or company list resolve to the contacts associated with those parents. Those associated-contact records use `crm_name: "hubspot"` (they're contacts, not the parent entity). Only when you dial the parent entity directly — click-to-call on a deal's phone field, or a company's own phone — do you use `hubspotcompany` / `hubspotdeal`. See `ctcCrmName()` in `background.js` for the click-to-call mapping and `pb_dialsession_selection.php` for the dial-session mapping.
 
 **Why no breadcrumbs:** PB matches records on `(crm_id, crm_name)` against ANY entry in `external_crm_data`, not just the first one. If a contact's PB record carries a `{crm_id: companyId, crm_name: "hubspotcompany"}` breadcrumb pointing to its parent company, then dialing that company directly later would cause PB to match-and-update that contact record — overwriting the contact's name and phone with the company's. Even renaming the breadcrumb to a distinct `crm_name` (e.g., `hubspotrelatedcompany`) avoids the immediate overwrite but still creates a long-term dedup landmine if naming conventions ever shift or if PB later adds matching logic that looks at breadcrumb names. Safest is to keep the array to one entry per PB record and rely on the launch context (which HubSpot object list / sequence the dial came from) for any "related-to-what" reporting we need.
 
@@ -782,7 +556,7 @@ if (empty($pbContacts)) {
 
 3. **Check popup context:**
    ```javascript
-   // In popup.js console (F12 on popup)
+   // In popup.js console (right-click the popup → Inspect)
    console.log(ACTIVE_CTX);
    // Should match background context
    ```
@@ -983,17 +757,17 @@ Before refactoring, `pb_dialsession_selection.php` contained 500+ lines of inlin
 
 When adding list-based dial sessions, we needed the same logic. Instead of duplicating 500 lines, we:
 
-1. **Created `hs_helpers.php`** with shared functions:
+1. **Created `hs_helpers.php`** with HubSpot-specific shared functions:
    ```php
    // hs_helpers.php
-   function hs_refresh_access_token_or_fail($client_id, $hs) { ... }
+   function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): array { ... }
    function hs_api_get_json($access_token, $url) { ... }
    function hs_api_post_json($access_token, $url, $body) { ... }
    function hs_discover_phone_properties($access_token, $objectType, $hubId) { ... }
    function hs_fetch_contacts_by_ids($access_token, $contactIds, $phoneProps) { ... }
    function hs_fetch_companies_by_ids($access_token, $companyIds, $phoneProps) { ... }
-   function pb_call_dialsession($pat, $payload) { ... }
    ```
+   Cross-provider helpers like `pb_call_dialsession()` live in `utils.php` (moved there from hs_helpers.php once Close became the second L3 consumer — see the Lessons Learned table below).
 
 2. **Updated existing endpoint**:
    ```php
@@ -1083,8 +857,8 @@ server/public/api/crm/{provider}/
    - Review server logs for errors/PII
 
 3. **Verify no regressions**
-   - Test both L1/L2 (generic scan) and L3 (HubSpot) flows
-   - Test existing CRMs (BnTouch, Pipedrive, Close, HubSpot)
+   - Test both L1/L2 (generic scan) and L3 (OAuth API) flows
+   - Test a representative CRM at each level — for L2, pick one from `crm_config.js` with `level: 2` (currently Salesforce, Pipedrive, AgencyZoom). For L3, at minimum test HubSpot + Close since they're the highest-usage L3 providers.
    - Verify existing sessions still work
 
 ---
@@ -1102,10 +876,10 @@ php -S 127.0.0.1:8000
 cp config.sample.php config.php
 # Edit config.php with your credentials
 
-# 3. Create secure token directory
-mkdir -p /var/lib/pb-extension-dev/tokens/{pb,hubspot}
+# 3. Create secure token directories (one per L3 provider you're testing)
+mkdir -p /var/lib/pb-extension-dev/tokens/{pb,hubspot,close,apollo}
 chmod 0700 /var/lib/pb-extension-dev/tokens
-chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
+chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot,close,apollo}
 
 # 4. Load extension in Chrome
 # chrome://extensions → Developer Mode → Load Unpacked
@@ -1115,17 +889,18 @@ chmod 0700 /var/lib/pb-extension-dev/tokens/{pb,hubspot}
 # Open the popup → Settings → Developer Options → toggle to "dev"
 # The dev env resolves to the URL set in background.js (currently
 # https://extension-dev.phoneburner.biz). To point at a fully local
-# stack, temporarily edit ENV_BASE_URLS.dev in background.js.
+# stack, temporarily edit BASE_URLS.dev in background.js.
 ```
 
 ### Debug Endpoints
 
 ```bash
-# Health check
+# Health check (includes version + env)
 curl http://127.0.0.1:8000/health.php
 
-# Version info
-curl http://127.0.0.1:8000/version.php
+# Version info (JSON — note the ".json.php" — version.php itself is a
+# PHP-return array meant to be require()'d, not HTTP-fetched directly)
+curl http://127.0.0.1:8000/version.json.php
 
 # Test API endpoint
 curl -X POST http://127.0.0.1:8000/api/core/state.php \
@@ -1135,19 +910,19 @@ curl -X POST http://127.0.0.1:8000/api/core/state.php \
 
 ### Browser Console Debugging
 
-```javascript
-// Check CRM context
-chrome.tabs.query({ active: true }, (tabs) => {
-  chrome.tabs.sendMessage(tabs[0].id, { type: "GET_CONTEXT" }, console.log);
-});
+Run these from the popup's DevTools (right-click the popup → Inspect — F12 doesn't work on Chrome extension popups) or from the background service worker's DevTools (chrome://extensions → Inspect views: service worker). `chrome.runtime.sendMessage` targets background handlers; the popup and background share the extension origin.
 
-// Get session status
+```javascript
+// Check CRM context (asks background, which merges cached tab context + URL detection)
+chrome.runtime.sendMessage({ type: "GET_CONTEXT" }, console.log);
+
+// Get session status for the active tab
 chrome.runtime.sendMessage({ type: "GET_ACTIVE_SESSION_FOR_TAB" }, console.log);
 
 // Get stored client ID
 chrome.storage.local.get(["pb_unified_client_id"], console.log);
 
-// Emergency reset (if extension gets stuck)
+// Emergency reset (clears all extension state — tokens still live server-side)
 chrome.runtime.sendMessage({ type: "FORCE_RESET_ALL_STATE" }, console.log);
 ```
 
@@ -1189,21 +964,9 @@ data: { current: {...}, stats: {...}, last_call: {...} }
 
 ### Message Types (Extension Internal)
 
-Chrome extension message types (handled in `background.js`):
+Message types flowing between `background.js`, `popup.js`, and `content.js` (e.g., `GET_CONTEXT`, `SAVE_PAT`, `HS_LAUNCH_FROM_SELECTED`, `CLICK_TO_CALL`, `REFRESH_SSE_CODE`, ...) are a stability contract — the full set drifts with every feature, so grep `msg.type ===` in [`chrome-extension/background.js`](chrome-extension/background.js) for the canonical list.
 
-- `GET_CONTEXT` — Get current CRM context
-- `SCAN_AND_LAUNCH` — Scan page + create dial session (L1/L2)
-- `HS_LAUNCH_FROM_SELECTED` — Create dial from selected records (L3)
-- `SCANNED_CONTACTS` — Content script returns contacts
-- `GET_STATE` — Get connection status (PAT + HubSpot)
-- `SAVE_PAT` — Save PhoneBurner PAT
-- `CLEAR_PAT` — Clear PAT
-- `START_FOLLOW_SESSION` — Register follow-me session
-- `STOP_FOLLOW_SESSION` — Unregister follow-me
-- `CLOSE_LAUNCH_FROM_SELECTED` — Launch Close dial from visible/selected contacts
-- `CLOSE_GET_SELECTED_IDS` — Content script extracts Close contact/lead IDs from DOM
-
-**Rule:** Changing message types requires updating all handlers.
+**Rule:** Changing a message type name — or the shape of its payload — requires updating every sender and every handler in lockstep. Renaming without a compatibility shim will break in-flight dial sessions on customers who haven't reloaded the extension.
 
 ### Session State Schema
 
@@ -1269,17 +1032,49 @@ All token files must include:
 
 ## Adding New CRM Providers
 
-### Adding L1/L2 Provider (HTML Scraping)
+### Which level should I pick?
 
-**Step 1:** Add to CRM registry in `crm_config.js`
+| Level | When to use | What's involved | Reference add |
+|-------|-------------|-----------------|---------------|
+| **L1** | The CRM's list view renders as a plain HTML table or ARIA grid, and the generic scanners in `content.js` (`scanHtmlTableContacts` / `scanAriaGridContacts`) can already extract name/phone/email from it without help. | Register in `crm_config.js` with `level: 1`. That's it — the generic scanners take over. | Zoho, monday.com |
+| **L2** | The DOM is custom enough that the generic scanners miss data, but there's no public API worth wiring up (or we're doing a fast v1 before OAuth partnership work). | Register with `level: 2` + write a per-CRM scanner in `content.js` + add it to the dispatcher. Still uses the shared L1/L2 server endpoint (`dialsession_from_scan.php`) — no server-side code. | AgencyZoom, Pipedrive, Salesforce |
+| **L3** | The CRM has a real API we can OAuth into and we want the richer feature set (server-side record fetching, call logging, task queues, saved lists). | Everything above + a full provider directory under `/api/crm/{provider}/` + OAuth app registration + tokens + call logger + popup UI card. Substantially more work. | HubSpot, Close, Apollo |
+
+**Start small.** Ship L2 first if you're not sure the L3 investment is worth it — upgrading later is straightforward (Close went L2 → L3, Salesforce is still L2 and may follow). AgencyZoom went from zero to a shipped L2 integration in under an hour by following this exact playbook.
+
+---
+
+### Adding L1 Provider (generic scanning only)
+
+Fastest possible add. If the CRM's list view is a standard `<table>` or ARIA grid with obvious phone/name cells, the generic scanners already handle it.
+
+**Step 1:** Register in `crm_config.js` with `level: 1`:
 
 ```javascript
-// crm_config.js — shared registry (injected into both background.js and content.js)
 {
   id: "mynewcrm",
   displayName: "My New CRM",
-  level: 2,                        // 1 = generic, 2 = CRM-specific selectors
-  hostMatch: "mynewcrm.com",       // String or array of strings to match hostname
+  level: 1,
+  hostMatch: "mynewcrm.com",       // String, or array for multiple hosts
+}
+```
+
+**Step 2:** Reload the extension, open a list page on that CRM, click **Scan & Launch**. If it picks up contacts, you're done with the code — jump to the [customer-facing surfaces checklist](#customer-facing-surfaces-shared-checklist).
+
+**Step 3:** If the generic scan finds nothing useful, upgrade to L2 (below).
+
+---
+
+### Adding L2 Provider (custom DOM scanner)
+
+**Step 1:** Register in `crm_config.js` with `level: 2`:
+
+```javascript
+{
+  id: "mynewcrm",
+  displayName: "My New CRM",
+  level: 2,
+  hostMatch: "mynewcrm.com",
 }
 ```
 
@@ -1304,19 +1099,29 @@ function scanMyNewCrmContacts(maxContacts) {
 }
 ```
 
-**Step 4:** Test incrementally — reload extension after EACH file change
+**Step 4:** Test incrementally — reload the extension after EACH file change.
 
-- Use `/api/crm/generic/dialsession_from_scan.php`
-- No server changes needed (generic endpoint handles all L1/L2)
+- The L2 flow uses `/api/crm/generic/dialsession_from_scan.php` on the server — no server-side changes needed.
+- If your scanner returns nothing, the generic fallbacks (`scanHtmlTableContacts`, `scanAriaGridContacts`) run automatically after it. Check the extension console for what they found — sometimes the generic scan is close but needs a small tweak from your scanner.
 
-**Step 5:** Update customer-facing surfaces so the new CRM is discoverable. **Skipping any of these is a common miss** — the code works but customers can't find out about it:
+**L2 gotcha to know about:** if the CRM's record URL puts the ID in a query string (`/lead/index?id=123`) rather than the path (`/lead/123`), follow-me navigation still works — `isSameCrmRecord()` in `content.js` compares both origin+path AND query string. This was fixed in v0.8.0 after AgencyZoom's launch (PR #143); if you see follow-me not navigating between contacts, verify that the `record_url` your scanner emits matches what the URL bar actually shows.
 
-- **`server/public/index.html`** (marketing site at `https://extension.phoneburner.biz`) — add a `<article class="crm-detail">` block for the new CRM inside the Integration Depth section, add a `<a class="crm-pill">` in the hero, add a `.crm-pill[data-crm="..."] .crm-pill__dot` color rule, update meta descriptions that name-drop CRMs. Follow AgencyZoom's shape (Pipedrive-adjacent) as a template.
+**Step 5:** Update customer-facing surfaces (see the [shared checklist](#customer-facing-surfaces-shared-checklist) below).
+
+<a id="customer-facing-surfaces-shared-checklist"></a>
+### Customer-facing surfaces (shared checklist for every new CRM — L1, L2, or L3)
+
+**Skipping any of these is the #1 missed step.** The code works, but customers can't discover the integration. AgencyZoom shipped in PR #141 without any of these; PR #152 caught the gap after the fact. Issue [#151](https://github.com/jeffosness/pb-extension-dev/issues/151) tracks a future CI check to enforce this automatically.
+
+- **`server/public/index.html`** (marketing site at `https://extension.phoneburner.biz`) — add a `<article class="crm-detail">` block for the new CRM inside the Integration Depth section, add an `<a class="crm-pill">` in the hero, add a `.crm-pill[data-crm="..."] .crm-pill__dot` color rule, update meta descriptions that name-drop CRMs. Fastest way: grep for an existing slug (e.g., `agencyzoom`) to find all four touchpoints and copy the pattern.
 - **`chrome-extension/STORE_LISTING.md`** — add the new CRM to the Multi-CRM Compatibility list at the appropriate level.
 - **`KB_EXTENSION_TROUBLESHOOTING.md`** — add a numbered section covering: what the extension detects (host + page pattern), how the customer launches, dedup or per-row selection semantics, task-completion behavior (auto vs manual), common issues + resolutions. Also add the CRM name to the Symptom Index at the top.
-- **`chrome-extension/changelog.js`** — one short line in the next version entry announcing support.
+- **`chrome-extension/changelog.js`** — a short line in the next version entry announcing support.
+- **`chrome-extension/manifest.json`** — bump the version. Also review the description (max 132 chars) and add the new CRM if it belongs in the headline list.
 
-**⚠️ Content Script Safety Rules (learned the hard way):**
+---
+
+### Content script safety rules (applies to L1/L2/L3 whenever you touch content.js)
 
 1. **Test one file at a time** — Edit `crm_config.js` first, reload, verify popup loads. Then edit `content.js`, reload, verify again. A broken content script silently kills the entire extension (popup hangs on "Loading...") with no console errors.
 2. **Avoid advanced CSS selectors** in `querySelector` — No case-insensitive `i` flag (`[attr*="val" i]`), no `:has()`, no CSS4 features. Stick to basic attribute selectors (`^=`, `*=`, `=`).
@@ -1328,7 +1133,25 @@ function scanMyNewCrmContacts(maxContacts) {
 
 ### Adding L3 Provider (Full API Integration)
 
-**Reference implementations:** HubSpot (`/api/crm/hubspot/`), Close (`/api/crm/close/`)
+**Reference implementations:** HubSpot (`/api/crm/hubspot/`), Close (`/api/crm/close/`), Apollo (`/api/crm/apollo/`).
+
+**Rough order of operations:**
+
+- **Phase 0** — Register an OAuth app with the CRM provider so you have Client ID + Client Secret + a callback URL to hand back.
+- **Phase 1** — Server-side scaffolding (`utils.php` token functions, provider directory, OAuth endpoints, `state.php`, `pb_dialsession_selection.php`).
+- **Phase 2** — Extension-side wiring (`crm_config.js`, `content.js`, `background.js`, `popup.js`, `popup.html`).
+- **Phase 3** — Call logging back into the CRM (can be deferred — Close and Apollo both shipped Phase 1+2 first and added Phase 3 later).
+- **Phase 4** — Customer-facing surfaces + version bump, using the [shared checklist above](#customer-facing-surfaces-shared-checklist).
+
+Close from cold-start to a shipped L3 integration was one substantial multi-file PR — see [PR #70](https://github.com/jeffosness/pb-extension-dev/pull/70) for the initial file set as a reference (16 files changed).
+
+#### Phase 0: OAuth App Registration (do this first)
+
+Before writing any code, register your OAuth app on the provider's developer portal:
+
+- **Client ID + Client Secret** — you'll paste these into `config.php` in Phase 1.
+- **Redirect URI** — must be the exact URL you'll expose from `oauth_{provider}_finish.php`. On dev that's `https://extension-dev.phoneburner.biz/api/crm/{provider}/oauth_{provider}_finish.php`; on prod, swap the host. **The redirect URI must match EXACTLY between your app config and `oauth_{provider}_start.php`** — mismatch causes an opaque OAuth error at the finish step. You'll typically register both dev and prod redirect URIs on the same app.
+- **Scopes** — the minimum you need to (a) verify the connection in `state.php` (typically a `me` or `whoami` scope), (b) read contact/lead records, and (c) write call activities/notes for Phase 3. Grep an existing provider's OAuth start for the exact scope strings.
 
 #### Phase 1: Server-Side Foundation
 
@@ -1382,13 +1205,13 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 **2c. `background.js`** — Add `{PROVIDER}_LAUNCH_FROM_SELECTED` handler:
 - Find active CRM tab
 - Send `{PROVIDER}_GET_SELECTED_IDS` to content script
-- **Track usage** — call `core/track_crm_usage.php` before the dial session API call (fire-and-forget, wrapped in `try/catch`). Include `crm_id`, `host` (from `deriveHostPathFromTabUrl()`), `level: 3`, `object_type`, `selected_count`, `launch_source`. This is how the dashboard tracks CRM usage — without it the provider won't appear in metrics.
+- **Track usage** — call `core/track_crm_usage.php` before the dial session API call (fire-and-forget, wrapped in `try/catch`). Include: `crm_id`, `host` + `path` (from `deriveHostPathFromTabUrl()`), `level: 3`, `object_type`, `selected_count`, `launch_source` (`selection` / `list` / `tasks` / `record`). Optional: `portal_id` if applicable, `event_type: "click_to_call"` when logging click-to-call rather than a dial session (defaults to dial-session tracking when omitted). This is how the dashboard tracks CRM usage — without it the provider won't appear in metrics.
 - POST IDs to server's `pb_dialsession_selection.php`
 - Register follow session + open PB dial window
 
-**2d. `popup.js`** — Add:
+**2d. `popup.js`** — Add (function naming uses the provider's CamelCase brand form, e.g., `HubSpot`, `Close`, `Apollo`):
 - `{PROVIDER}_STATE` global object
-- `is{Provider}L3(ctx)` detection function
+- `is{Provider}L3(ctx)` detection function (e.g. `isHubSpotL3`, `isCloseL3`)
 - `check{Provider}ConnectionState()` — calls state.php
 - `start{Provider}OAuth()` / `disconnect{Provider}()` — OAuth flow
 - `launch{Provider}DialSession()` — sends launch message
@@ -1403,21 +1226,28 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 **Architecture:** `call_done.php` is a universal webhook handler — it MUST NOT contain provider-specific logic. Each L3 provider owns its call logging in a dedicated file:
 
 ```
-server/public/api/crm/{provider}/{provider}_call_logger.php
+server/public/api/crm/{provider_dir}/{prefix}_call_logger.php
 ```
 
-The dispatcher in `call_done.php` is a simple switch:
+(HubSpot's file is `hs_call_logger.php` — file prefix follows the directory's `hs_helpers.php` convention. Close/Apollo use the directory name unchanged: `close_call_logger.php`, `apollo_call_logger.php`.)
+
+The dispatcher in `call_done.php` is a simple switch on `$state['crm_name']` and dispatches to the provider-named log function:
 ```php
 $crmName = $state['crm_name'] ?? '';
 if ($crmName === 'close') {
     require_once __DIR__ . '/../api/crm/close/close_call_logger.php';
     close_log_call($state, $payload, $lastCall, $status);
 }
+if ($crmName === 'hubspot') {
+    require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
+    hubspot_log_call($state, $payload, $lastCall, $status);  // NOTE: hubspot_log_call, not hs_log_call
+}
 ```
 
-**Call logger function contract:** Each provider implements:
+**Call logger function contract:** Each provider implements a function keyed on the crm_name (not the file prefix):
 ```php
-function {provider}_log_call(array $state, array $payload, array $lastCall, string $status): void
+function {crm_name}_log_call(array $state, array $payload, array $lastCall, string $status): void
+// e.g. hubspot_log_call, close_log_call, apollo_log_call
 ```
 
 Parameters available:
@@ -1457,6 +1287,12 @@ Parameters available:
 - **Close HTML:** No `<br>` tags. Always use `<body><p>...</p></body>`.
 - **Close dispositions:** Ignored on external calls (`call_method: "external"` always stores `answered`). Use custom Outcomes instead — they work correctly on external calls.
 - **Close recording_url:** Must be HTTPS. Only include for answered calls (Close may override disposition if recording present).
+
+#### Phase 4: Customer-Facing Surfaces + Ship
+
+Same [shared checklist](#customer-facing-surfaces-shared-checklist) as L1/L2: marketing site, STORE_LISTING, KB, changelog, manifest version bump.
+
+Also, one L3-specific opportunity: if this add is the **second** consumer of a helper that was previously provider-specific, refactor it out to shared code. Close's initial add moved `pb_call_dialsession()` from `hs_helpers.php` to `utils.php` because it stopped being HubSpot-specific once Close needed it too. Doing this at add-time is cheaper than doing it as tech-debt cleanup later. Common candidates: dial-session payload construction, PB API helpers, token-refresh retry patterns.
 
 #### Lessons Learned from Close L3 Implementation
 
@@ -1526,8 +1362,8 @@ When creating a PR that includes **user-facing changes** (new features, UI chang
 - [ ] CORS whitelist configured (no origin reflection)
 - [ ] All endpoints use rate limiting
 - [ ] PII redaction enabled in logging
-- [ ] Session files use secure permissions (0600) — **TODO: currently 0777**
-- [ ] Webhooks have origin validation — **TODO: currently missing**
+- [ ] Session files use owner-only permissions (0600) — **TODO: currently 0660 (group-readable)**
+- [ ] Webhooks have origin validation — **PARTIAL: `softphone_call_done.php` HMAC-signed; `call_done.php` + `contact_displayed.php` still trust `?s=session_token`**
 - [ ] All file operations use `safe_file_path()`
 
 ### Server Setup
@@ -1589,7 +1425,7 @@ Keep these answers in sync:
 **Current Privacy Stance:**
 
 - ✅ Collect: CRM contact data (name, phone, email) for dial session creation
-- ✅ Store: PhoneBurner PAT, HubSpot OAuth tokens (local only, not transmitted to third parties)
+- ✅ Store server-side: PhoneBurner PAT + OAuth tokens for every connected L3 CRM (currently HubSpot, Close, Apollo — see `server/public/tokens/` for the live set). Tokens stored outside webroot with 0600 permissions; not transmitted to third parties.
 - ❌ Sell or share: No data sold or shared with third parties
 - ✅ Data retention: Session data deleted when session ends; logs rotated after 90 days
 - ✅ Data transmission: Only to PhoneBurner API and CRM APIs (user-initiated)
@@ -1597,7 +1433,7 @@ Keep these answers in sync:
 ### Review Response Template
 
 **Q: Why do you need broad host permissions?**
-A: The extension operates on various CRM websites (Salesforce, HubSpot, Zoho, Pipedrive, Monday.com). Permissions are optional and only requested when the user initiates a dial session on a detected CRM page.
+A: The extension operates on a variety of CRM websites — the current supported list is defined in `chrome-extension/crm_config.js` (HubSpot, Salesforce, Zoho, monday.com, Pipedrive, Close, Apollo, AgencyZoom at time of writing). Host permissions are requested per-CRM only when the user activates the integration; they are not granted at install time.
 
 **Q: What personal data do you collect?**
 A: Contact information (name, phone, email) from CRM lists to create dial sessions. Data is only collected when the user clicks "Launch Dial Session" and is immediately transmitted to PhoneBurner's API. No data is stored permanently or shared with third parties.
