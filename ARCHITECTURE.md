@@ -121,7 +121,8 @@ server/public/api/crm/
 │   └── pb_dialsession_from_tasks.php # Dial from a task queue
 │
 ├── close/                            # L3 (contacts + leads model)
-└── apollo/                           # L3 (sequence-task dialing)
+└── apollo/                           # L3 (selection + sequence-task dialing,
+                                      #      OAuth or manual API key)
 ```
 
 The minimum contract every L3 provider must implement is the adapter contract below. HubSpot has grown extra endpoints (lists, tasks, phone-property discovery) as its L3 depth expanded — those are provider-specific extensions, not required. New provider directories should mirror the minimum shape and add their own extensions as needed.
@@ -162,12 +163,15 @@ state.php
 // → Return via api_ok_flat(): pb_ready, {provider}_ready booleans plus a
 //   profile snapshot (name, portal/hub id, etc.) if connected.
 
-// 5. Call logging (in {provider}_call_logger.php)
-function {provider}_log_call(array $state, array $payload, array $lastCall, string $status): void
-// → Called by webhooks/call_done.php dispatcher when crm_name matches
+// 5. Call logging (in {file_prefix}_call_logger.php)
+function {crm_name}_log_call(array $state, array $payload, array $lastCall, string $status): void
+// → Called by webhooks/call_done.php dispatcher when $state['crm_name'] matches.
+//   File names use the directory's helpers prefix (hs_call_logger.php,
+//   close_call_logger.php, apollo_call_logger.php) but the FUNCTION name uses
+//   the crm_name — so hubspot_log_call, not hs_log_call.
 ```
 
-The universal `call_done.php` webhook is a pure dispatcher — it MUST NOT contain provider-specific logic. Each provider owns its own `{provider}_call_logger.php`. See CLAUDE.md's "Adding New CRM Providers → Phase 3: Call Logging" for the rules that apply inside these files (self-contained curl, three-tier contact lookup, disposition mapping, etc.).
+The universal `call_done.php` webhook is a pure dispatcher — it MUST NOT contain provider-specific logic. Each provider owns its own call logger (`hs_call_logger.php`, `close_call_logger.php`, `apollo_call_logger.php`). See CLAUDE.md's "Adding New CRM Providers → Phase 3: Call Logging" for the rules that apply inside these files (self-contained curl, three-tier contact lookup, disposition mapping, etc.).
 
 ---
 

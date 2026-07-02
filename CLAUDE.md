@@ -1145,13 +1145,13 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 **2c. `background.js`** — Add `{PROVIDER}_LAUNCH_FROM_SELECTED` handler:
 - Find active CRM tab
 - Send `{PROVIDER}_GET_SELECTED_IDS` to content script
-- **Track usage** — call `core/track_crm_usage.php` before the dial session API call (fire-and-forget, wrapped in `try/catch`). Include `crm_id`, `host` (from `deriveHostPathFromTabUrl()`), `level: 3`, `object_type`, `selected_count`, `launch_source`. This is how the dashboard tracks CRM usage — without it the provider won't appear in metrics.
+- **Track usage** — call `core/track_crm_usage.php` before the dial session API call (fire-and-forget, wrapped in `try/catch`). Include: `crm_id`, `host` + `path` (from `deriveHostPathFromTabUrl()`), `level: 3`, `object_type`, `selected_count`, `launch_source` (`selection` / `list` / `tasks` / `record`). Optional: `portal_id` if applicable, `event_type: "click_to_call"` when logging click-to-call rather than a dial session (defaults to dial-session tracking when omitted). This is how the dashboard tracks CRM usage — without it the provider won't appear in metrics.
 - POST IDs to server's `pb_dialsession_selection.php`
 - Register follow session + open PB dial window
 
-**2d. `popup.js`** — Add:
+**2d. `popup.js`** — Add (function naming uses the provider's CamelCase brand form, e.g., `HubSpot`, `Close`, `Apollo`):
 - `{PROVIDER}_STATE` global object
-- `is{Provider}L3(ctx)` detection function
+- `is{Provider}L3(ctx)` detection function (e.g. `isHubSpotL3`, `isCloseL3`)
 - `check{Provider}ConnectionState()` — calls state.php
 - `start{Provider}OAuth()` / `disconnect{Provider}()` — OAuth flow
 - `launch{Provider}DialSession()` — sends launch message
@@ -1166,21 +1166,28 @@ sudo chmod 0700 /var/lib/pb-extension-dev/tokens/{provider}
 **Architecture:** `call_done.php` is a universal webhook handler — it MUST NOT contain provider-specific logic. Each L3 provider owns its call logging in a dedicated file:
 
 ```
-server/public/api/crm/{provider}/{provider}_call_logger.php
+server/public/api/crm/{provider_dir}/{prefix}_call_logger.php
 ```
 
-The dispatcher in `call_done.php` is a simple switch:
+(HubSpot's file is `hs_call_logger.php` — file prefix follows the directory's `hs_helpers.php` convention. Close/Apollo use the directory name unchanged: `close_call_logger.php`, `apollo_call_logger.php`.)
+
+The dispatcher in `call_done.php` is a simple switch on `$state['crm_name']` and dispatches to the provider-named log function:
 ```php
 $crmName = $state['crm_name'] ?? '';
 if ($crmName === 'close') {
     require_once __DIR__ . '/../api/crm/close/close_call_logger.php';
     close_log_call($state, $payload, $lastCall, $status);
 }
+if ($crmName === 'hubspot') {
+    require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
+    hubspot_log_call($state, $payload, $lastCall, $status);  // NOTE: hubspot_log_call, not hs_log_call
+}
 ```
 
-**Call logger function contract:** Each provider implements:
+**Call logger function contract:** Each provider implements a function keyed on the crm_name (not the file prefix):
 ```php
-function {provider}_log_call(array $state, array $payload, array $lastCall, string $status): void
+function {crm_name}_log_call(array $state, array $payload, array $lastCall, string $status): void
+// e.g. hubspot_log_call, close_log_call, apollo_log_call
 ```
 
 Parameters available:
