@@ -1032,17 +1032,49 @@ All token files must include:
 
 ## Adding New CRM Providers
 
-### Adding L1/L2 Provider (HTML Scraping)
+### Which level should I pick?
 
-**Step 1:** Add to CRM registry in `crm_config.js`
+| Level | When to use | What's involved | Reference add |
+|-------|-------------|-----------------|---------------|
+| **L1** | The CRM's list view renders as a plain HTML table or ARIA grid, and the generic scanners in `content.js` (`scanHtmlTableContacts` / `scanAriaGridContacts`) can already extract name/phone/email from it without help. | Register in `crm_config.js` with `level: 1`. That's it — the generic scanners take over. | Zoho, monday.com |
+| **L2** | The DOM is custom enough that the generic scanners miss data, but there's no public API worth wiring up (or we're doing a fast v1 before OAuth partnership work). | Register with `level: 2` + write a per-CRM scanner in `content.js` + add it to the dispatcher. Still uses the shared L1/L2 server endpoint (`dialsession_from_scan.php`) — no server-side code. | AgencyZoom, Pipedrive, Salesforce |
+| **L3** | The CRM has a real API we can OAuth into and we want the richer feature set (server-side record fetching, call logging, task queues, saved lists). | Everything above + a full provider directory under `/api/crm/{provider}/` + OAuth app registration + tokens + call logger + popup UI card. Substantially more work. | HubSpot, Close, Apollo |
+
+**Start small.** Ship L2 first if you're not sure the L3 investment is worth it — upgrading later is straightforward (Close went L2 → L3, Salesforce is still L2 and may follow). AgencyZoom went from zero to a shipped L2 integration in under an hour by following this exact playbook.
+
+---
+
+### Adding L1 Provider (generic scanning only)
+
+Fastest possible add. If the CRM's list view is a standard `<table>` or ARIA grid with obvious phone/name cells, the generic scanners already handle it.
+
+**Step 1:** Register in `crm_config.js` with `level: 1`:
 
 ```javascript
-// crm_config.js — shared registry (injected into both background.js and content.js)
 {
   id: "mynewcrm",
   displayName: "My New CRM",
-  level: 2,                        // 1 = generic, 2 = CRM-specific selectors
-  hostMatch: "mynewcrm.com",       // String or array of strings to match hostname
+  level: 1,
+  hostMatch: "mynewcrm.com",       // String, or array for multiple hosts
+}
+```
+
+**Step 2:** Reload the extension, open a list page on that CRM, click **Scan & Launch**. If it picks up contacts, you're done with the code — jump to the [customer-facing surfaces checklist](#customer-facing-surfaces-shared-checklist).
+
+**Step 3:** If the generic scan finds nothing useful, upgrade to L2 (below).
+
+---
+
+### Adding L2 Provider (custom DOM scanner)
+
+**Step 1:** Register in `crm_config.js` with `level: 2`:
+
+```javascript
+{
+  id: "mynewcrm",
+  displayName: "My New CRM",
+  level: 2,
+  hostMatch: "mynewcrm.com",
 }
 ```
 
@@ -1067,19 +1099,29 @@ function scanMyNewCrmContacts(maxContacts) {
 }
 ```
 
-**Step 4:** Test incrementally — reload extension after EACH file change
+**Step 4:** Test incrementally — reload the extension after EACH file change.
 
-- Use `/api/crm/generic/dialsession_from_scan.php`
-- No server changes needed (generic endpoint handles all L1/L2)
+- The L2 flow uses `/api/crm/generic/dialsession_from_scan.php` on the server — no server-side changes needed.
+- If your scanner returns nothing, the generic fallbacks (`scanHtmlTableContacts`, `scanAriaGridContacts`) run automatically after it. Check the extension console for what they found — sometimes the generic scan is close but needs a small tweak from your scanner.
 
-**Step 5:** Update customer-facing surfaces so the new CRM is discoverable. **Skipping any of these is a common miss** — the code works but customers can't find out about it:
+**L2 gotcha to know about:** if the CRM's record URL puts the ID in a query string (`/lead/index?id=123`) rather than the path (`/lead/123`), follow-me navigation still works — `isSameCrmRecord()` in `content.js` compares both origin+path AND query string. This was fixed in v0.8.0 after AgencyZoom's launch (PR #143); if you see follow-me not navigating between contacts, verify that the `record_url` your scanner emits matches what the URL bar actually shows.
 
-- **`server/public/index.html`** (marketing site at `https://extension.phoneburner.biz`) — add a `<article class="crm-detail">` block for the new CRM inside the Integration Depth section, add a `<a class="crm-pill">` in the hero, add a `.crm-pill[data-crm="..."] .crm-pill__dot` color rule, update meta descriptions that name-drop CRMs. Follow AgencyZoom's shape (Pipedrive-adjacent) as a template.
+**Step 5:** Update customer-facing surfaces (see the [shared checklist](#customer-facing-surfaces-shared-checklist) below).
+
+<a id="customer-facing-surfaces-shared-checklist"></a>
+### Customer-facing surfaces (shared checklist for every new CRM — L1, L2, or L3)
+
+**Skipping any of these is the #1 missed step.** The code works, but customers can't discover the integration. AgencyZoom shipped in PR #141 without any of these; PR #152 caught the gap after the fact. Issue [#151](https://github.com/jeffosness/pb-extension-dev/issues/151) tracks a future CI check to enforce this automatically.
+
+- **`server/public/index.html`** (marketing site at `https://extension.phoneburner.biz`) — add a `<article class="crm-detail">` block for the new CRM inside the Integration Depth section, add an `<a class="crm-pill">` in the hero, add a `.crm-pill[data-crm="..."] .crm-pill__dot` color rule, update meta descriptions that name-drop CRMs. Fastest way: grep for an existing slug (e.g., `agencyzoom`) to find all four touchpoints and copy the pattern.
 - **`chrome-extension/STORE_LISTING.md`** — add the new CRM to the Multi-CRM Compatibility list at the appropriate level.
 - **`KB_EXTENSION_TROUBLESHOOTING.md`** — add a numbered section covering: what the extension detects (host + page pattern), how the customer launches, dedup or per-row selection semantics, task-completion behavior (auto vs manual), common issues + resolutions. Also add the CRM name to the Symptom Index at the top.
-- **`chrome-extension/changelog.js`** — one short line in the next version entry announcing support.
+- **`chrome-extension/changelog.js`** — a short line in the next version entry announcing support.
+- **`chrome-extension/manifest.json`** — bump the version. Also review the description (max 132 chars) and add the new CRM if it belongs in the headline list.
 
-**⚠️ Content Script Safety Rules (learned the hard way):**
+---
+
+### Content script safety rules (applies to L1/L2/L3 whenever you touch content.js)
 
 1. **Test one file at a time** — Edit `crm_config.js` first, reload, verify popup loads. Then edit `content.js`, reload, verify again. A broken content script silently kills the entire extension (popup hangs on "Loading...") with no console errors.
 2. **Avoid advanced CSS selectors** in `querySelector` — No case-insensitive `i` flag (`[attr*="val" i]`), no `:has()`, no CSS4 features. Stick to basic attribute selectors (`^=`, `*=`, `=`).
@@ -1091,7 +1133,25 @@ function scanMyNewCrmContacts(maxContacts) {
 
 ### Adding L3 Provider (Full API Integration)
 
-**Reference implementations:** HubSpot (`/api/crm/hubspot/`), Close (`/api/crm/close/`)
+**Reference implementations:** HubSpot (`/api/crm/hubspot/`), Close (`/api/crm/close/`), Apollo (`/api/crm/apollo/`).
+
+**Rough order of operations:**
+
+- **Phase 0** — Register an OAuth app with the CRM provider so you have Client ID + Client Secret + a callback URL to hand back.
+- **Phase 1** — Server-side scaffolding (`utils.php` token functions, provider directory, OAuth endpoints, `state.php`, `pb_dialsession_selection.php`).
+- **Phase 2** — Extension-side wiring (`crm_config.js`, `content.js`, `background.js`, `popup.js`, `popup.html`).
+- **Phase 3** — Call logging back into the CRM (can be deferred — Close and Apollo both shipped Phase 1+2 first and added Phase 3 later).
+- **Phase 4** — Customer-facing surfaces + version bump, using the [shared checklist above](#customer-facing-surfaces-shared-checklist).
+
+Close from cold-start to a shipped L3 integration was one substantial multi-file PR — see [PR #70](https://github.com/jeffosness/pb-extension-dev/pull/70) for the initial file set as a reference (16 files changed).
+
+#### Phase 0: OAuth App Registration (do this first)
+
+Before writing any code, register your OAuth app on the provider's developer portal:
+
+- **Client ID + Client Secret** — you'll paste these into `config.php` in Phase 1.
+- **Redirect URI** — must be the exact URL you'll expose from `oauth_{provider}_finish.php`. On dev that's `https://extension-dev.phoneburner.biz/api/crm/{provider}/oauth_{provider}_finish.php`; on prod, swap the host. **The redirect URI must match EXACTLY between your app config and `oauth_{provider}_start.php`** — mismatch causes an opaque OAuth error at the finish step. You'll typically register both dev and prod redirect URIs on the same app.
+- **Scopes** — the minimum you need to (a) verify the connection in `state.php` (typically a `me` or `whoami` scope), (b) read contact/lead records, and (c) write call activities/notes for Phase 3. Grep an existing provider's OAuth start for the exact scope strings.
 
 #### Phase 1: Server-Side Foundation
 
@@ -1227,6 +1287,12 @@ Parameters available:
 - **Close HTML:** No `<br>` tags. Always use `<body><p>...</p></body>`.
 - **Close dispositions:** Ignored on external calls (`call_method: "external"` always stores `answered`). Use custom Outcomes instead — they work correctly on external calls.
 - **Close recording_url:** Must be HTTPS. Only include for answered calls (Close may override disposition if recording present).
+
+#### Phase 4: Customer-Facing Surfaces + Ship
+
+Same [shared checklist](#customer-facing-surfaces-shared-checklist) as L1/L2: marketing site, STORE_LISTING, KB, changelog, manifest version bump.
+
+Also, one L3-specific opportunity: if this add is the **second** consumer of a helper that was previously provider-specific, refactor it out to shared code. Close's initial add moved `pb_call_dialsession()` from `hs_helpers.php` to `utils.php` because it stopped being HubSpot-specific once Close needed it too. Doing this at add-time is cheaper than doing it as tech-debt cleanup later. Common candidates: dial-session payload construction, PB API helpers, token-refresh retry patterns.
 
 #### Lessons Learned from Close L3 Implementation
 
