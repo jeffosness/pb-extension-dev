@@ -67,7 +67,9 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │ EXTERNAL APIS                                                    │
 │  ├─ PhoneBurner API         /rest/1/dialsession, /members/me,    │
-│  │                           /contacts, /webhooks                │
+│  │                           /contacts/{id}                       │
+│  │                           (webhook direction is PB → us,       │
+│  │                            handled by webhooks/ endpoints)     │
 │  └─ CRM APIs                HubSpot, Close, Apollo, ...          │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -137,17 +139,28 @@ oauth_{provider}_finish.php   // Exchange code for tokens
 oauth_disconnect.php          // Clear tokens
 
 // 2. Token refresh (in {provider}_helpers.php)
-{provider}_refresh_access_token_or_fail($client_id)
-// → Returns fresh access token or calls api_error()
+{provider}_refresh_access_token_or_fail(string $client_id, array $tokens): array
+// → Returns the full refreshed token record (access_token, refresh_token,
+//   expires_at, ...) or calls api_error() on unrecoverable failure.
+// → Callers first gate on {provider}_token_is_expired($tokens) so refresh
+//   is called only when needed.
 
 // 3. Dial session creation
 pb_dialsession_selection.php
-// → Accept: { object_ids, object_type, portal_id, ... }
-// → Return: { session_token, temp_code, launch_url, ... }
+// → Accept: client_id + provider-specific selection shape (record IDs, object
+//   type, portal/org context — HubSpot uses `records[]` + `call_target`;
+//   Close uses `contact_ids` + `lead_ids`; Apollo uses `contact_ids`).
+// → Fetches full records from the provider API, normalizes them into a
+//   PhoneBurner dial-session payload, calls pb_call_dialsession(), stores
+//   session state, and returns:
+// → { session_token, temp_code, dialsession_url, launch_url, ... } via
+//   api_ok_flat(). `launch_url` is the PB URL with ?code=<temp_code>
+//   appended so the extension can subscribe to SSE with a single-use code.
 
 // 4. Connection state
 state.php
-// → Return: { connected: bool, profile: {...} }
+// → Return via api_ok_flat(): pb_ready, {provider}_ready booleans plus a
+//   profile snapshot (name, portal/hub id, etc.) if connected.
 
 // 5. Call logging (in {provider}_call_logger.php)
 function {provider}_log_call(array $state, array $payload, array $lastCall, string $status): void
@@ -252,8 +265,8 @@ Browser: content.js receives update → render overlay → navigate CRM
 ```
 
 - SSE uses `text/event-stream` and opts out of the JSON bootstrap wrapper via `PB_BOOTSTRAP_NO_JSON`.
-- Heartbeat every 30 seconds so intermediary proxies don't kill idle connections.
-- `register_shutdown_function()` cleans up the presence file on disconnect.
+- Keepalive comment (`: keepalive`) every 20 seconds so intermediary proxies don't kill idle connections; presence-file heartbeat every 120 seconds.
+- `register_shutdown_function()` logs the disconnect but intentionally does NOT delete the presence file — SSE reconnects are common and dropping presence on every disconnect churns the file for nothing. Presence files are removed only on true session timeout (line 245) or by cron cleanup for stale ones.
 - Temp codes are single-use; the extension refreshes by requesting a new code through `background.js` before reconnecting (content scripts can't call the API directly due to CORS on CRM origins).
 
 ### Webhook handlers
@@ -311,21 +324,23 @@ Per-CRM click-to-call activation is gated in `background.js` via `ctcShouldShowP
 Understanding how CRM context propagates through the extension is the single biggest gotcha for new contributors — it's the source of most "buttons disappearing" and "wrong buttons for object type" bugs.
 
 ```
-URL Detection (background.js)
-  ↓ detectCrmFromUrl() → { crmId, level, objectType }
+Content script loads on CRM tab
+  ↓ detectCrmContext() → { crmId, level, crmName, host, path }
+  ↓ sends CRM_CONTEXT message to background
   ↓
-Content Script Scan (content.js)
-  ↓ Scrapes page → { selectedIds, portalId, title }
+background.js caches → tabContexts[tabId]
+  ↓ (record-level detail — objectType, pageType, recordId, portalId —
+  ↓  is re-derived from the tab URL via detectCrmFromUrl on read)
   ↓
-Background Script Cache (background.js)
-  ↓ Merges URL + content sources → tabContexts[tabId]
+Popup opens → GET_CONTEXT message
+  ↓ background merges cached tab context + fresh URL detection
+  ↓ returns merged context → popup.js stores as ACTIVE_CTX
   ↓
-Popup UI (popup.js)
-  ↓ GET_CONTEXT message → ACTIVE_CTX
-  ↓
-Button Visibility Logic
-  ↓ Shows/hides buttons based on objectType
+Button visibility logic in popup.js decides which dial cards to show
+based on { crmId, level, objectType, connected-state-of-that-provider }.
 ```
+
+Selection data (which specific record IDs the user picked) is NOT part of this context flow — it's fetched on demand at launch time via provider-specific messages (`HS_LAUNCH_FROM_SELECTED`, `CLOSE_GET_SELECTED_IDS`, etc.) that ask the content script to re-scan the DOM at the moment of launch.
 
 **Key invariant:** URL-based context is authoritative for `objectType`. Content scripts may not have full context, especially on initial page load. When caching context, always merge — never let the content-script payload overwrite `objectType`. The specific rules (never inline `if (CURRENT_ENV === "dev")`, always merge context) live in CLAUDE.md.
 
