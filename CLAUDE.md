@@ -287,11 +287,13 @@ Context flow diagram (URL detection → content script scan → background cache
 
 **URL Pattern Detection:**
 
-| Object Type | URL Pattern | Object Type ID | Record URL Format |
-|-------------|-------------|----------------|-------------------|
-| Contacts | `/objects/0-1/` or `/contact/` | `0-1` | `https://app.hubspot.com/contacts/{portalId}/record/0-1/{contactId}` |
-| Companies | `/objects/0-2/` or `/company/` | `0-2` | `https://app.hubspot.com/contacts/{portalId}/record/0-2/{companyId}` |
-| Deals | `/objects/0-3/` or `/deal/` | `0-3` | `https://app.hubspot.com/contacts/{portalId}/record/0-3/{dealId}` |
+| Object Type | List URL Pattern | Record URL Pattern | Object Type ID |
+|-------------|------------------|--------------------|----------------|
+| Contact | `/objects/0-1/` | `/record/0-1/{contactId}` | `0-1` |
+| Company | `/objects/0-2/` | `/record/0-2/{companyId}` | `0-2` |
+| Deal | `/objects/0-3/` | `/record/0-3/{dealId}` | `0-3` |
+
+The full record URL is `https://app.hubspot.com/contacts/{portalId}/record/0-X/{recordId}` (or `app.{region}.hubspot.com/...` for regional subdomains — the extension supports these via the `hs_host` param, validated against `app(\.[a-z0-9-]+)?\.hubspot\.com` in `pb_dialsession_selection.php`). URL detection lives in `detectCrmFromUrl()` in `background.js` — grep there for the canonical regexes.
 
 **Field Name Differences:**
 
@@ -470,8 +472,10 @@ Each PB contact's `external_crm_data` array MUST contain exactly ONE entry: the 
 | Object being dialed | `crm_id` | `crm_name` |
 |--------------------|----------|------------|
 | Contact | raw HubSpot ID (`"12345"`) | `"hubspot"` |
-| Company | raw HubSpot ID (`"12345"`) | `"hubspotcompany"` |
-| Deal | raw HubSpot ID (`"12345"`) | `"hubspotdeal"` |
+| Company (dialed directly) | raw HubSpot ID (`"12345"`) | `"hubspotcompany"` |
+| Deal (dialed directly, e.g., click-to-call) | raw HubSpot ID (`"12345"`) | `"hubspotdeal"` |
+
+Note: dial sessions launched *from* a deal or company list resolve to the contacts associated with those parents. Those associated-contact records use `crm_name: "hubspot"` (they're contacts, not the parent entity). Only when you dial the parent entity directly — click-to-call on a deal's phone field, or a company's own phone — do you use `hubspotcompany` / `hubspotdeal`. See `ctcCrmName()` in `background.js` for the click-to-call mapping and `pb_dialsession_selection.php` for the dial-session mapping.
 
 **Why no breadcrumbs:** PB matches records on `(crm_id, crm_name)` against ANY entry in `external_crm_data`, not just the first one. If a contact's PB record carries a `{crm_id: companyId, crm_name: "hubspotcompany"}` breadcrumb pointing to its parent company, then dialing that company directly later would cause PB to match-and-update that contact record — overwriting the contact's name and phone with the company's. Even renaming the breadcrumb to a distinct `crm_name` (e.g., `hubspotrelatedcompany`) avoids the immediate overwrite but still creates a long-term dedup landmine if naming conventions ever shift or if PB later adds matching logic that looks at breadcrumb names. Safest is to keep the array to one entry per PB record and rely on the launch context (which HubSpot object list / sequence the dial came from) for any "related-to-what" reporting we need.
 
@@ -552,7 +556,7 @@ if (empty($pbContacts)) {
 
 3. **Check popup context:**
    ```javascript
-   // In popup.js console (F12 on popup)
+   // In popup.js console (right-click the popup → Inspect)
    console.log(ACTIVE_CTX);
    // Should match background context
    ```
@@ -854,7 +858,7 @@ server/public/api/crm/{provider}/
 
 3. **Verify no regressions**
    - Test both L1/L2 (generic scan) and L3 (OAuth API) flows
-   - Test a representative CRM at each level — for L2, pick one from `crm_config.js` with `level: 2` (Pipedrive/BnTouch/AgencyZoom/Salesforce). For L3, at minimum test HubSpot + Close since they're the highest-usage L3 providers.
+   - Test a representative CRM at each level — for L2, pick one from `crm_config.js` with `level: 2` (currently Salesforce, Pipedrive, AgencyZoom). For L3, at minimum test HubSpot + Close since they're the highest-usage L3 providers.
    - Verify existing sessions still work
 
 ---
@@ -906,7 +910,7 @@ curl -X POST http://127.0.0.1:8000/api/core/state.php \
 
 ### Browser Console Debugging
 
-Run these from the popup's DevTools (F12 on the popup) or the background service worker's DevTools (via chrome://extensions → Inspect service worker). `chrome.runtime.sendMessage` targets background handlers; the popup and background share the extension origin.
+Run these from the popup's DevTools (right-click the popup → Inspect — F12 doesn't work on Chrome extension popups) or from the background service worker's DevTools (chrome://extensions → Inspect views: service worker). `chrome.runtime.sendMessage` targets background handlers; the popup and background share the extension origin.
 
 ```javascript
 // Check CRM context (asks background, which merges cached tab context + URL detection)
@@ -1356,7 +1360,7 @@ Keep these answers in sync:
 ### Review Response Template
 
 **Q: Why do you need broad host permissions?**
-A: The extension operates on a variety of CRM websites — the current supported list is defined in `chrome-extension/crm_config.js` (HubSpot, Salesforce, Zoho, Pipedrive, Monday.com, Close, Apollo, BnTouch, AgencyZoom at time of writing). Host permissions are requested per-CRM only when the user activates the integration; they are not granted at install time.
+A: The extension operates on a variety of CRM websites — the current supported list is defined in `chrome-extension/crm_config.js` (HubSpot, Salesforce, Zoho, monday.com, Pipedrive, Close, Apollo, AgencyZoom at time of writing). Host permissions are requested per-CRM only when the user activates the integration; they are not granted at install time.
 
 **Q: What personal data do you collect?**
 A: Contact information (name, phone, email) from CRM lists to create dial sessions. Data is only collected when the user clicks "Launch Dial Session" and is immediately transmitted to PhoneBurner's API. No data is stored permanently or shared with third parties.

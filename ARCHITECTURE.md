@@ -238,9 +238,15 @@ Location: `server/public/sessions/{session_token}.json`
   "contacts_map": {
     "{crm_id}": {
       "crm_identifier": "{crm_id}",
+      "crm_name": "hubspot",
       "record_url": "https://...",
       "name": "...",
-      "phone": "..."
+      "first_name": "...",
+      "last_name": "...",
+      "phone": "...",
+      "email": "...",
+      "source_url": "...",
+      "source_label": "..."
     }
   }
 }
@@ -293,7 +299,9 @@ CRM record page
   ↓
 background.js
   ↓ POST /api/core/softphone_auth_code.php  → single-use code (5-min TTL)
-  ↓ opens BASE_URL/softphone.php?code=...&number=...&runtime=... in popup
+  ↓ opens BASE_URL/softphone.php?code=...&number=...&runtime=...
+  ↓                 &crm_id=...&crm_name=...   (identity travels as
+  ↓                 external_crm_data pairs)   in popup window
   ↓
 softphone.php
   ↓ exchanges code → client_id → PAT (server-side)
