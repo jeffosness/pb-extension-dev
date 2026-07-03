@@ -306,6 +306,7 @@ L3 providers are wired into eight places across the extension + server. It's eas
 - [ ] **`server/public/api/crm/{provider}/`** — provider directory with `{provider}_helpers.php`, `oauth_{provider}_start.php`, `oauth_{provider}_finish.php`, `oauth_disconnect.php`, `state.php`, `pb_dialsession_selection.php`
 - [ ] **`server/public/config.php` + `config.sample.php`** — `{PROVIDER}_CLIENT_ID` + `{PROVIDER}_CLIENT_SECRET` keys
 - [ ] **`/var/lib/pb-extension-dev/tokens/{provider}/`** — directory created on the server with 0700 permissions
+- [ ] **`server/public/metrics/crm_usage_dashboard.php`** — add every new endpoint that calls `load_pb_token()` or `load_{provider}_tokens()` to the appropriate array in `$token_read_whitelist`. Skipping this doesn't break anything, but every skipped call will show up as a false-positive anomaly on the Token Security dashboard and drown out real signals. (This is how the softphone endpoints from v0.8.0 ended up producing 10 phantom anomalies before we noticed.)
 
 **If you also added Phase 3 (call logging) in this PR:**
 

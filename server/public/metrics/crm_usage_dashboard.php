@@ -481,6 +481,11 @@ api_log('crm_usage_dashboard.view', [
             'user_settings_get', 'user_settings_save', 'track_crm_usage',
             'apollo_sequences', 'apollo_sequence_tasks',
             'hs_lists', 'hs_phone_properties',
+            // v0.8.0 click-to-call flow. Both endpoints call load_pb_token():
+            //   softphone_auth_code — mints a single-use code for the extension
+            //   softphone           — exchanges the code and embeds the PAT in
+            //                         the softphone iframe src
+            'softphone_auth_code', 'softphone',
         ],
         'hubspot' => [
             'state', 'oauth_hs_finish', 'oauth_disconnect',
