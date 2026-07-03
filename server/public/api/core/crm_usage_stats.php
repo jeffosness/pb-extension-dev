@@ -188,10 +188,15 @@ $today = date('Y-m-d');
 if (!$start) $start = $today;
 if (!$end) $end = $today;
 
-// Optional event_type filter — accepts 'dial_session' or 'click_to_call'.
-// When absent or blank, aggregate everything (existing behavior).
+// Optional event_type filter. When absent or blank, aggregate everything.
+// - 'dial_session'          batch launches from selection/list/tasks/scan
+// - 'click_to_call'         pill clicks (extension-side tracking)
+// - 'click_to_call_done'    dispositions (softphone_call_done webhook)
+// The `by_event_type` breakdown in the response always includes every event
+// type actually present in the log, regardless of filter, so callers can
+// diff clicks vs dispositions without two round-trips.
 $eventTypeFilter = (string)($_GET['event_type'] ?? '');
-if (!in_array($eventTypeFilter, ['', 'dial_session', 'click_to_call'], true)) {
+if (!in_array($eventTypeFilter, ['', 'dial_session', 'click_to_call', 'click_to_call_done'], true)) {
     $eventTypeFilter = '';
 }
 
