@@ -833,10 +833,13 @@ api_log('crm_usage_dashboard.view', [
     <div class="tab-pane" data-tab="ctc" id="tab-ctc" role="tabpanel" hidden>
       <h2 class="section-title">Click-to-Call Activity</h2>
       <div class="alert alert-info" style="margin: 0 0 12px;">
-        Click-to-Call is the single-call pill embedded on CRM record pages
-        and list rows. Metrics here are separate from dial sessions —
-        <code>event_type=click_to_call</code> in the underlying log. Gated to
-        dev-only extensions today; expect zero prod traffic until launch.
+        Click-to-Call is the single-call pill embedded on CRM record pages and list rows.
+        The daily chart overlays two series:
+        <strong>Calls initiated</strong> (extension-side <code>event_type=click_to_call</code>, fired when the pill is clicked)
+        vs <strong>Calls dispositioned</strong> (server-side <code>event_type=click_to_call_done</code>, fired by the
+        PhoneBurner <code>softphone_call_done</code> webhook after the user dispositions the call).
+        Any gap between the two lines is calls where the softphone popup was abandoned mid-flow —
+        watching this over time surfaces how often users skip disposition.
       </div>
 
       <div class="grid-4" id="ctc-summary-grid"></div>
@@ -934,7 +937,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let autoRefreshTimer = null;
 
   // Last loaded data (for CSV export)
-  let lastSse = null, lastCrm = null, lastAgent = null, lastCtc = null;
+  let lastSse = null, lastCrm = null, lastAgent = null, lastCtc = null, lastCtcDone = null;
 
   // Cached "by user" rows for live filter without re-fetching
   let lastByUserRows = [];
@@ -1003,26 +1006,29 @@ document.addEventListener("DOMContentLoaded", () => {
   function loadDashboard() {
     const dr  = getDateRange(currentRange);
     const t   = Date.now();
-    const sseUrl   = sseEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
-    const crmUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
-    const ctcUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call&t=" + t;
-    const agentUrl = agentEndpoint + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    const sseUrl       = sseEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    const crmUrl       = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    const ctcUrl       = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call&t=" + t;
+    const ctcDoneUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call_done&t=" + t;
+    const agentUrl     = agentEndpoint + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
 
     Promise.all([
       fetch(sseUrl).then(r => { if (!r.ok) throw new Error("SSE HTTP " + r.status); return r.json(); }),
       fetch(crmUrl).then(r => { if (!r.ok) throw new Error("CRM HTTP " + r.status); return r.json(); }),
       fetch(ctcUrl).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(ctcDoneUrl).then(r => r.ok ? r.json() : null).catch(() => null),
       fetch(agentUrl).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([sseResp, crmResp, ctcResp, agentResp]) => {
-      const sse   = normalize(sseResp);
-      const crm   = normalize(crmResp);
-      const ctc   = ctcResp ? normalize(ctcResp) : null;
-      const agent = agentResp ? normalize(agentResp) : null;
+    ]).then(([sseResp, crmResp, ctcResp, ctcDoneResp, agentResp]) => {
+      const sse     = normalize(sseResp);
+      const crm     = normalize(crmResp);
+      const ctc     = ctcResp     ? normalize(ctcResp)     : null;
+      const ctcDone = ctcDoneResp ? normalize(ctcDoneResp) : null;
+      const agent   = agentResp   ? normalize(agentResp)   : null;
 
       if (!sseResp?.ok || !sse) { showError("SSE stats API error."); return; }
       if (!crmResp?.ok || !crm) { showError("CRM stats API error."); return; }
 
-      lastSse = sse; lastCrm = crm; lastAgent = agent; lastCtc = ctc;
+      lastSse = sse; lastCrm = crm; lastAgent = agent; lastCtc = ctc; lastCtcDone = ctcDone;
 
       msgEl.innerHTML = "";
       contentEl.style.display = "block";
@@ -1150,7 +1156,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // ====================================================================
       // Click-to-Call tab (populated from a filtered fetch of crm_usage_stats)
       // ====================================================================
-      renderCtc(ctc);
+      renderCtc(ctc, ctcDone);
 
       // ====================================================================
       // Section 4: Productivity
@@ -1360,7 +1366,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Render the Click-to-Call tab from a filtered crm_usage_stats response
   // (event_type=click_to_call). ctc may be null if the API errored — the
   // tab renders zeroed-out stats in that case so it always looks intentional.
-  function renderCtc(ctc) {
+  function renderCtc(ctc, ctcDone) {
     const summaryGrid = document.getElementById("ctc-summary-grid");
     summaryGrid.innerHTML = "";
 
@@ -1368,19 +1374,48 @@ document.addEventListener("DOMContentLoaded", () => {
     const uniqueUsers = ctc?.unique_users || 0;
     const perDay = ctc?.per_day || [];
     const daysActive = perDay.filter(d => (d.total_events || 0) > 0).length;
-    const crmCount = ctc ? Object.keys(ctc.by_crm_id || {}).length : 0;
 
-    summaryGrid.appendChild(statCard("Total CTC calls", String(total)));
+    // Disposition side (softphone_call_done webhook events).
+    const totalDone = ctcDone?.total_events || 0;
+    const perDayDone = ctcDone?.per_day || [];
+
+    // Disposition rate: what % of clicked calls ended with a disposition
+    // fired back through the softphone_call_done webhook. Anything under
+    // 100% is calls where the user clicked the pill but never dispositioned
+    // (closed the popup, walked away, etc.). Over 100% happens if a call
+    // dispositions after the click-to-call log line has already rotated to
+    // the next day — real but rare.
+    const dispositionRate = (total > 0)
+      ? Math.min(100, Math.round((totalDone / total) * 100))
+      : 0;
+    const rateLabel = (total > 0) ? (dispositionRate + "%") : "N/A";
+
+    summaryGrid.appendChild(statCard("Calls initiated", String(total)));
+    summaryGrid.appendChild(statCard("Calls dispositioned", String(totalDone)));
+    summaryGrid.appendChild(statCard("Disposition rate", rateLabel));
     summaryGrid.appendChild(statCard("Unique users", String(uniqueUsers)));
-    summaryGrid.appendChild(statCard("Days with activity", String(daysActive)));
-    summaryGrid.appendChild(statCard("CRMs using CTC", String(crmCount)));
 
-    // Time-series chart (calls per day)
+    // Time-series chart — overlay initiated vs dispositioned so any gap is
+    // immediately visible. If the two lines track together, drift is low.
+    // If "Dispositioned" runs materially below "Initiated" day over day,
+    // that's calls where the softphone popup was abandoned mid-flow.
     if (hasChartJs) {
-      const dailyLabels = perDay.map(d => shortDate(d.date));
-      const dailyValues = perDay.map(d => d.total_events || 0);
+      // Build a merged date axis that includes both series' dates.
+      const dateSet = new Set();
+      perDay.forEach(d => dateSet.add(d.date));
+      perDayDone.forEach(d => dateSet.add(d.date));
+      const allDates = Array.from(dateSet).sort();
+
+      const initByDate = new Map(perDay.map(d => [d.date, d.total_events || 0]));
+      const doneByDate = new Map(perDayDone.map(d => [d.date, d.total_events || 0]));
+
+      const dailyLabels = allDates.map(shortDate);
+      const dailyInitiated = allDates.map(d => initByDate.get(d) || 0);
+      const dailyDispositioned = allDates.map(d => doneByDate.get(d) || 0);
+
       renderLineChart("chart-ctc-daily", dailyLabels, [
-        { label: "CTC calls", data: dailyValues, color: "#ff7a59" },
+        { label: "Calls initiated (pill clicks)", data: dailyInitiated, color: "#ff7a59" },
+        { label: "Calls dispositioned (softphone webhook)", data: dailyDispositioned, color: "#3e6ff0" },
       ]);
 
       // Per-CRM doughnut (only meaningful once multiple CRMs are wired up,

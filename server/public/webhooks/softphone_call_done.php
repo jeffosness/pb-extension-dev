@@ -68,18 +68,76 @@ if (is_array($externalCrm) && isset($externalCrm[0]) && is_array($externalCrm[0]
     $crmName = $externalCrm[0]['crm_name'] ?? null;
 }
 
+$disposition = $payload['disposition'] ?? null;
+$duration    = $payload['duration']    ?? null;
+$connected   = $payload['connected']   ?? null;
+$callId      = $payload['call_id']     ?? null;
+$status      = $payload['status']      ?? null;
+
 log_msg('softphone_call_done: ' . json_encode([
     'crm_id'           => $crmId,
     'crm_name'         => $crmName,
     'has_external_crm' => is_array($externalCrm),
     'record_id'        => $payload['recordId']   ?? ($payload['record_id']   ?? null),
     'record_type'      => $payload['recordType'] ?? ($payload['record_type'] ?? null),
-    'status'           => $payload['status']      ?? null,
-    'disposition'      => $payload['disposition'] ?? null,
-    'duration'         => $payload['duration']    ?? null,
-    'connected'        => $payload['connected']   ?? null,
-    'call_id'          => $payload['call_id']     ?? null,
+    'status'           => $status,
+    'disposition'      => $disposition,
+    'duration'         => $duration,
+    'connected'        => $connected,
+    'call_id'          => $callId,
 ]));
+
+// ── Track disposition to the CRM usage log ─────────────────────────────────
+// Best-effort: appends a JSON line to metrics/crm_usage-YYYY-MM-DD.log with
+// event_type=click_to_call_done. Paired with the extension-side event_type=
+// click_to_call entry from background.js's CLICK_TO_CALL handler, this lets
+// the CTC dashboard compare "calls initiated" (clicks) vs "calls
+// dispositioned" (this webhook) and surface the drop-off rate — expected
+// because a user can close the softphone popup mid-call without dispositioning.
+//
+// We do NOT have client_id / member_user_id here (the webhook is HMAC-authed
+// rather than session-authed, so it doesn't know who the extension user is).
+// That's fine for this metric — we only need aggregate counts + crm_id
+// distribution + disposition breakdown. Individual attribution isn't the goal.
+//
+// A write failure MUST NOT block the 200 back to PB. Wrapped tight.
+try {
+    $publicDir  = dirname(__DIR__); // webhooks -> public
+    $metricsDir = $publicDir . '/metrics';
+    ensure_dir($metricsDir);
+
+    $logFile = safe_file_path($metricsDir, 'crm_usage-' . date('Y-m-d') . '.log');
+    if ($logFile) {
+        $trackEntry = [
+            'ts'             => date('c'),
+            'client_id_hash' => null,        // unknown at webhook time
+            'member_user_id' => null,        // unknown at webhook time
+            'event_type'     => 'click_to_call_done',
+            'crm_id'         => $crmId,
+            'crm_name'       => $crmName,
+            'host'           => '',
+            'path'           => '',
+            'level'          => 0,
+            'object_type'    => '',
+            'launch_source'  => '',
+            'selected_count' => 1,
+            // CTC-disposition-specific fields (not present on click entries):
+            'disposition'    => $disposition,
+            'duration'       => $duration,
+            'connected'      => $connected,
+            'call_id'        => $callId,
+            'status'         => $status,
+            'ua'             => null,
+        ];
+        @file_put_contents(
+            $logFile,
+            json_encode($trackEntry, JSON_UNESCAPED_SLASHES) . PHP_EOL,
+            FILE_APPEND | LOCK_EX
+        );
+    }
+} catch (\Throwable $e) {
+    log_msg('softphone_call_done.track_error: ' . $e->getMessage());
+}
 
 // Capture the full raw payload ONLY when debugging is explicitly enabled, so we
 // can learn the real schema during the test without leaking PII in normal ops.
