@@ -881,12 +881,24 @@ api_log('crm_usage_dashboard.view', [
         <thead>
           <tr>
             <th>Member User ID</th>
-            <th style="text-align:right;">CTC calls</th>
+            <th style="text-align:right;">Initiated</th>
+            <th style="text-align:right;">Dispositioned</th>
+            <th style="text-align:right;">Rate</th>
             <th>CRMs used</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
+      <p style="font-size:12px; color:#666; margin-top:8px;">
+        Dispositioned counts key on <code>payload.custom_data.pb_user_id</code> from the
+        <code>softphone_call_done</code> webhook (PhoneBurner echoes our custom_data back
+        on every call webhook). Same <code>member_user_id</code> the extension uses for
+        initiated entries — so this table shows one row per agent with both sides side by
+        side. If dispositioned stays at 0 while initiated is non-zero, either the agent
+        didn't disposition their calls (real signal) or PB stopped populating custom_data
+        (regression — check the softphone_call_done log line's <code>pb_user_id</code>
+        field).
+      </p>
     </div>
 
     <!-- Tab: Detail (Detailed Breakdown by Hostname & Level) -->
@@ -1443,21 +1455,43 @@ document.addEventListener("DOMContentLoaded", () => {
     if (bySource.list) byPage["List view"] = bySource.list;
     fillTableFriendly("ctc-by-page-table", byPage, k => k);
 
-    // Per-user activity table (mirrors the main Users tab, but scoped to CTC)
+    // Per-user activity table. Merges initiated (extension-side clicks) with
+    // dispositioned (softphone webhook events) keyed on member_user_id.
+    // The dispositioned side only populates if PhoneBurner includes
+    // payload.agent.user_id in the softphone_call_done webhook — see the
+    // caveat below the table.
     const ctcUserTbody = document.querySelector("#ctc-by-user-table tbody");
     ctcUserTbody.innerHTML = "";
-    const ctcByUser = ctc?.by_user || {};
-    const ctcRows = Object.entries(ctcByUser)
-      .map(([uid, info]) => ({
+
+    const ctcByUser     = ctc?.by_user     || {};
+    const ctcDoneByUser = ctcDone?.by_user || {};
+
+    // Union of user IDs across both sides.
+    const userIds = new Set([
+      ...Object.keys(ctcByUser),
+      ...Object.keys(ctcDoneByUser),
+    ]);
+
+    const ctcRows = Array.from(userIds).map(uid => {
+      const init = ctcByUser[uid]     || { total: 0, by_crm: {} };
+      const done = ctcDoneByUser[uid] || { total: 0 };
+      const initiated     = init.total || 0;
+      const dispositioned = done.total || 0;
+      const rate = (initiated > 0)
+        ? Math.min(100, Math.round((dispositioned / initiated) * 100)) + "%"
+        : "N/A";
+      return {
         uid,
-        total: info.total || 0,
-        byCrm: info.by_crm || {},
-      }))
-      .sort((a, b) => b.total - a.total);
+        initiated,
+        dispositioned,
+        rate,
+        byCrm: init.by_crm || {},
+      };
+    }).sort((a, b) => b.initiated - a.initiated);
 
     if (ctcRows.length === 0) {
       ctcUserTbody.innerHTML =
-        '<tr><td colspan="3" class="empty-msg">No click-to-call activity yet in this date range.</td></tr>';
+        '<tr><td colspan="5" class="empty-msg">No click-to-call activity yet in this date range.</td></tr>';
       return;
     }
 
@@ -1469,7 +1503,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const tr = document.createElement("tr");
       tr.innerHTML =
         '<td><code>' + esc(row.uid) + '</code></td>' +
-        '<td class="num">' + row.total + '</td>' +
+        '<td class="num">' + row.initiated + '</td>' +
+        '<td class="num">' + row.dispositioned + '</td>' +
+        '<td class="num">' + row.rate + '</td>' +
         '<td>' + crmList + '</td>';
       ctcUserTbody.appendChild(tr);
     });

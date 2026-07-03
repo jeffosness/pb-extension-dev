@@ -2,7 +2,71 @@
 // server/public/webhooks/call_done.php
 //
 // PhoneBurner webhook: api_calldone
+// Fired by PhoneBurner when a call in a dial session is dispositioned.
 // Updates session state + per-day per-agent stats so SSE + overlay can show progress.
+//
+// ── PAYLOAD SHAPE (real example, captured 2026-06-18) ──────────────────────
+// This is the DIAL-SESSION webhook envelope. It is DIFFERENT from the
+// softphone_call_done.php envelope — do not cross-pollinate. Key differences:
+//   * agent identity here is `payload.agent.user_id` (softphone uses
+//     `payload.custom_data.pb_user_id`).
+//   * `custom_data` here is an empty ARRAY (softphone sends it as an OBJECT).
+//   * `call_id` here is an INTEGER (softphone sends a UUID string).
+//   * `contact` here is RICH — user_id, lead_id, external_id, phones[], notes,
+//     custom_fields, call_history[] (softphone sends only crm_id/crm_name/phone).
+//   * `ds_id` (dial session ID) is present here, absent on softphone.
+//
+// Trimmed example (dropping heavy PII fields for readability — those are still
+// present in real payloads, so treat this envelope as PII-bearing and only log
+// selectively):
+//
+//   {
+//     "status": "Interested",                // disposition text
+//     "duration": 11,                        // seconds
+//     "start_time": "2026-06-18 10:51:04",
+//     "end_time":   "2026-06-18 10:51:15",
+//     "call_id": 3024188937,                 // integer
+//     "ds_id":   46858573,                   // dial session ID
+//     "connected": "1",                      // stringified 0/1
+//     "recording_link":         "/recording/…/recording.mp3",
+//     "recording_link_public":  "/recording/pub/…mp3",
+//     "recording_url":          "http://www.phoneburner.com/recording/…mp3",
+//     "recording_url_public":   "http://www.phoneburner.com/recording/pub/…mp3",
+//     "direction": "outbound",
+//     "call_notes": [],                      // agent-typed strings (PII)
+//     "contact": {                           // PII-heavy — see below
+//       "user_id": 1217944038,               // PB internal contact id
+//       "lead_id": "16138032",
+//       "external_id": "",                   // populated if we set external_crm_data
+//       "phone": "…", "first_name": "…", "last_name": "…",
+//       "phones": [...], "primary_address": {...}, "addresses": [...],
+//       "description": "…", "notes": "…entire call history in text…",
+//       "primary_email": "…", "emails": ["…"],
+//       "account": { "company_name": null, "title": null },
+//       "tags": [], "calls": { "total_calls": 22, "last_call_time": "…" }
+//     },
+//     "owner": { "owner_id": 673245032, "first_name": "…", "last_name": "…",
+//                "username": "…@…", "email": "…@…" },
+//     "agent": { "user_id": "673245032", "first_name": "…", "last_name": "…",
+//                "username": "…@…", "email": "…@…" },
+//     "custom_fields": { "Manager": "…", "Custom Date": "…", ... },
+//     "typed_custom_fields": [ { "type": "6", "name": "Manager", "value": "…" }, ... ],
+//     "custom_data": [],                     // EMPTY ARRAY on dial-session (unlike softphone)
+//     "outbound_caller_id": "+18885577291",
+//     "call_history": [ { "call_id": "…", "datetime": "…", "phone_number": "…",
+//                         "connected": true|false }, ... ],
+//     "lead_source": { "lead_source_id": 22126, "lead_source_name": "API" },
+//     "total_call_attempts": 19,
+//     "follow_up": "2026-06-25 00:00:00",
+//     "folder": { "id": "13186", "name": "Contacts" },
+//     "events": { "last_event": null, "next_event": null }
+//   }
+//
+// PII fields to keep OUT of any casual log line: contact.first_name /
+// last_name / phone / phones / primary_address / addresses / description /
+// notes / primary_email / emails, call_notes, owner.email, agent.email.
+// The initial log line at the top of the file only records status / connected
+// / duration / has_agent for exactly this reason.
 
 require_once __DIR__ . '/../utils.php';
 
