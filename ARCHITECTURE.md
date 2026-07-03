@@ -319,7 +319,16 @@ POST /webhooks/softphone_call_done.php
   ↓ v1: verify signature, parse, log non-PII disposition, return 200
 ```
 
-The v1 webhook handler intentionally stays minimal — it verifies the signature, extracts identity/disposition fields, and logs them non-PII. Forwarding the disposition into the CRM (via each provider's call logger) and relaying to a side-panel UI are follow-up phases; the file header calls this out explicitly.
+The v1 webhook handler verifies the signature, extracts identity/disposition fields, logs them non-PII, and appends a `click_to_call_done` entry to `metrics/crm_usage-YYYY-MM-DD.log` for the dashboard's disposition-rate metric. Forwarding the disposition into the CRM (via each provider's call logger) and relaying to a side-panel UI remain follow-up phases; the file header calls this out explicitly.
+
+**Payload shape** — full example lives in the file header of `softphone_call_done.php`; the fields the dashboard tracking relies on are:
+
+- `payload.contact.crm_id` / `payload.contact.crm_name` — record identity (NOT `payload.external_crm_data` like the dial-session webhook)
+- `payload.custom_data.pb_user_id` — agent's PhoneBurner `member_user_id`. Same key we use for per-user attribution on the extension side, so the dashboard's per-user table shows initiated + dispositioned side by side for each agent.
+- `payload.status` — disposition text (e.g. "Connected", "No Answer"). NOT `payload.disposition` — that field doesn't exist on this envelope.
+- `payload.duration`, `payload.call_id`, `payload.direction` — call metadata.
+
+**How `custom_data` gets populated:** PhoneBurner's softphone runtime bakes `custom_data.pb_user_id` into every webhook it fires when a bearer token is present. We don't have to thread it ourselves — passing the PAT into the iframe src (Bearer token confinement below) is enough for PB to know which member is dialing and echo it back.
 
 Security properties that differ from the dial-session flow:
 
