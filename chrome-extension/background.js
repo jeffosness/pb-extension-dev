@@ -483,13 +483,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // (recordId came from the URL). event_type disambiguates from dial-session
     // uses of the same launch_source values on the server side.
     try {
+      // object_type telemetry: prefer per-row identity from the pill click;
+      // fall through to the page context's objectType; then to a page-aware
+      // default. Don't hard-default to "contact" — on tasks pages the pill
+      // may fire with no per-row identity (unbound task, or ambiguous
+      // multi-contact row bailed to null), and mislabeling those as
+      // "contact" skews the CTC dashboard.
+      var objType =
+        msg.objectType ||
+        ctx.objectType ||
+        (ctx.pageType === "tasks" ? "task" : "unknown");
       api("core/track_crm_usage.php", {
         event_type: "click_to_call",
         crm_id: ctx.crmId || "unknown",
         host: ctx.host || "",
         path: ctx.path || "",
         level: ctx.level || 3,
-        object_type: msg.objectType || ctx.objectType || "contact",
+        object_type: objType,
         launch_source: msg.recordId ? "list" : "record",
         selected_count: 1,
       }).catch(function () {});
