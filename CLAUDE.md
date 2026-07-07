@@ -14,6 +14,7 @@
 - **[TESTING.md](TESTING.md)** — automated tests: what's covered, how to run locally, how to add tests. CI enforces green tests + a `## Test Impact` declaration on PRs that touch security-critical files.
 - **[SECURITY.md](SECURITY.md)** — security model, what we protect against, what we explicitly DON'T, and the files that trigger the **Security Impact CI check**. Read this before touching `utils.php` token functions, OAuth endpoints, call loggers, webhooks, or `sse.php`.
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — end-to-end provisioning runbook for standing up the backend on a fresh host.
+- **[LESSONS.md](LESSONS.md)** — append-only log of production incidents and the process changes they drove. Skim before designing a new gate or CI check — chances are a past incident already argues for or against it.
 - **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** — customer-facing knowledge base (also surfaced at `https://extension.phoneburner.biz/kb.php`).
 
 ---
