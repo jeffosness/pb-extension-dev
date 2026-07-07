@@ -2118,11 +2118,11 @@ function pbCtcFindHubspot() {
       });
     }
 
-    // ── 3. Tasks table (0-27): the phone cell uses a different property
-    // name (hs_task_contact_phone) than the contact/company list views. The
-    // dialable identity is the ASSOCIATED CONTACT, not the task itself —
-    // grab the contactId from the association link in the same row so the
-    // pill's click carries per-row identity that the softphone can resolve.
+    // ── 3. Newer Tasks table (/objects/0-27/): phone cell IDs follow the
+    // object-based pattern cell-0-27-hs_task_contact_phone-{taskId}. The
+    // dialable identity is the ASSOCIATED CONTACT — grab the contactId
+    // from the association link in the same row so pill clicks carry
+    // per-row identity the softphone can resolve.
     var taskPhoneCells = document.querySelectorAll(
       'td[id^="cell-0-27-hs_task_contact_phone-"]'
     );
@@ -2159,6 +2159,54 @@ function pbCtcFindHubspot() {
         number: taskNum,
         recordId: contactId,        // may be null for tasks with no contact association
         objectType: contactId ? "contact" : null,
+      });
+    }
+
+    // ── 4. Classic Task Queue (/tasks/{portalId}/view/): completely different
+    // cell-id namespace than the object-based views above. Phone cell is
+    // td[id="cell-DEFAULT_NAMESPACE-contactPhoneNumber-{taskId}"] with a bare
+    // <span>{phone}</span> inside. The contact ID isn't exposed via
+    // data-test-id here — it's only in the href of the association cell's
+    // link (cell-DEFAULT_NAMESPACE-association-0-204-{taskId} → contains
+    // <a href="/contacts/{portalId}/record/0-1/{contactId}">Name</a>).
+    var classicTaskPhoneCells = document.querySelectorAll(
+      'td[id^="cell-DEFAULT_NAMESPACE-contactPhoneNumber-"]'
+    );
+    for (var n = 0; n < classicTaskPhoneCells.length; n++) {
+      var classicCell = classicTaskPhoneCells[n];
+      var classicText = classicCell.textContent || "";
+      // Skip empty phone cells (rendered as "--").
+      if (!classicText || classicText.trim() === "--") continue;
+      var classicNum = pbCtcNormalizePhone(classicText);
+      if (!classicNum) continue;
+
+      // Extract contactId from the row's contact-association cell's link href.
+      var classicRow = classicCell.closest("tr");
+      var classicContactId = null;
+      if (classicRow) {
+        var classicAssocCell = classicRow.querySelector(
+          'td[id^="cell-DEFAULT_NAMESPACE-association-0-204-"]'
+        );
+        if (classicAssocCell) {
+          var classicLink = classicAssocCell.querySelector(
+            'a[href*="/record/0-1/"]'
+          );
+          if (classicLink) {
+            var hrefMatch = (classicLink.getAttribute("href") || "")
+              .match(/\/record\/0-1\/(\d+)/);
+            if (hrefMatch) classicContactId = hrefMatch[1];
+          }
+        }
+      }
+
+      // The phone value is a bare <span>{phone}</span> child of the <td>.
+      // Anchor after that span so the pill sits inline with the number.
+      var classicAnchor = classicCell.querySelector("span") || classicCell;
+      out.push({
+        el: classicAnchor,
+        number: classicNum,
+        recordId: classicContactId,
+        objectType: classicContactId ? "contact" : null,
       });
     }
   } catch (e) {}
