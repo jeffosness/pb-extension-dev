@@ -518,6 +518,16 @@ api_log('crm_usage_dashboard.view', [
     //     but actual enumeration looks like (1 IP × many DISTINCT client_ids).
     //     One client repeatedly missing one provider = user without that CRM
     //     connected, opening popup a lot.
+    //   - The enumeration rule ALSO ignores IPs that had ANY successful token
+    //     reads in the window. A corporate NAT with N employees produces the
+    //     same distinct-cid signature as an enumeration attacker, but a NAT
+    //     will have some employees who successfully authenticate — an actual
+    //     spray-attacker won't. Adding this compensating check killed the
+    //     "6 employees behind an AWS VPN" false positive we hit 2026-07-06.
+    //     The trade-off: an attacker who successfully steals one token during
+    //     a spray campaign is no longer flagged by THIS rule, but they'd
+    //     already have escalated to a bigger concern (successful token theft),
+    //     which is a different alert to build.
     $BURST_THRESHOLD             = 50;          // reads/5min from same client
     $BURST_EXCLUDE_ENDPOINTS     = ['state'];   // endpoints exempt from burst
     $ENUM_DISTINCT_CIDS_PER_IP   = 5;           // distinct cids/IP triggers enum
@@ -576,14 +586,26 @@ api_log('crm_usage_dashboard.view', [
                 }
 
                 // Anomaly check 3: enumeration. True enumeration = one IP
-                // probing MANY DISTINCT client_ids. We track both raw miss
-                // counts and the set of unique cids per IP.
-                if ($evt === 'read' && $res === 'missing' && $ip !== '') {
+                // probing MANY DISTINCT client_ids AND finding zero. Track
+                // both raw miss counts + distinct cids per IP, AND whether
+                // the IP produced ANY successful reads (a real spray hits
+                // nothing; a corporate NAT hits plenty for its connected
+                // employees).
+                if ($evt === 'read' && $ip !== '') {
                     if (!isset($miss_by_ip[$ip])) {
-                        $miss_by_ip[$ip] = ['count' => 0, 'sample' => $r, 'cids' => []];
+                        $miss_by_ip[$ip] = [
+                            'count' => 0,
+                            'sample' => $r,
+                            'cids' => [],
+                            'has_success' => false,
+                        ];
                     }
-                    $miss_by_ip[$ip]['count']++;
-                    if ($cid !== '') $miss_by_ip[$ip]['cids'][$cid] = true;
+                    if ($res === 'missing') {
+                        $miss_by_ip[$ip]['count']++;
+                        if ($cid !== '') $miss_by_ip[$ip]['cids'][$cid] = true;
+                    } elseif ($res === 'ok') {
+                        $miss_by_ip[$ip]['has_success'] = true;
+                    }
                 }
 
                 // Anomaly check 4: delete spike — many tokens deleted in a
@@ -612,11 +634,18 @@ api_log('crm_usage_dashboard.view', [
         // Promote IPs probing MANY DISTINCT client_ids — true enumeration shape.
         // One client missing many times is normal (user without that CRM connected);
         // one IP missing many DIFFERENT client_ids is the actual scan signature.
+        //
+        // Compensating filter: if this IP ALSO produced any successful reads
+        // in the window, it's a corporate NAT (or shared egress) with a mix
+        // of connected and unconnected users behind it — not enumeration.
+        // Real spray-attackers hit universally missing. See the tunables
+        // block above for the trade-off rationale.
         foreach ($miss_by_ip as $ip => $info) {
+            if ($info['has_success']) continue;
             $distinct = count($info['cids']);
             if ($distinct >= $ENUM_DISTINCT_CIDS_PER_IP) {
                 $token_summary['anomalies'][] = $info['sample'] + [
-                    'why' => 'Possible enumeration: ' . $info['count'] . ' missing-token reads from IP ' . htmlspecialchars($ip) . ' across ' . $distinct . ' distinct client_ids in 24h',
+                    'why' => 'Possible enumeration: ' . $info['count'] . ' missing-token reads from IP ' . htmlspecialchars($ip) . ' across ' . $distinct . ' distinct client_ids in 24h (no successful reads from this IP in the window)',
                 ];
             }
         }
