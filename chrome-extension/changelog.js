@@ -16,6 +16,13 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.1": {
+    title: "What's Fixed in v0.8.1",
+    items: [
+      "Click-to-Call and Task-Based Dial Session now work on HubSpot's newer \"All Tasks\" table view (the one at /objects/0-27/), not just the classic Task Queue",
+      "Cleared up a console error some HubSpot users were seeing on page load"
+    ]
+  },
   "0.8.0": {
     title: "What's New in v0.8.0",
     items: [
