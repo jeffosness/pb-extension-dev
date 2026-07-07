@@ -1,11 +1,27 @@
 <!--
   Thanks for contributing! Fill in the sections below.
-  The KB Impact section is required — CI will fail the PR if it's missing or inconsistent.
+  CI enforces required sections based on your PR's risk tier and the files
+  you touched — the KB, Security, Test, and Risk Tier check workflows will
+  fail the PR if something's missing or inconsistent.
 -->
 
 ## Summary
 
 <!-- 1–3 sentences describing what this PR does and why. -->
+
+## Risk Tier
+
+<!--
+  CI auto-labels this PR with `risk:tier-N`. Reference:
+  - Tier 0 — docs, dashboard, tests, tooling, marketing, changelog. Ships freely.
+  - Tier 1 — extension code (background/content/popup/crm_config/softphone_config),
+             popup.html, manifest.json, most api/ endpoints, softphone.php,
+             softphone_host.js. Requires "Adversarial Review" below.
+  - Tier 2 — security-critical: utils.php, api/core/bootstrap.php, webhooks,
+             sse.php, config.sample.php, oauth_* endpoints, *_call_logger.php,
+             SECURITY.md. Requires Adversarial Review AND 4-hour cool-off
+             from PR open before merge (label `hotfix` or `urgent` to override).
+-->
 
 ## KB Impact
 
@@ -39,6 +55,49 @@ This PR's effect on automated tests. **Required if this PR touched `server/publi
 - [ ] **Test follow-up tracked** — paste the follow-up issue/PR link and a one-line rationale for deferring: `<link>` — <why>
 
 See [TESTING.md](../TESTING.md) for what's covered today, how to run locally, and the follow-up test targets.
+
+## Adversarial Review
+
+<!--
+  REQUIRED for Tier 1 and Tier 2 PRs. Delete this section for Tier 0.
+
+  Argue against your own change. Flip your frame from "help this succeed"
+  to "find the flaw." What's the most likely way this ships wrong?
+
+  Fill in at least two lines of substantive content — placeholder HTML
+  comments don't count. CI enforces this for Tier 1+.
+
+  Examples of good adversarial questions to answer:
+    - What assumption am I making about the environment that could be wrong?
+    - What edge case did I NOT test?
+    - What upstream code depends on this that I haven't traced?
+    - What happens if my change runs against unexpected input shape?
+    - What if the third-party API/DOM I'm coding against changes?
+    - Compensating factor — why we're proceeding anyway despite the above.
+-->
+
+## Post-Deploy Verification
+
+<!--
+  REQUIRED if this PR changes production behavior (Tier 1 or 2 that touches
+  something a customer or the dashboard will observe). Delete this section
+  if the PR is docs-only or Tier 0.
+
+  List the SPECIFIC checks you (or a future teammate) will perform within
+  24 hours of the prod tag going out. Written down so nothing is skipped
+  and so onboarding contributors know what "confirming a deploy worked"
+  looks like in practice.
+
+  Examples:
+    - [ ] Refresh `extension.phoneburner.biz/metrics/crm_usage_dashboard.php`
+          and confirm the "Anomalies" count reflects the expected change.
+    - [ ] `sudo grep '<pattern>' /opt/pb-extension/var/log/app.log | tail`
+          shows the expected shape.
+    - [ ] Trigger a click-to-call and disposition it; confirm both events
+          reach the dashboard.
+    - [ ] Rollback plan if the above fails: `git tag prod-vX.Y.Z-rollback
+          <previous-good-commit>` and push.
+-->
 
 ## Test Plan
 

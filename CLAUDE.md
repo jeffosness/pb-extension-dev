@@ -741,6 +741,18 @@ The **invariants** that MUST hold when adding a provider (kept here because they
 
 ## Deployment Checklist
 
+### Risk-tier gates (automatic)
+
+Every PR gets classified by CI into `risk:tier-0`, `risk:tier-1`, or `risk:tier-2` based on the files it touches. See [`.github/workflows/risk-tier-check.yml`](.github/workflows/risk-tier-check.yml) for the exact file patterns, and the [PR template](.github/pull_request_template.md) for what each tier requires.
+
+- **Tier 0** (docs, dashboard, tests, tooling, marketing, changelog): ships freely. Only the KB Impact check applies.
+- **Tier 1** (extension code, popup UI, most api/ endpoints, softphone.php): requires a filled-in "Adversarial Review" section in the PR body. CI enforces this.
+- **Tier 2** (security-critical: `utils.php`, `bootstrap.php`, webhooks, `sse.php`, `config.sample.php`, OAuth endpoints, `*_call_logger.php`, `SECURITY.md`): requires Adversarial Review AND a 4-hour cool-off from PR open before merge. Add the `hotfix` or `urgent` label to override cool-off for genuine emergencies. Also requires a Security Impact declaration (see SECURITY.md).
+
+**Post-Deploy Verification** is required in the PR body for anything Tier 1+ that changes production behavior — write the specific checks you'll perform within 24h of the prod tag. Not CI-enforced, but a written-down habit so nothing is skipped and future contributors know what "confirming a deploy worked" looks like.
+
+**LESSONS.md** is our incident log. When something ships wrong (a payload-shape guess, a false-positive anomaly, a missed customer-facing surface), add an entry there so the failure mode isn't trapped in one person's head.
+
 ### Pre-PR Checklist (KB Impact — required on every PR)
 
 **Every** PR must declare its KB impact. CI (`.github/workflows/kb-impact-check.yml`) enforces this against the `## KB Impact` section of the PR body — PRs cannot merge without a checked box.
