@@ -2117,6 +2117,50 @@ function pbCtcFindHubspot() {
         objectType: objectType,
       });
     }
+
+    // ── 3. Tasks table (0-27): the phone cell uses a different property
+    // name (hs_task_contact_phone) than the contact/company list views. The
+    // dialable identity is the ASSOCIATED CONTACT, not the task itself —
+    // grab the contactId from the association link in the same row so the
+    // pill's click carries per-row identity that the softphone can resolve.
+    var taskPhoneCells = document.querySelectorAll(
+      'td[id^="cell-0-27-hs_task_contact_phone-"]'
+    );
+    for (var k = 0; k < taskPhoneCells.length; k++) {
+      var taskCell = taskPhoneCells[k];
+      var taskPhoneText = taskCell.textContent || "";
+      var taskNum = pbCtcNormalizePhone(taskPhoneText);
+      if (!taskNum) continue; // task with no phone yet
+
+      // The associated contact ID lives on the row's contact-link:
+      //   <a data-test-id="association-link-0-1-{contactId}" href="...">
+      var row = taskCell.closest("tr");
+      var contactId = null;
+      if (row) {
+        var assocLink = row.querySelector(
+          'a[data-test-id^="association-link-0-1-"]'
+        );
+        if (assocLink) {
+          var assocMatch = (assocLink.getAttribute("data-test-id") || "")
+            .match(/^association-link-0-1-(\d+)$/);
+          if (assocMatch) contactId = assocMatch[1];
+        }
+      }
+
+      // Anchor the pill inside the phone cell, after the visible phone text.
+      // The task-row phone value is wrapped in <span>+1 (585) 381-0810</span>
+      // inside the truncate wrapper — anchor after that span so the pill
+      // sits inline with the number.
+      var taskAnchor =
+        taskCell.querySelector('[data-test-id="truncated-object-label"] span') ||
+        taskCell;
+      out.push({
+        el: taskAnchor,
+        number: taskNum,
+        recordId: contactId,        // may be null for tasks with no contact association
+        objectType: contactId ? "contact" : null,
+      });
+    }
   } catch (e) {}
   return out;
 }
