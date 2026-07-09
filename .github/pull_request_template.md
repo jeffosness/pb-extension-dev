@@ -19,8 +19,12 @@
              softphone_host.js. Requires "Adversarial Review" below.
   - Tier 2 — security-critical: utils.php, api/core/bootstrap.php, webhooks,
              sse.php, config.sample.php, oauth_* endpoints, *_call_logger.php,
-             SECURITY.md. Requires Adversarial Review AND 4-hour cool-off
-             from PR open before merge (label `hotfix` or `urgent` to override).
+             SECURITY.md. Requires Adversarial Review; the 4-hour cool-off
+             applies at PRODUCTION DEPLOY (prod-* tag push), NOT at merge.
+             Merging is fine — main auto-deploys to dev for soak-testing.
+             Cut the prod tag once the freshest Tier-2 commit has been on
+             dev for 4h. Emergency override: suffix the prod tag with
+             `-hotfix`, `-urgent`, or `-rollback`.
 -->
 
 ## KB Impact

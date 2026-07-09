@@ -6,13 +6,23 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-07-08 — Cool-off gate was checking the wrong boundary
+
+**What happened:** The Tier-2 cool-off gate we shipped in PR #167 was implemented in `risk-tier-check.yml` at PR merge time — a Tier 2 PR couldn't be merged to main for 4 hours after it opened. When we went to test PR #172 (CTC-completes-task, Tier 2) on the dev backend today, we discovered the gate blocked the entire flow: since `deploy-dev.yml` triggers on push to main, blocking the merge blocked dev-testing itself. The whole point of the cool-off — soak on dev before shipping to customers — got inverted.
+
+**Why we didn't catch it:** When designing the gate (PR #167), we conflated "merged to main" with "deployed to prod." But the pipeline is `merge → dev auto-deploy` and `prod-* tag push → prod deploy`. Those are two different boundaries; the cool-off belongs on the second one. The mistake wasn't caught because we didn't stress-test the gate against the intended flow — we shipped it with the assumption that dev testing already happened locally, ignoring that Jeff's workflow (and any future contributor's) relies on the dev backend for end-to-end pre-prod validation.
+
+**Process change:** PR #173 moved cool-off enforcement from `risk-tier-check.yml` to `deploy-prod.yml`. It now runs when a `prod-*` tag is pushed, walks the diff since the previous prod tag, finds the freshest commit that touched a Tier-2 file, and requires its committer date on main (= dev-merge time) to be at least 4h old. Emergency override moved from PR labels (`hotfix`/`urgent`) to tag suffix (`prod-vX.Y.Z-hotfix` / `-urgent` / `-rollback`) so the escape hatch lives at the same boundary as the gate. Documented in CLAUDE.md's "Risk-tier gates" section. Broader lesson — **when introducing a new gate, always trace the actual pipeline end-to-end to identify the correct enforcement point.** "Where does the change actually reach the customer?" is the anchor, not "where does the commit live?"
+
+---
+
 ## 2026-07-08 — PhoneBurner drops arbitrary custom_data on the softphone dial
 
 **What happened:** While designing [#170](https://github.com/jeffosness/pb-extension-dev/issues/170) (CTC-completes-task), we assumed we could pass a `custom_data: { task_id, client_id }` object through the DIAL postMessage to PhoneBurner's softphone and get it echoed back on the `softphone_call_done` webhook alongside the `pb_user_id` / `slug` fields we already see. Confirmed empirically — PB drops everything except the fields it populates itself. The webhook only exposes `pb_user_id` (from the authenticated softphone session) and `slug` (from the softphone registration record). No third-party pass-through.
 
 **Why we didn't catch it:** No documentation of PB's softphone postMessage contract exists in the repo — the fields we send were reverse-engineered from working traffic. The `custom_data` field's presence on the webhook created a false-positive signal that we could add our own keys. The real contract is "PB owns the whole custom_data namespace on the softphone envelope."
 
-**Process change:** PR #172 built a server-side intent bridge instead — `softphone_auth_code.php` writes a `(pb_user_id, phone) → {client_id, task_id}` record on CTC-click; `softphone_call_done.php` reads it on webhook fire. FIFO queue on same-key collisions since PB's softphone is single-call-per-agent. Documented the "PB owns custom_data" constraint inline in `softphone_call_done.php`'s header comment (extending the payload-shape section from PR #165) so the next dev doesn't repeat the assumption. The general lesson — whenever a third-party webhook exposes a field with an ambiguous name like `custom_data`, don't assume it's ours to populate; verify empirically or from their docs.
+**Process change:** PR #172 built a server-side intent bridge instead — `softphone_auth_code.php` writes a `(pb_user_id, phone) → {client_id, task_id, crm_name}` record on CTC-click; `softphone_call_done.php` reads it on webhook fire. FIFO queue on same-key collisions since PB's softphone is single-call-per-agent. The general lesson — whenever a third-party webhook exposes a field with an ambiguous name like `custom_data`, don't assume it's ours to populate; verify empirically or from their docs.
 
 ---
 

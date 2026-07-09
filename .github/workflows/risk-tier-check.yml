@@ -13,20 +13,21 @@ name: Risk Tier Check
 #
 #   Tier 2 — security-critical: utils.php, api/core/bootstrap.php, webhooks,
 #            sse.php, config.sample.php, OAuth flows, SECURITY.md. Requires
-#            Adversarial Review AND a 4-hour cool-off from PR open time
-#            before merge. Add the `hotfix` or `urgent` label to override
-#            cool-off for genuine emergencies.
+#            Adversarial Review section (enforced here). The 4-hour cool-off
+#            is enforced at PRODUCTION DEPLOY TIME (deploy-prod.yml), not
+#            here — merging a Tier 2 PR to main is fine and auto-deploys to
+#            dev for soak-testing. The prod tag (prod-*) is what triggers
+#            the cool-off gate; suffix a tag with `-hotfix`, `-urgent`, or
+#            `-rollback` to override for genuine emergencies.
 #
 # Design notes:
 #   - Mirrors the existing kb-impact / security-impact / test-impact
 #     workflow shape. Same pattern; different gates.
-#   - Cool-off is enforced by failing the check when PR is <4h old. Since
-#     GitHub doesn't re-run workflows on time-passing alone, the check
-#     re-runs on synchronize/edited events (which happen naturally as the
-#     PR gets updated), and can be re-triggered manually via GitHub UI.
 #   - Rationale for each Tier 2 file pattern lives inline below and is
 #     kept in sync with SECURITY.md's "Files that trigger Security Impact
 #     review" list.
+#   - The cool-off moved from PR-merge time to prod-deploy time on
+#     2026-07-08. See LESSONS.md for the reasoning.
 
 on:
   pull_request:
@@ -182,30 +183,17 @@ jobs:
               core.info('Adversarial Review section present and filled in.');
             }
 
-            // ─── Enforce cool-off (Tier 2) ──────────────────────────────
-            if (tier >= 2) {
-              const COOLOFF_HOURS = 4;
-              const OVERRIDE_LABELS = ['hotfix', 'urgent'];
+            // ─── Cool-off enforcement moved to deploy-prod.yml ──────────
+            // The 4-hour cool-off for Tier 2 changes lives on the PRODUCTION
+            // deploy (prod-* tag push), NOT on PR merge to main. Rationale:
+            // main auto-deploys to DEV (see deploy-dev.yml), and the whole
+            // point of the cool-off is a soak window on dev BEFORE prod
+            // ships. Enforcing it at merge time blocked dev testing — the
+            // opposite of the intent. Anchoring the timer to the deploying
+            // commit's dev-merge time (deploy-prod.yml's cool-off step)
+            // preserves the safety window at the correct boundary.
+            //
+            // See LESSONS.md 2026-07-08 "Cool-off was gating the wrong
+            // boundary" for the reasoning + history.
 
-              const hasOverride = currentLabels.some(l => OVERRIDE_LABELS.includes(l));
-              if (hasOverride) {
-                core.info(`Cool-off overridden via label (${OVERRIDE_LABELS.filter(l => currentLabels.includes(l)).join(', ')}).`);
-              } else {
-                const createdAt = new Date(context.payload.pull_request.created_at);
-                const now = new Date();
-                const hoursOpen = (now - createdAt) / (1000 * 60 * 60);
-                if (hoursOpen < COOLOFF_HOURS) {
-                  const readyAt = new Date(createdAt.getTime() + COOLOFF_HOURS * 3600 * 1000);
-                  core.setFailed(
-                    `Tier 2 PR touches security/auth/token code and requires a ` +
-                    `${COOLOFF_HOURS}-hour cool-off before merge. ` +
-                    `PR opened ${hoursOpen.toFixed(1)}h ago; ready at ${readyAt.toISOString()}. ` +
-                    `For genuine emergencies, add the "hotfix" or "urgent" label to override.`
-                  );
-                  return;
-                }
-                core.info(`Cool-off satisfied: PR is ${hoursOpen.toFixed(1)}h old (threshold ${COOLOFF_HOURS}h).`);
-              }
-            }
-
-            core.info(`Tier ${tier} PR passes all applicable gates.`);
+            core.info(`Tier ${tier} PR passes all applicable gates (cool-off enforced at prod-deploy).`);
