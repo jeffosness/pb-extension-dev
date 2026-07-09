@@ -80,7 +80,7 @@ Full API integration with Apollo:
 • AgencyZoom — Optimized Level 2 support (task-list dialing)
 • Pipedrive — Optimized Level 2 support
 • Salesforce — Optimized Level 2 support
-• Zoho, monday.com, and others — Generic Level 1 support
+• Zoho CRM, monday.com, and others — Generic Level 1 support
 
 ⚙️ How It Works
 
