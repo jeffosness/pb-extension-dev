@@ -16,6 +16,14 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.1": {
+    title: "What's Fixed in v0.8.1",
+    items: [
+      "Click-to-Call flame now appears next to phone numbers on the HubSpot Tasks list — both the classic Task Queue view and the newer All Tasks table",
+      "Task-Based Dial Session card in the popup now recognizes the newer All Tasks table URL, not just the classic Task Queue",
+      "Cleared up a console error some HubSpot users were seeing on page load"
+    ]
+  },
   "0.8.0": {
     title: "What's New in v0.8.0",
     items: [
