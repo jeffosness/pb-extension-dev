@@ -784,7 +784,7 @@ api_log('crm_usage_dashboard.view', [
       <h2 class="section-title">CRM Distribution</h2>
       <div class="chart-row">
         <div class="chart-box">
-          <h3>Events by CRM</h3>
+          <h3>Dial Sessions by CRM</h3>
           <div class="chart-container"><canvas id="chart-crm-dist"></canvas></div>
         </div>
         <div>
@@ -988,7 +988,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let autoRefreshTimer = null;
 
   // Last loaded data (for CSV export)
-  let lastSse = null, lastCrm = null, lastAgent = null, lastCtc = null, lastCtcDone = null;
+  let lastSse = null, lastCrm = null, lastCrmSess = null, lastAgent = null, lastCtc = null, lastCtcDone = null;
 
   // Cached "by user" rows for live filter without re-fetching
   let lastByUserRows = [];
@@ -1058,7 +1058,17 @@ document.addEventListener("DOMContentLoaded", () => {
     const dr  = getDateRange(currentRange);
     const t   = Date.now();
     const sseUrl       = sseEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    // crmUrl (unfiltered) — used for the "Activity by User" table and other
+    // aggregates where every event_type belongs in the count.
     const crmUrl       = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    // crmSessUrl (dial_session only) — used for the CRM Distribution chart +
+    // table so the per-CRM numbers stay proportional to the top KPI's
+    // "Dial Sessions" total. Without this filter, CTC clicks (click_to_call,
+    // click_to_call_done) inflate the CRM slices and diverge from the KPI —
+    // was fine historically when dial_session was the only event_type; broke
+    // silently once CTC events started landing in the same log. See
+    // LESSONS.md entry "Dashboard CRM Distribution drift" for the pattern.
+    const crmSessUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=dial_session&t=" + t;
     const ctcUrl       = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call&t=" + t;
     const ctcDoneUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call_done&t=" + t;
     const agentUrl     = agentEndpoint + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
@@ -1066,12 +1076,14 @@ document.addEventListener("DOMContentLoaded", () => {
     Promise.all([
       fetch(sseUrl).then(r => { if (!r.ok) throw new Error("SSE HTTP " + r.status); return r.json(); }),
       fetch(crmUrl).then(r => { if (!r.ok) throw new Error("CRM HTTP " + r.status); return r.json(); }),
+      fetch(crmSessUrl).then(r => r.ok ? r.json() : null).catch(() => null),
       fetch(ctcUrl).then(r => r.ok ? r.json() : null).catch(() => null),
       fetch(ctcDoneUrl).then(r => r.ok ? r.json() : null).catch(() => null),
       fetch(agentUrl).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([sseResp, crmResp, ctcResp, ctcDoneResp, agentResp]) => {
+    ]).then(([sseResp, crmResp, crmSessResp, ctcResp, ctcDoneResp, agentResp]) => {
       const sse     = normalize(sseResp);
       const crm     = normalize(crmResp);
+      const crmSess = crmSessResp ? normalize(crmSessResp) : null;
       const ctc     = ctcResp     ? normalize(ctcResp)     : null;
       const ctcDone = ctcDoneResp ? normalize(ctcDoneResp) : null;
       const agent   = agentResp   ? normalize(agentResp)   : null;
@@ -1079,7 +1091,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!sseResp?.ok || !sse) { showError("SSE stats API error."); return; }
       if (!crmResp?.ok || !crm) { showError("CRM stats API error."); return; }
 
-      lastSse = sse; lastCrm = crm; lastAgent = agent; lastCtc = ctc; lastCtcDone = ctcDone;
+      lastSse = sse; lastCrm = crm; lastCrmSess = crmSess; lastAgent = agent; lastCtc = ctc; lastCtcDone = ctcDone;
 
       msgEl.innerHTML = "";
       contentEl.style.display = "block";
@@ -1168,7 +1180,12 @@ document.addEventListener("DOMContentLoaded", () => {
       // ====================================================================
       // Section 3: CRM Distribution
       // ====================================================================
-      const byCrmId = crm.by_crm_id || {};
+      // Feed byCrmId from the dial-session-filtered response so the per-CRM
+      // slices stay in sync with the top KPI's "Dial Sessions" total. Falling
+      // back to the unfiltered crm response only if the filtered fetch failed
+      // — that preserves the pre-fix behavior on network hiccups rather than
+      // showing an empty chart.
+      const byCrmId = (crmSess && crmSess.by_crm_id) || crm.by_crm_id || {};
       if (hasChartJs && Object.keys(byCrmId).length > 0) {
         const crmLabels = Object.keys(byCrmId).sort((a, b) => byCrmId[b] - byCrmId[a]);
         const crmValues = crmLabels.map(k => byCrmId[k]);
@@ -1178,7 +1195,7 @@ document.addEventListener("DOMContentLoaded", () => {
         destroyChart("chart-crm-dist");
       }
 
-      // CRM table (dial sessions per CRM from usage tracking)
+      // CRM table (dial sessions per CRM from usage tracking, event_type=dial_session)
       const crmTableBody = document.querySelector("#crm-combined-table tbody");
       crmTableBody.innerHTML = "";
       if (Object.keys(byCrmId).length > 0) {
@@ -1741,7 +1758,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     csv += "\nCRM,Sessions\n";
-    Object.entries(lastCrm.by_crm_id || {}).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => {
+    // Same filtering as the on-screen CRM Distribution table: dial-session-only
+    // so the CSV column labeled "Sessions" actually contains sessions, not
+    // events. Falls back to the unfiltered response if the filtered fetch
+    // failed on load.
+    const csvByCrm = (lastCrmSess && lastCrmSess.by_crm_id) || lastCrm.by_crm_id || {};
+    Object.entries(csvByCrm).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => {
       csv += k + "," + v + "\n";
     });
 
