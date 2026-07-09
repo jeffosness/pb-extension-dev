@@ -687,3 +687,54 @@ server/public/api/crm/{provider}/
   ├── oauth_{provider}_finish.php # Uses helpers
   └── pb_dialsession_*.php        # Uses helpers
 ```
+
+---
+
+### Adding Click-to-Call task completion for a new CRM
+
+**What this is:** the CTC intent bridge (PR #172, [issue #170](https://github.com/jeffosness/pb-extension-dev/issues/170)) auto-completes the source task after a click-to-call from a task row dispositions. Storage layer is CRM-agnostic — the file key is `(hash(pb_user_id), normalize(phone))`, which is stable across CRMs because `pb_user_id` is the PhoneBurner agent identity. To add task-completion for Close, Apollo, or any future CRM, add three small pieces:
+
+**1. Extension-side finder returns `taskId` on task rows.**
+
+Whatever selector finds the CRM's task-row phone cells (in `content.js`) should also grab the task's ID from the row and return it alongside the phone. See `pbCtcFindHubspot` branches #3 and #4 for the shape — HubSpot pulls the task id from `<tr data-test-id="row-{id}">`. Include `taskId` in the returned target object; `pbCtcDecorate` will thread it through the CLICK_TO_CALL message automatically.
+
+**2. Server: register the CRM in `ctc_supported_crm_config()`.**
+
+In [`server/public/api/core/softphone_auth_code.php`](server/public/api/core/softphone_auth_code.php), add a case:
+
+```php
+case 'close':
+    return [
+        'token_loader'    => 'load_close_tokens',
+        'task_id_pattern' => '/^[a-zA-Z0-9_-]{1,64}$/', // Close task ids look like "task_abc"
+    ];
+```
+
+`token_loader` is a callable name resolved via variable-variable dispatch — must be the same shape as `load_hs_tokens($client_id)` (returns array on connected, null otherwise). `task_id_pattern` is a PCRE regex that gates what task_id values are accepted from the client. Without this case, the CRM's intent writes silently fail closed.
+
+**3. Server: add a dispatch case in `softphone_call_done.php`.**
+
+In the `switch ($intentCrmName)` block, add:
+
+```php
+case 'close':
+    require_once __DIR__ . '/../api/crm/close/close_call_logger.php';
+    $completed = close_complete_task_for_client($intentClientId, $intentTaskId);
+    break;
+```
+
+**4. Implement `{crm}_complete_task_for_client($client_id, $task_id)`.**
+
+Follow the shape of `hubspot_complete_task_for_client` in `api/crm/hubspot/hs_call_logger.php`:
+
+- Load the client's tokens (`load_{crm}_tokens($client_id)`).
+- Refresh if expired (dual-credential fallback where applicable).
+- PATCH / POST the CRM's task-complete endpoint.
+- Return true on 2xx, false on any error. Never throw — the webhook path catches to log and continue.
+
+**No changes needed to:**
+
+- The intent storage layer (`ctc_intent_write` / `_consume` / `_prune_stale` in `utils.php`).
+- The FIFO-at-same-key semantics — they're CRM-agnostic and there's a test covering the cross-CRM case (`two_crms_at_same_key_preserve_their_own_crm_name` in `tests/CtcIntentTest.php`).
+- The audit log — `event_type=ctc_task_completed` fires with `crm_name` set from the intent's field, so dashboard consumers can filter per-CRM without any dashboard change.
+- The extension's CLICK_TO_CALL message shape — it already carries `crmId` from the tab context.

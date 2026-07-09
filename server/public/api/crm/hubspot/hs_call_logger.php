@@ -237,6 +237,52 @@ function hubspot_log_call(array $state, array $payload, array $lastCall, string 
 }
 
 /**
+ * Complete a single HubSpot task for a given client_id, without any
+ * dial-session state.
+ *
+ * Loads the client's HS OAuth tokens, refreshes if expired (dual-cred
+ * fallback), and PATCHes the task to hs_task_status=COMPLETED. Used by
+ * the CTC-completes-task flow in softphone_call_done.php — the softphone
+ * webhook has no dial-session state, but it has task_id + client_id from
+ * the CTC intent bridge.
+ *
+ * Returns true on 2xx, false on any failure. Failures logged, never thrown.
+ * Mirrors the load/refresh/complete chunk of hubspot_log_call() but skips
+ * the disposition-lookup and contact-resolution steps.
+ */
+function hubspot_complete_task_for_client(string $clientId, string $taskId): bool {
+    if ($clientId === '' || $taskId === '') return false;
+
+    $hsTokens = load_hs_tokens($clientId);
+    if (!is_array($hsTokens)) {
+        log_msg('hs_task_complete: skipping — no HubSpot tokens for client');
+        return false;
+    }
+
+    // Refresh if expired. hs_call_logger_refresh handles the dual-credential
+    // fallback and returns null on any failure.
+    $expiresAt = isset($hsTokens['expires_at']) ? (int)$hsTokens['expires_at'] : 0;
+    if ($expiresAt > 0 && time() >= $expiresAt) {
+        $refreshed = hs_call_logger_refresh($clientId, $hsTokens);
+        if (!is_array($refreshed)) {
+            log_msg('hs_task_complete: token refresh failed');
+            return false;
+        }
+        $hsTokens = $refreshed;
+    }
+
+    $accessToken = (string)($hsTokens['access_token'] ?? '');
+    if ($accessToken === '') {
+        log_msg('hs_task_complete: empty access_token after load/refresh');
+        return false;
+    }
+
+    $ok = hs_call_logger_complete_task($accessToken, $taskId);
+    log_msg('hs_task_complete: task=' . $taskId . ' ok=' . ($ok ? '1' : '0'));
+    return $ok;
+}
+
+/**
  * PATCH a single HubSpot task to mark it COMPLETED.
  * Returns true on 2xx, false on any error. Failures are logged but never thrown.
  *

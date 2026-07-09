@@ -16,6 +16,13 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.2": {
+    title: "What's New in v0.8.2",
+    items: [
+      "Click-to-Call from a HubSpot task row now automatically marks the task complete once the call dispositions — same behavior as the Task-Based Dial Session, now on the single-click flow too",
+      "Works on both the classic Task Queue view and the newer All Tasks table"
+    ]
+  },
   "0.8.1": {
     title: "What's Fixed in v0.8.1",
     items: [
