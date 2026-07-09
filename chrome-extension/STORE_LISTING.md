@@ -29,9 +29,10 @@ Three ways to start dialing:
 ✅ Works with contacts, companies, and deals
 
 🔹 Click-to-Call — Single Calls Without a Full Dial Session (HubSpot)
-A small PhoneBurner flame icon appears next to phone numbers on HubSpot contact records, company records, and list views. Click it to place a single call in seconds — perfect for one-off follow-ups when you don't need a whole dial session.
+A small PhoneBurner flame icon appears next to phone numbers on HubSpot contact records, company records, list views, and your tasks list. Click it to place a single call in seconds — perfect for one-off follow-ups when you don't need a whole dial session.
 
 • Every phone field is dialable — Phone Number, Mobile, Home Phone, and any custom phone properties
+• Task rows auto-complete — click the flame on a task, disposition the call, and HubSpot marks the task done automatically
 • Icon-only design stays out of your way; hover for context
 • Toggle it off in Settings if you already use another dialer's click-to-call
 
@@ -120,12 +121,10 @@ This extension is ideal for:
 • PhoneBurner dial sessions support up to 500 contacts
 • Features may vary slightly by CRM platform
 
-🆕 What's New in v0.8.0
+🆕 What's New in v0.8.2
 
-📞 Click-to-Call for HubSpot — a PhoneBurner flame icon next to every phone number on your HubSpot records and lists. Click it to place a single call without launching a full dial session. Great for one-off follow-ups.
+📋 Click-to-Call on your HubSpot tasks — the flame icon now appears next to phone numbers on your tasks list (both the classic Task Queue and the newer All Tasks table). Click to call a task's contact in one step.
 
-📋 AgencyZoom support — visit your AgencyZoom task list and launch a PhoneBurner dial session in one click. Leads with multiple open tasks are automatically deduped so you dial each contact once.
+✅ Tasks auto-complete after task-row calls — click the flame on a task, disposition the call, and HubSpot marks the task complete automatically. Same behavior the Task-Based Dial Session flow already had, now on the single-click side too.
 
-✨ Cleaner first-run experience — save your PhoneBurner PAT and stay on the Dial tab where you can act immediately. If your CRM isn't connected yet, an inline "Connect" prompt appears right there instead of hiding in Settings.
-
-🐛 Follow widget fix — the live Follow widget now correctly navigates between contacts on CRMs where the record ID is in the URL's query string (AgencyZoom and similar).
+🐛 Fixed a HubSpot console-error that some users saw on page load.
