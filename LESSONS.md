@@ -6,6 +6,21 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-07-09 — Anomaly-whitelist drift after CTC-completes-task (repeat of 2026-07-03 pattern)
+
+**What happened:** The morning after PR #172 shipped to prod, the CRM Usage Dashboard flagged two "Endpoint not in the whitelist for hubspot token reads" anomalies for `softphone_auth_code` and `softphone_call_done`. Both are legitimate: my new code in PR #172 added HubSpot-token reads to those endpoints (checking "is HS connected?" before writing an intent, and loading tokens to PATCH the task on webhook fire). Same class of drift as 2026-07-03 (PR #163), where the softphone endpoints needed to be whitelisted for PB token reads. Fixed by adding the two endpoints to the `hubspot` whitelist in `crm_usage_dashboard.php`.
+
+**Why we didn't catch it:** This is a REPEAT of the failure pattern documented on 2026-07-03. The 2026-07-03 entry ended with "any new endpoint that intentionally reads-then-decides on token presence needs to be either whitelisted or restructured." But that guidance lived only in LESSONS.md, not in a checklist adjacent to the code being changed. When I wrote PR #172 I didn't consult LESSONS.md before shipping. Neither did the Adversarial Review section of PR #172 — I audited data-integrity + failure isolation but not "does this add a new (endpoint × provider) token-read pair that the anomaly rule doesn't know about?"
+
+**Process change:** Two layers, so this stops repeating.
+
+1. **PR #175 fixed the immediate whitelist gap** with an inline code comment on the added lines that ties back to this LESSONS entry — future contributors reading that region see the trap named.
+2. **CLAUDE.md's Security Checklist** now includes an explicit item: *"If your PR adds a new call site that reads any of `load_pb_token()` / `load_hs_tokens()` / `load_close_tokens()` / `load_apollo_tokens()`, add the endpoint's basename to the matching `$token_read_whitelist` array in `crm_usage_dashboard.php`."* This is the specific mechanical check that would have caught PR #172 at review time.
+
+Broader lesson — **when a class of failure repeats, the fix isn't "another LESSONS entry pointing at the previous LESSONS entry." It's making the check mechanical.** Text guidance in LESSONS.md is background reading; a line item in a security checklist is what gets consulted. If this failure repeats a third time, the next step is a CI check that greps for new `load_*_tokens(` call sites and requires whitelist changes in the same PR.
+
+---
+
 ## 2026-07-08 — Cool-off gate was checking the wrong boundary
 
 **What happened:** The Tier-2 cool-off gate we shipped in PR #167 was implemented in `risk-tier-check.yml` at PR merge time — a Tier 2 PR couldn't be merged to main for 4 hours after it opened. When we went to test PR #172 (CTC-completes-task, Tier 2) on the dev backend today, we discovered the gate blocked the entire flow: since `deploy-dev.yml` triggers on push to main, blocking the merge blocked dev-testing itself. The whole point of the cool-off — soak on dev before shipping to customers — got inverted.

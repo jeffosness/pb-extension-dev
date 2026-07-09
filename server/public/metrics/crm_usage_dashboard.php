@@ -492,6 +492,16 @@ api_log('crm_usage_dashboard.view', [
             'pb_dialsession_selection', 'pb_dialsession_from_list',
             'pb_dialsession_from_tasks', 'hs_lists', 'hs_phone_properties',
             'hs_call_logger', 'call_done', 'contact_displayed',
+            // v0.8.2 CTC-completes-task flow (PR #172) added HubSpot token
+            // reads on both softphone endpoints:
+            //   softphone_auth_code — reads HS tokens to check "is HS
+            //                         connected?" before writing an intent
+            //   softphone_call_done — reads HS tokens to complete the task
+            //                         via hubspot_complete_task_for_client()
+            // Failing to whitelist these here fires a false-positive anomaly
+            // on the dashboard for every CTC-from-task-row click, exactly
+            // the class of drift LESSONS.md 2026-07-03 warns about.
+            'softphone_auth_code', 'softphone_call_done',
         ],
         'close' => [
             'state', 'oauth_close_finish', 'oauth_disconnect',
