@@ -179,13 +179,19 @@ try {
     log_msg('softphone_call_done.track_error: ' . $e->getMessage());
 }
 
-// ── CTC-completes-task: consume the intent bridge if the CTC originated
-// on a HubSpot task row ─────────────────────────────────────────────────
+// ── CTC-completes-task: consume the intent bridge and dispatch to the
+// popped intent's CRM-specific task-completer ───────────────────────────
 // The extension writes an intent record at softphone_auth_code mint time
 // keyed by (pb_user_id, normalized phone) whenever a CTC click carries a
-// task_id. Here we look it up, pull out client_id + task_id, close the
-// task, and log a ctc_task_completed audit event to the daily crm_usage
-// log (naturally rotated, no cron needed).
+// task_id + crm_name. Here we look it up, pull out client_id + task_id +
+// crm_name, dispatch to the right provider's task-completer, and log a
+// ctc_task_completed audit event to the daily crm_usage log (naturally
+// rotated, no cron needed).
+//
+// The dispatch below is intentionally structured as a switch so adding
+// Close / Apollo / future CRMs is a one-case addition. The intent
+// storage layer + consume path are CRM-agnostic — see utils.php +
+// softphone_auth_code.php + CRMS.md.
 //
 // FIFO queue at the same key handles the "same phone across two back-to-
 // back task clicks" case correctly because PB's softphone is
@@ -200,14 +206,36 @@ try {
         if (is_array($popped)) {
             $intentClientId = (string)($popped['client_id'] ?? '');
             $intentTaskId   = (string)($popped['task_id']   ?? '');
+            $intentCrmName  = (string)($popped['crm_name']  ?? '');
+
             $completed = false;
-            if ($intentClientId !== '' && $intentTaskId !== '' && $crmName === 'hubspot') {
-                require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
-                $completed = hubspot_complete_task_for_client($intentClientId, $intentTaskId);
+            if ($intentClientId !== '' && $intentTaskId !== '' && $intentCrmName !== '') {
+                // Per-CRM dispatch. Add a new case here when adding
+                // task-completion for another provider — see CRMS.md.
+                switch ($intentCrmName) {
+                    case 'hubspot':
+                        require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
+                        $completed = hubspot_complete_task_for_client(
+                            $intentClientId,
+                            $intentTaskId
+                        );
+                        break;
+                    // case 'close':
+                    //   require_once __DIR__ . '/../api/crm/close/close_call_logger.php';
+                    //   $completed = close_complete_task_for_client(
+                    //       $intentClientId, $intentTaskId
+                    //   );
+                    //   break;
+                    default:
+                        log_msg('ctc_intent_dispatch: no completer for crm_name=' . $intentCrmName);
+                        break;
+                }
             }
             // Audit line piggybacks on the same daily crm_usage log that's
             // already rotated. Dashboard picks up the new event_type for
-            // free (event_type=ctc_task_completed).
+            // free (event_type=ctc_task_completed). crm_name here is the
+            // intent's (not the webhook payload's) — that's the value the
+            // task was actually completed under.
             try {
                 if (isset($logFile) && $logFile) {
                     $auditEntry = [
@@ -216,7 +244,7 @@ try {
                         'member_user_id' => $agentMemberUserId,
                         'event_type'     => 'ctc_task_completed',
                         'crm_id'         => $crmId,
-                        'crm_name'       => $crmName,
+                        'crm_name'       => $intentCrmName ?: $crmName,
                         'host'           => '',
                         'path'           => '',
                         'level'          => 3,

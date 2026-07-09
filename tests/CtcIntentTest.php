@@ -84,8 +84,9 @@ final class CtcIntentTest extends TestCase
         $phone    = '5551234567';
         $this->track($pbUserId, $phone);
 
-        $this->assertFalse(ctc_intent_write($pbUserId, $phone, '', 'task_1'));
-        $this->assertFalse(ctc_intent_write($pbUserId, $phone, 'cid_1', ''));
+        $this->assertFalse(ctc_intent_write($pbUserId, $phone, '', 'task_1', 'hubspot'));
+        $this->assertFalse(ctc_intent_write($pbUserId, $phone, 'cid_1', '', 'hubspot'));
+        $this->assertFalse(ctc_intent_write($pbUserId, $phone, 'cid_1', 'task_1', ''));
     }
 
     #[Test]
@@ -95,12 +96,55 @@ final class CtcIntentTest extends TestCase
         $phone    = '5551234567';
         $this->track($pbUserId, $phone);
 
-        $this->assertTrue(ctc_intent_write($pbUserId, $phone, 'cid_A', 'task_A'));
+        $this->assertTrue(ctc_intent_write($pbUserId, $phone, 'cid_A', 'task_A', 'hubspot'));
 
         $popped = ctc_intent_consume($pbUserId, $phone);
         $this->assertIsArray($popped);
-        $this->assertSame('cid_A',  $popped['client_id']);
-        $this->assertSame('task_A', $popped['task_id']);
+        $this->assertSame('cid_A',   $popped['client_id']);
+        $this->assertSame('task_A',  $popped['task_id']);
+        $this->assertSame('hubspot', $popped['crm_name']);
+    }
+
+    #[Test]
+    public function crm_name_round_trips_through_intent_record(): void
+    {
+        // Storage layer is CRM-agnostic — a future Close/Apollo integration
+        // will write intents with their own crm_name and the consume path
+        // returns whatever was written. The dispatcher in
+        // softphone_call_done.php uses this field to route to the right
+        // task-completer.
+        $pbUserId = 'u_' . bin2hex(random_bytes(4));
+        $phone    = '5551234567';
+        $this->track($pbUserId, $phone);
+
+        ctc_intent_write($pbUserId, $phone, 'cid_1', 'task_1', 'close');
+
+        $popped = ctc_intent_consume($pbUserId, $phone);
+        $this->assertIsArray($popped);
+        $this->assertSame('close', $popped['crm_name']);
+    }
+
+    #[Test]
+    public function two_crms_at_same_key_preserve_their_own_crm_name(): void
+    {
+        // Same customer with HubSpot + Close both connected. Clicks CTC on
+        // a HubSpot task, then a Close task, both for the same phone. FIFO
+        // consume must preserve each entry's own crm_name so the dispatcher
+        // routes correctly.
+        $pbUserId = 'u_' . bin2hex(random_bytes(4));
+        $phone    = '5551234567';
+        $this->track($pbUserId, $phone);
+
+        ctc_intent_write($pbUserId, $phone, 'cid_1', 'hs_task_1',   'hubspot');
+        ctc_intent_write($pbUserId, $phone, 'cid_1', 'close_task_2','close');
+
+        $first  = ctc_intent_consume($pbUserId, $phone);
+        $second = ctc_intent_consume($pbUserId, $phone);
+
+        $this->assertSame('hubspot',    $first['crm_name']);
+        $this->assertSame('hs_task_1',  $first['task_id']);
+        $this->assertSame('close',      $second['crm_name']);
+        $this->assertSame('close_task_2', $second['task_id']);
     }
 
     #[Test]
@@ -119,7 +163,7 @@ final class CtcIntentTest extends TestCase
         $phone    = '5551234567';
         $path     = $this->track($pbUserId, $phone);
 
-        ctc_intent_write($pbUserId, $phone, 'cid_1', 'task_1');
+        ctc_intent_write($pbUserId, $phone, 'cid_1', 'task_1', 'hubspot');
         $this->assertFileExists($path);
 
         ctc_intent_consume($pbUserId, $phone);
@@ -137,9 +181,9 @@ final class CtcIntentTest extends TestCase
         $phone    = '5551234567';
         $this->track($pbUserId, $phone);
 
-        ctc_intent_write($pbUserId, $phone, 'cid_A', 'task_A');
-        ctc_intent_write($pbUserId, $phone, 'cid_B', 'task_B');
-        ctc_intent_write($pbUserId, $phone, 'cid_C', 'task_C');
+        ctc_intent_write($pbUserId, $phone, 'cid_A', 'task_A', 'hubspot');
+        ctc_intent_write($pbUserId, $phone, 'cid_B', 'task_B', 'hubspot');
+        ctc_intent_write($pbUserId, $phone, 'cid_C', 'task_C', 'hubspot');
 
         $this->assertSame('task_A', ctc_intent_consume($pbUserId, $phone)['task_id']);
         $this->assertSame('task_B', ctc_intent_consume($pbUserId, $phone)['task_id']);
@@ -155,8 +199,8 @@ final class CtcIntentTest extends TestCase
         $this->track($pbUserId, '5551111111');
         $this->track($pbUserId, '5552222222');
 
-        ctc_intent_write($pbUserId, '5551111111', 'cid_1', 'task_1');
-        ctc_intent_write($pbUserId, '5552222222', 'cid_2', 'task_2');
+        ctc_intent_write($pbUserId, '5551111111', 'cid_1', 'task_1', 'hubspot');
+        ctc_intent_write($pbUserId, '5552222222', 'cid_2', 'task_2', 'hubspot');
 
         $this->assertSame('task_1', ctc_intent_consume($pbUserId, '5551111111')['task_id']);
         $this->assertSame('task_2', ctc_intent_consume($pbUserId, '5552222222')['task_id']);
@@ -171,7 +215,7 @@ final class CtcIntentTest extends TestCase
         $pbUserId = 'u_' . bin2hex(random_bytes(4));
         $this->track($pbUserId, '5551234567');
 
-        ctc_intent_write($pbUserId, '+1 (555) 123-4567', 'cid_X', 'task_X');
+        ctc_intent_write($pbUserId, '+1 (555) 123-4567', 'cid_X', 'task_X', 'hubspot');
         $popped = ctc_intent_consume($pbUserId, '15551234567');
         $this->assertIsArray($popped);
         $this->assertSame('task_X', $popped['task_id']);
@@ -194,7 +238,7 @@ final class CtcIntentTest extends TestCase
         atomic_write_json($path, $stale);
 
         // A fresh write should prune the stale entry AND append the new one.
-        ctc_intent_write($pbUserId, $phone, 'cid_FRESH', 'task_FRESH');
+        ctc_intent_write($pbUserId, $phone, 'cid_FRESH', 'task_FRESH', 'hubspot');
 
         $popped = ctc_intent_consume($pbUserId, $phone);
         $this->assertIsArray($popped);

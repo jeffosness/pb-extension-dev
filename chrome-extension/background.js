@@ -133,16 +133,22 @@ async function buildSoftphoneUrl(dial) {
   // user's PhoneBurner bearer token and injects it into the iframe (?token=).
   // The token never travels through the extension or the top-window URL.
   //
-  // When the dial carries a taskId (CTC originated on a HubSpot task row),
-  // pass task_id + phone in the mint request so softphone_auth_code writes
-  // a CTC intent record. That record is the bridge that lets
+  // When the dial carries a taskId (CTC originated on a task row), pass
+  // task_id + phone + crm_name in the mint request so softphone_auth_code
+  // writes a CTC intent record. That record is the bridge that lets
   // softphone_call_done auto-complete the task on disposition — PB drops
   // arbitrary custom_data we try to pass through the dial payload, so we
   // can't correlate at the webhook without this server-side breadcrumb.
+  //
+  // crm_name here is the base identifier (e.g. "hubspot"), not the
+  // object-type-aware namespace (hubspotcompany/hubspotdeal) — task rows
+  // always associate to contacts, so "hubspot" is correct on all HubSpot
+  // task views. The server registry only routes on the base name.
   const codeBody = {};
-  if (dial.taskId && dial.number) {
-    codeBody.task_id = String(dial.taskId);
-    codeBody.phone   = String(dial.number);
+  if (dial.taskId && dial.number && dial.ctcCrmId) {
+    codeBody.task_id  = String(dial.taskId);
+    codeBody.phone    = String(dial.number);
+    codeBody.crm_name = String(dial.ctcCrmId);
   }
   let code = "";
   try {
@@ -485,9 +491,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Only set when the click originated on a task row (finder branches
       // #3/#4). The softphone_auth_code endpoint writes a CTC intent record
       // when both task_id + number are present so the softphone_call_done
-      // webhook can auto-complete the HubSpot task on disposition. Server
-      // ignores this on other CRMs. See issue #170.
+      // webhook can auto-complete the task on disposition. See issue #170.
       taskId: msg.taskId || null,
+      // Base CRM identifier for task-completion dispatch. Server registers
+      // task-completers per crm_name (currently only "hubspot"; Close /
+      // Apollo etc. plug in without changes to the storage layer). Sent
+      // as the intent's crm_name so the webhook dispatcher knows which
+      // provider's completer to invoke. Distinct from `crmName` above,
+      // which is the object-type-aware namespace PB uses for
+      // external_crm_data (hubspot / hubspotcompany / hubspotdeal).
+      ctcCrmId: msg.taskId ? (ctx.crmId || null) : null,
     };
     // Open (or reuse) our hosted softphone window and pass the dial via the URL.
     // Routing every CRM through this one page means one registered iframe origin

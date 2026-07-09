@@ -1022,16 +1022,31 @@ function ctc_intent_prune_stale(array $intents, int $ttlSec = 86400): array
 /**
  * Write a new CTC intent onto the FIFO queue at (pb_user_id, phone).
  *
+ * The intent record carries `crm_name` so the webhook consumer can
+ * dispatch to the right provider's task-completer without inferring
+ * from context. Currently only "hubspot" is implemented on the consume
+ * side, but the storage layer is CRM-agnostic — adding Close / Apollo
+ * task completion later means adding a new dispatch case in
+ * softphone_call_done.php + a new completer helper, not changing the
+ * intent shape or key structure. See CRMS.md for the walkthrough.
+ *
+ * The (pb_user_id, phone) key is CRM-agnostic by construction — pb_user_id
+ * is the PhoneBurner agent identity and stays stable across CRMs, so a
+ * single customer with HubSpot + Close both connected would land distinct
+ * intents at the same key correctly (FIFO consume, each dispatched to its
+ * own provider).
+ *
  * @return bool true on write success, false on missing inputs / IO failure.
  */
 function ctc_intent_write(
     string $pb_user_id,
     string $phone,
     string $client_id,
-    string $task_id
+    string $task_id,
+    string $crm_name
 ): bool {
     $path = ctc_intent_file_path($pb_user_id, $phone);
-    if ($path === null || $client_id === '' || $task_id === '') {
+    if ($path === null || $client_id === '' || $task_id === '' || $crm_name === '') {
         return false;
     }
 
@@ -1041,6 +1056,7 @@ function ctc_intent_write(
     $existing[] = [
         'client_id'  => $client_id,
         'task_id'    => $task_id,
+        'crm_name'   => $crm_name,
         'minted_at'  => time(),
     ];
 
