@@ -103,6 +103,7 @@ Before committing, verify:
 - [ ] No credentials in URLs (use temp codes)
 - [ ] CORS origins still whitelisted (no origin reflection)
 - [ ] Input validation on all user-controlled data
+- [ ] **If you added a new call site that reads tokens** (`load_pb_token()`, `load_hs_tokens()`, `load_close_tokens()`, `load_apollo_tokens()`), add the endpoint's basename to the matching `$token_read_whitelist` array in `server/public/metrics/crm_usage_dashboard.php`. Missing this fires a false-positive dashboard anomaly the morning after prod deploy — see LESSONS.md 2026-07-09 for the repeat we don't want to hit a third time.
 - [ ] **If you touched `utils.php` (or any function tested in `tests/`), PHPUnit is green.** Run `composer test` locally. CI blocks red PRs and requires a `## Test Impact` declaration for changes to security-critical files — see [TESTING.md](TESTING.md).
 
 ### Critical Security Utilities (ALWAYS USE)
