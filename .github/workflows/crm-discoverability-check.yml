@@ -1,0 +1,139 @@
+name: CRM Discoverability Check
+
+# For every CRM defined in chrome-extension/crm_config.js, this workflow
+# verifies the CRM's `displayName` string appears on both customer-facing
+# surfaces:
+#   1. chrome-extension/STORE_LISTING.md — Chrome Web Store listing
+#   2. server/public/index.html          — marketing site
+#
+# Why: when we add a new CRM to the code, it's easy to forget to update
+# the places customers discover it. PR #141 shipped AgencyZoom in code
+# but nothing anywhere else — customers didn't know it existed until
+# PR #152 back-filled coverage days later. LESSONS.md 2026-07-01
+# argued for this check; issue #151 tracked the ask.
+#
+# This runs on PRs that touch any of the three files. Fails if a CRM
+# defined in crm_config.js is missing from either customer surface.
+#
+# Adding a new CRM: add the row to crm_config.js, then make sure the
+# same displayName string appears in both STORE_LISTING.md and
+# index.html. CI will tell you which one is missing.
+#
+# If we ever add a CRM but explicitly DON'T want it on customer
+# surfaces (e.g., a temporarily hidden staging integration), add its
+# `id` to the SKIP_IDS list below and comment why.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'chrome-extension/crm_config.js'
+      - 'chrome-extension/STORE_LISTING.md'
+      - 'server/public/index.html'
+      - '.github/workflows/crm-discoverability-check.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify each CRM's displayName appears on both customer surfaces
+        run: |
+          set -euo pipefail
+
+          CRM_CONFIG="chrome-extension/crm_config.js"
+          STORE_LISTING="chrome-extension/STORE_LISTING.md"
+          MARKETING="server/public/index.html"
+
+          # CRMs that are intentionally NOT on customer surfaces.
+          # Empty for now — every CRM in crm_config.js is customer-facing.
+          # Add ids here with a comment if we ever need an exception.
+          SKIP_IDS=()
+
+          # Extract (id, displayName) pairs from crm_config.js.
+          # crm_config.js format is a JS array of objects with `id: "..."` and
+          # `displayName: "..."` — we walk it with a simple AWK state machine
+          # rather than eval'ing JS on the runner, which would need Node setup
+          # for a check that runs in milliseconds otherwise.
+          # This parser is deliberately dumb (line-oriented) and tolerates
+          # only the exact format used in crm_config.js today. If the file
+          # format changes, this check has to be updated in the same PR.
+          PAIRS=$(awk '
+            /^\s*id:\s*"[^"]+"/ {
+              match($0, /"[^"]+"/);
+              id = substr($0, RSTART+1, RLENGTH-2);
+            }
+            /^\s*displayName:\s*"[^"]+"/ {
+              match($0, /"[^"]+"/);
+              name = substr($0, RSTART+1, RLENGTH-2);
+              if (id != "" && name != "") {
+                print id "\t" name;
+                id = "";
+                name = "";
+              }
+            }
+          ' "$CRM_CONFIG")
+
+          if [ -z "$PAIRS" ]; then
+            echo "::error::Could not extract any CRM (id, displayName) pairs from $CRM_CONFIG"
+            echo "The awk parser may need updating — check crm_config.js format."
+            exit 1
+          fi
+
+          echo "CRMs found in $CRM_CONFIG:"
+          echo "$PAIRS" | sed 's/^/  /'
+          echo ""
+
+          MISSING=0
+          while IFS=$'\t' read -r id name; do
+            [ -z "$id" ] && continue
+
+            # Check skip list
+            SKIP=0
+            for skip_id in "${SKIP_IDS[@]:-}"; do
+              if [ "$id" = "$skip_id" ]; then
+                echo "  SKIP: $name ($id) — in SKIP_IDS list"
+                SKIP=1
+                break
+              fi
+            done
+            [ "$SKIP" = "1" ] && continue
+
+            # grep -F for literal-string match (handles displayNames with dots
+            # like "monday.com" and "Apollo.io" that would otherwise be
+            # regex-interpreted).
+            in_store=1
+            in_marketing=1
+            grep -F -q "$name" "$STORE_LISTING" || in_store=0
+            grep -F -q "$name" "$MARKETING"    || in_marketing=0
+
+            if [ "$in_store" = "1" ] && [ "$in_marketing" = "1" ]; then
+              echo "  OK:  $name — present on both surfaces"
+              continue
+            fi
+
+            MISSING=$((MISSING+1))
+            echo "::error::CRM \"$name\" (id: $id) is missing from customer-facing surfaces:"
+            [ "$in_store"     = "0" ] && echo "::error::  - $STORE_LISTING (needs the exact string \"$name\")"
+            [ "$in_marketing" = "0" ] && echo "::error::  - $MARKETING (needs the exact string \"$name\")"
+          done <<< "$PAIRS"
+
+          echo ""
+          if [ "$MISSING" -gt 0 ]; then
+            echo "::error::$MISSING CRM(s) missing from customer surfaces. See errors above."
+            echo ""
+            echo "How to fix:"
+            echo "  1. Add the missing displayName string to the file(s) above."
+            echo "  2. If the CRM is intentionally not customer-facing, add its"
+            echo "     id to SKIP_IDS in .github/workflows/crm-discoverability-check.yml"
+            echo "     with a comment explaining why."
+            exit 1
+          fi
+
+          echo "All CRMs in $CRM_CONFIG are discoverable on both customer surfaces."
