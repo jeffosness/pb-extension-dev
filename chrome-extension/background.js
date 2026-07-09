@@ -132,9 +132,21 @@ async function buildSoftphoneUrl(dial) {
   // Mint a single-use code; softphone.php exchanges it server-side for this
   // user's PhoneBurner bearer token and injects it into the iframe (?token=).
   // The token never travels through the extension or the top-window URL.
+  //
+  // When the dial carries a taskId (CTC originated on a HubSpot task row),
+  // pass task_id + phone in the mint request so softphone_auth_code writes
+  // a CTC intent record. That record is the bridge that lets
+  // softphone_call_done auto-complete the task on disposition — PB drops
+  // arbitrary custom_data we try to pass through the dial payload, so we
+  // can't correlate at the webhook without this server-side breadcrumb.
+  const codeBody = {};
+  if (dial.taskId && dial.number) {
+    codeBody.task_id = String(dial.taskId);
+    codeBody.phone   = String(dial.number);
+  }
   let code = "";
   try {
-    const resp = await api("core/softphone_auth_code.php");
+    const resp = await api("core/softphone_auth_code.php", codeBody);
     if (resp && resp.ok && resp.code) code = resp.code;
   } catch (e) {
     console.error("softphone_auth_code failed", e);
@@ -470,6 +482,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       number: msg.number,
       recordId: msg.recordId || ctx.recordId || null, // becomes crm_id
       crmName: ctcCrmName(ctx.crmId, msg.objectType || ctx.objectType),
+      // Only set when the click originated on a task row (finder branches
+      // #3/#4). The softphone_auth_code endpoint writes a CTC intent record
+      // when both task_id + number are present so the softphone_call_done
+      // webhook can auto-complete the HubSpot task on disposition. Server
+      // ignores this on other CRMs. See issue #170.
+      taskId: msg.taskId || null,
     };
     // Open (or reuse) our hosted softphone window and pass the dial via the URL.
     // Routing every CRM through this one page means one registered iframe origin

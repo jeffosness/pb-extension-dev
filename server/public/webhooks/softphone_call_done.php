@@ -179,6 +179,70 @@ try {
     log_msg('softphone_call_done.track_error: ' . $e->getMessage());
 }
 
+// ── CTC-completes-task: consume the intent bridge if the CTC originated
+// on a HubSpot task row ─────────────────────────────────────────────────
+// The extension writes an intent record at softphone_auth_code mint time
+// keyed by (pb_user_id, normalized phone) whenever a CTC click carries a
+// task_id. Here we look it up, pull out client_id + task_id, close the
+// task, and log a ctc_task_completed audit event to the daily crm_usage
+// log (naturally rotated, no cron needed).
+//
+// FIFO queue at the same key handles the "same phone across two back-to-
+// back task clicks" case correctly because PB's softphone is
+// single-call-per-agent: calls disposition in dial order.
+//
+// Best-effort. A failure here MUST NOT block the 200 response back to PB —
+// PB will retry the webhook on non-2xx which would double-log everything.
+try {
+    $contactPhone = is_string($contact['phone'] ?? null) ? $contact['phone'] : '';
+    if ($agentMemberUserId !== null && $contactPhone !== '') {
+        $popped = ctc_intent_consume((string)$agentMemberUserId, $contactPhone);
+        if (is_array($popped)) {
+            $intentClientId = (string)($popped['client_id'] ?? '');
+            $intentTaskId   = (string)($popped['task_id']   ?? '');
+            $completed = false;
+            if ($intentClientId !== '' && $intentTaskId !== '' && $crmName === 'hubspot') {
+                require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
+                $completed = hubspot_complete_task_for_client($intentClientId, $intentTaskId);
+            }
+            // Audit line piggybacks on the same daily crm_usage log that's
+            // already rotated. Dashboard picks up the new event_type for
+            // free (event_type=ctc_task_completed).
+            try {
+                if (isset($logFile) && $logFile) {
+                    $auditEntry = [
+                        'ts'             => date('c'),
+                        'client_id_hash' => substr(hash('sha256', $intentClientId), 0, 12),
+                        'member_user_id' => $agentMemberUserId,
+                        'event_type'     => 'ctc_task_completed',
+                        'crm_id'         => $crmId,
+                        'crm_name'       => $crmName,
+                        'host'           => '',
+                        'path'           => '',
+                        'level'          => 3,
+                        'object_type'    => 'task',
+                        'launch_source'  => 'click_to_call',
+                        'selected_count' => 1,
+                        'task_id'        => $intentTaskId,
+                        'complete_ok'    => $completed,
+                        'call_id'        => $callId,
+                        'ua'             => null,
+                    ];
+                    @file_put_contents(
+                        $logFile,
+                        json_encode($auditEntry, JSON_UNESCAPED_SLASHES) . PHP_EOL,
+                        FILE_APPEND | LOCK_EX
+                    );
+                }
+            } catch (\Throwable $e) {
+                log_msg('softphone_call_done.ctc_audit_error: ' . $e->getMessage());
+            }
+        }
+    }
+} catch (\Throwable $e) {
+    log_msg('softphone_call_done.ctc_complete_error: ' . $e->getMessage());
+}
+
 // Capture the full raw payload ONLY when debugging is explicitly enabled, so we
 // can learn the real schema during the test without leaking PII in normal ops.
 if (!empty(cfg()['DEBUG_MODE'])) {

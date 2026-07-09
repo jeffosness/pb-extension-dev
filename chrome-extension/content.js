@@ -2170,11 +2170,23 @@ function pbCtcFindHubspot() {
       var taskAnchor =
         taskCell.querySelector('[data-test-id="truncated-object-label"] span') ||
         taskCell;
+
+      // Task ID from the row's data-test-id="row-{taskId}" attribute. Used
+      // for auto-completing the task server-side via the CTC intent bridge
+      // (see softphone_auth_code.php + softphone_call_done.php + issue #170).
+      var taskId = null;
+      if (row) {
+        var rowTestId = row.getAttribute("data-test-id") || "";
+        var rowMatch = rowTestId.match(/^row-(\d+)$/);
+        if (rowMatch) taskId = rowMatch[1];
+      }
+
       out.push({
         el: taskAnchor,
         number: taskNum,
         recordId: contactId,        // may be null for tasks with no contact association
         objectType: contactId ? "contact" : null,
+        taskId: taskId,             // triggers server-side auto-complete on disposition
       });
     }
 
@@ -2223,11 +2235,23 @@ function pbCtcFindHubspot() {
       // The phone value is a bare <span>{phone}</span> child of the <td>.
       // Anchor after that span so the pill sits inline with the number.
       var classicAnchor = classicCell.querySelector("span") || classicCell;
+
+      // Task ID from the row's data-test-id — same attribute the newer view
+      // uses (verified: <tr data-test-id="row-28047676047" ...>). Powers the
+      // CTC intent bridge → server-side task completion.
+      var classicTaskId = null;
+      if (classicRow) {
+        var classicRowTestId = classicRow.getAttribute("data-test-id") || "";
+        var classicRowMatch = classicRowTestId.match(/^row-(\d+)$/);
+        if (classicRowMatch) classicTaskId = classicRowMatch[1];
+      }
+
       out.push({
         el: classicAnchor,
         number: classicNum,
         recordId: classicContactId,
         objectType: classicContactId ? "contact" : null,
+        taskId: classicTaskId,
       });
     }
   } catch (e) {}
@@ -2298,7 +2322,7 @@ function pbCtcDecorate() {
         "margin-left:6px;padding:2px;background:transparent;border:0;" +
         "cursor:pointer;vertical-align:middle;line-height:1;";
 
-      (function (number, recordId, objectType) {
+      (function (number, recordId, objectType, taskId) {
         btn.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
@@ -2306,16 +2330,22 @@ function pbCtcDecorate() {
           // recordId/objectType travel with the click so list-view pills carry
           // per-row identity; record-page pills omit them (null) and let
           // background.js resolve from the tab URL.
+          //
+          // taskId is only set on the two task-view finders (branches #3/#4).
+          // When present, background.js passes it to softphone_auth_code which
+          // drops a CTC intent record — softphone_call_done.php consumes that
+          // record and auto-completes the task on disposition. See issue #170.
           try {
             chrome.runtime.sendMessage({
               type: "CLICK_TO_CALL",
               number: number,
               recordId: recordId || null,
               objectType: objectType || null,
+              taskId: taskId || null,
             });
           } catch (e) {}
         });
-      })(t.number, t.recordId, t.objectType);
+      })(t.number, t.recordId, t.objectType, t.taskId);
 
       anchor.insertAdjacentElement("afterend", btn);
     }

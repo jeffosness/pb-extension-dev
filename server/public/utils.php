@@ -902,7 +902,7 @@ function rate_limit_or_fail(string $client_id, int $maxPerMinute = 60): void {
 
 /**
  * Clean up stale rate limit cache files older than 1 hour.
- * 
+ *
  * Call this periodically (e.g., daily cron) to prevent cache bloat.
  */
 function cleanup_rate_limit_cache(): void {
@@ -910,11 +910,227 @@ function cleanup_rate_limit_cache(): void {
     if (!is_dir($cacheDir)) {
         return;
     }
-    
+
     $cutoff = time() - 3600;  // 1 hour ago
-    
+
     foreach (glob($cacheDir . '/rl_*.txt') as $file) {
         if (@filemtime($file) < $cutoff) {
+            @unlink($file);
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// Click-to-Call intent bridge
+//
+// The problem: on the softphone_call_done webhook, PhoneBurner gives us the
+// agent's pb_user_id and the dialed phone number, but NOT the extension's
+// client_id (needed to load HubSpot tokens) or the HubSpot task_id (needed
+// to complete the task on disposition). PhoneBurner drops arbitrary
+// custom_data we try to pass through — confirmed empirically 2026-07-08.
+//
+// The bridge: at CTC-click time, softphone_auth_code.php writes an "intent"
+// record to disk keyed by (pb_user_id, normalized phone). When the webhook
+// fires, softphone_call_done.php looks up the record, pulls out client_id
+// + task_id, completes the task, and consumes the record.
+//
+// FIFO queue on the same key:
+//   Same (pb_user_id, phone) pair can have multiple pending intents if a
+//   customer clicks CTC on two tasks that share a phone number back-to-
+//   back. Since PhoneBurner's softphone is single-call-per-agent, calls
+//   disposition in the order they were dialed — we consume the OLDEST
+//   pending intent on each webhook. Correct by construction.
+//
+// Cleanup without cron:
+//   1. Consume path — the webhook removes the consumed entry and deletes
+//      the file when empty.
+//   2. Write path — before appending, prune stale entries (> 24h old) from
+//      the same file.
+//   3. Sweep-on-write — every N writes, do a directory sweep to catch
+//      files with only stale entries (customer clicked CTC but never
+//      completed the call).
+//
+// Audit log:
+//   Consumed intents append event_type=ctc_task_completed to the existing
+//   metrics/crm_usage-YYYY-MM-DD.log — inherits the daily-rotation +
+//   logrotate retention that's already in place. No new log surface.
+// -------------------------------------------------------------------------
+
+/**
+ * Directory for CTC intent files. Co-located with tokens because they
+ * share sensitivity (bridge between the customer's PB identity and their
+ * extension client_id).
+ */
+function ctc_intents_dir(): string
+{
+    $dir = tokens_base_dir() . '/ctc_intents';
+    ensure_dir_secure($dir);
+    return $dir;
+}
+
+/**
+ * Normalize a phone number for use as a lookup key. Strips everything
+ * except digits — the same input format the softphone sees and the same
+ * shape softphone_call_done receives.
+ */
+function ctc_normalize_phone(string $phone): string
+{
+    return preg_replace('/\D/', '', $phone);
+}
+
+/**
+ * Build the intent file path for a given (pb_user_id, phone) pair.
+ * Returns null if the sanitized inputs would produce an invalid path.
+ */
+function ctc_intent_file_path(string $pb_user_id, string $phone): ?string
+{
+    $normalizedPhone = ctc_normalize_phone($phone);
+    if ($pb_user_id === '' || $normalizedPhone === '') {
+        return null;
+    }
+    $userHash = substr(hash('sha256', (string)$pb_user_id), 0, 12);
+    $filename = $userHash . '_' . $normalizedPhone . '.json';
+    return ctc_intents_dir() . '/' . $filename;
+}
+
+/**
+ * Read + decode the JSON array at the intent path. Returns [] if the file
+ * doesn't exist or is unparseable (never null — callers append to the result).
+ */
+function ctc_intent_read_file(string $path): array
+{
+    if (!is_file($path)) return [];
+    $raw = @file_get_contents($path);
+    if ($raw === false || $raw === '') return [];
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+/**
+ * Prune entries older than TTL from an intent list. Called on every write
+ * and consume so stale entries don't accumulate on a busy shared phone.
+ */
+function ctc_intent_prune_stale(array $intents, int $ttlSec = 86400): array
+{
+    $cutoff = time() - $ttlSec;
+    return array_values(array_filter($intents, function ($entry) use ($cutoff) {
+        $mintedAt = isset($entry['minted_at']) ? (int)$entry['minted_at'] : 0;
+        return $mintedAt >= $cutoff;
+    }));
+}
+
+/**
+ * Write a new CTC intent onto the FIFO queue at (pb_user_id, phone).
+ *
+ * @return bool true on write success, false on missing inputs / IO failure.
+ */
+function ctc_intent_write(
+    string $pb_user_id,
+    string $phone,
+    string $client_id,
+    string $task_id
+): bool {
+    $path = ctc_intent_file_path($pb_user_id, $phone);
+    if ($path === null || $client_id === '' || $task_id === '') {
+        return false;
+    }
+
+    $existing = ctc_intent_read_file($path);
+    $existing = ctc_intent_prune_stale($existing);
+
+    $existing[] = [
+        'client_id'  => $client_id,
+        'task_id'    => $task_id,
+        'minted_at'  => time(),
+    ];
+
+    // atomic_write_json enforces 0600 file perms. Directory is 0700 via
+    // ensure_dir_secure in ctc_intents_dir().
+    try {
+        atomic_write_json($path, $existing);
+    } catch (\Throwable $e) {
+        log_msg('ctc_intent_write_error: ' . $e->getMessage());
+        return false;
+    }
+
+    // Rate-limited directory sweep. Every ~20 writes, scan the whole
+    // directory for files whose youngest entry is stale and delete them.
+    // Catches the "customer clicked CTC then closed the tab" long tail
+    // without needing cron. Cheap: bounded by intent-file count, which
+    // stays small even at 1000+ CTC clicks/day (files are consumed by
+    // webhooks or pruned by same-key writes).
+    if (random_int(0, 19) === 0) {
+        ctc_intent_sweep_stale_files();
+    }
+
+    return true;
+}
+
+/**
+ * Consume the oldest pending intent at (pb_user_id, phone).
+ *
+ * Returns the popped intent (with client_id + task_id) on hit, null on miss.
+ * Deletes the file when the queue is empty; otherwise rewrites it.
+ * Prunes stale entries as a side effect.
+ */
+function ctc_intent_consume(string $pb_user_id, string $phone): ?array
+{
+    $path = ctc_intent_file_path($pb_user_id, $phone);
+    if ($path === null) return null;
+
+    $intents = ctc_intent_read_file($path);
+    $intents = ctc_intent_prune_stale($intents);
+
+    if (empty($intents)) {
+        // File exists but all entries stale — clean it up.
+        if (is_file($path)) @unlink($path);
+        return null;
+    }
+
+    $popped = array_shift($intents);
+
+    if (empty($intents)) {
+        // Last entry consumed — delete the file rather than write an empty array.
+        @unlink($path);
+    } else {
+        try {
+            atomic_write_json($path, $intents);
+        } catch (\Throwable $e) {
+            // Consume already computed; if the rewrite fails, the file is left
+            // with the OLD contents including the just-consumed entry. That
+            // would let the same webhook double-fire task completion on a
+            // retry. Log loud so we notice.
+            log_msg('ctc_intent_consume_rewrite_error: ' . $e->getMessage());
+        }
+    }
+
+    return $popped;
+}
+
+/**
+ * Directory-wide sweep. Deletes any intent file whose newest entry is
+ * older than the TTL. Called opportunistically from ctc_intent_write to
+ * clean up orphaned intents without a cron.
+ */
+function ctc_intent_sweep_stale_files(int $ttlSec = 86400): void
+{
+    $dir = ctc_intents_dir();
+    $files = @glob($dir . '/*.json') ?: [];
+    $cutoff = time() - $ttlSec;
+
+    foreach ($files as $file) {
+        $intents = ctc_intent_read_file($file);
+        if (empty($intents)) {
+            @unlink($file); // empty file — nothing to protect
+            continue;
+        }
+        // Find newest minted_at in the file.
+        $newest = 0;
+        foreach ($intents as $entry) {
+            $ts = isset($entry['minted_at']) ? (int)$entry['minted_at'] : 0;
+            if ($ts > $newest) $newest = $ts;
+        }
+        if ($newest < $cutoff) {
             @unlink($file);
         }
     }
