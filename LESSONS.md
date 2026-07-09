@@ -6,6 +6,41 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-07-09 — Anomaly-whitelist drift after CTC-completes-task (repeat of 2026-07-03 pattern)
+
+**What happened:** The morning after PR #172 shipped to prod, the CRM Usage Dashboard flagged two "Endpoint not in the whitelist for hubspot token reads" anomalies for `softphone_auth_code` and `softphone_call_done`. Both are legitimate: my new code in PR #172 added HubSpot-token reads to those endpoints (checking "is HS connected?" before writing an intent, and loading tokens to PATCH the task on webhook fire). Same class of drift as 2026-07-03 (PR #163), where the softphone endpoints needed to be whitelisted for PB token reads. Fixed by adding the two endpoints to the `hubspot` whitelist in `crm_usage_dashboard.php`.
+
+**Why we didn't catch it:** This is a REPEAT of the failure pattern documented on 2026-07-03. The 2026-07-03 entry ended with "any new endpoint that intentionally reads-then-decides on token presence needs to be either whitelisted or restructured." But that guidance lived only in LESSONS.md, not in a checklist adjacent to the code being changed. When I wrote PR #172 I didn't consult LESSONS.md before shipping. Neither did the Adversarial Review section of PR #172 — I audited data-integrity + failure isolation but not "does this add a new (endpoint × provider) token-read pair that the anomaly rule doesn't know about?"
+
+**Process change:** Two layers, so this stops repeating.
+
+1. **PR #175 fixed the immediate whitelist gap** with an inline code comment on the added lines that ties back to this LESSONS entry — future contributors reading that region see the trap named.
+2. **CLAUDE.md's Security Checklist** now includes an explicit item: *"If your PR adds a new call site that reads any of `load_pb_token()` / `load_hs_tokens()` / `load_close_tokens()` / `load_apollo_tokens()`, add the endpoint's basename to the matching `$token_read_whitelist` array in `crm_usage_dashboard.php`."* This is the specific mechanical check that would have caught PR #172 at review time.
+
+Broader lesson — **when a class of failure repeats, the fix isn't "another LESSONS entry pointing at the previous LESSONS entry." It's making the check mechanical.** Text guidance in LESSONS.md is background reading; a line item in a security checklist is what gets consulted. If this failure repeats a third time, the next step is a CI check that greps for new `load_*_tokens(` call sites and requires whitelist changes in the same PR.
+
+---
+
+## 2026-07-08 — Cool-off gate was checking the wrong boundary
+
+**What happened:** The Tier-2 cool-off gate we shipped in PR #167 was implemented in `risk-tier-check.yml` at PR merge time — a Tier 2 PR couldn't be merged to main for 4 hours after it opened. When we went to test PR #172 (CTC-completes-task, Tier 2) on the dev backend today, we discovered the gate blocked the entire flow: since `deploy-dev.yml` triggers on push to main, blocking the merge blocked dev-testing itself. The whole point of the cool-off — soak on dev before shipping to customers — got inverted.
+
+**Why we didn't catch it:** When designing the gate (PR #167), we conflated "merged to main" with "deployed to prod." But the pipeline is `merge → dev auto-deploy` and `prod-* tag push → prod deploy`. Those are two different boundaries; the cool-off belongs on the second one. The mistake wasn't caught because we didn't stress-test the gate against the intended flow — we shipped it with the assumption that dev testing already happened locally, ignoring that Jeff's workflow (and any future contributor's) relies on the dev backend for end-to-end pre-prod validation.
+
+**Process change:** PR #173 moved cool-off enforcement from `risk-tier-check.yml` to `deploy-prod.yml`. It now runs when a `prod-*` tag is pushed, walks the diff since the previous prod tag, finds the freshest commit that touched a Tier-2 file, and requires its committer date on main (= dev-merge time) to be at least 4h old. Emergency override moved from PR labels (`hotfix`/`urgent`) to tag suffix (`prod-vX.Y.Z-hotfix` / `-urgent` / `-rollback`) so the escape hatch lives at the same boundary as the gate. Documented in CLAUDE.md's "Risk-tier gates" section. Broader lesson — **when introducing a new gate, always trace the actual pipeline end-to-end to identify the correct enforcement point.** "Where does the change actually reach the customer?" is the anchor, not "where does the commit live?"
+
+---
+
+## 2026-07-08 — PhoneBurner drops arbitrary custom_data on the softphone dial
+
+**What happened:** While designing [#170](https://github.com/jeffosness/pb-extension-dev/issues/170) (CTC-completes-task), we assumed we could pass a `custom_data: { task_id, client_id }` object through the DIAL postMessage to PhoneBurner's softphone and get it echoed back on the `softphone_call_done` webhook alongside the `pb_user_id` / `slug` fields we already see. Confirmed empirically — PB drops everything except the fields it populates itself. The webhook only exposes `pb_user_id` (from the authenticated softphone session) and `slug` (from the softphone registration record). No third-party pass-through.
+
+**Why we didn't catch it:** No documentation of PB's softphone postMessage contract exists in the repo — the fields we send were reverse-engineered from working traffic. The `custom_data` field's presence on the webhook created a false-positive signal that we could add our own keys. The real contract is "PB owns the whole custom_data namespace on the softphone envelope."
+
+**Process change:** PR #172 built a server-side intent bridge instead — `softphone_auth_code.php` writes a `(pb_user_id, phone) → {client_id, task_id, crm_name}` record on CTC-click; `softphone_call_done.php` reads it on webhook fire. FIFO queue on same-key collisions since PB's softphone is single-call-per-agent. The general lesson — whenever a third-party webhook exposes a field with an ambiguous name like `custom_data`, don't assume it's ours to populate; verify empirically or from their docs.
+
+---
+
 ## 2026-07-08 — Dashboard CRM Distribution silently drifted from Dial Sessions total
 
 **What happened:** The top KPI on the CRM Usage Dashboard showed 27 dial sessions today, while the CRM Distribution table just below showed hubspot: 16 + close: 16 = 32. Two adjacent widgets, both about "sessions," giving numbers that couldn't both be right. Traced back to a data-source split done deliberately in commit 9db0eac (April 19, 2026): the top card uses SSE unique sessions (complete count), the CRM Distribution uses `crm_usage_stats.by_crm_id` (per-CRM attribution). At the time, `crm_usage_stats` only contained `event_type=dial_session` rows, so both were counting the same thing and the split was invisible. Then PR #135 added `click_to_call` events and PR #164 added `click_to_call_done` events into the same log. The CRM Distribution query didn't filter by `event_type`, so the per-CRM slices silently started inflating with CTC events — the invariant the April fix relied on had been erased by an unrelated feature. Fixed by adding a dial-session-filtered fetch and feeding the section from it, plus renaming the chart title from "Events by CRM" (a hint from the last dev that the label had drifted from the data) to "Dial Sessions by CRM."

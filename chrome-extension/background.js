@@ -132,9 +132,27 @@ async function buildSoftphoneUrl(dial) {
   // Mint a single-use code; softphone.php exchanges it server-side for this
   // user's PhoneBurner bearer token and injects it into the iframe (?token=).
   // The token never travels through the extension or the top-window URL.
+  //
+  // When the dial carries a taskId (CTC originated on a task row), pass
+  // task_id + phone + crm_name in the mint request so softphone_auth_code
+  // writes a CTC intent record. That record is the bridge that lets
+  // softphone_call_done auto-complete the task on disposition — PB drops
+  // arbitrary custom_data we try to pass through the dial payload, so we
+  // can't correlate at the webhook without this server-side breadcrumb.
+  //
+  // crm_name here is the base identifier (e.g. "hubspot"), not the
+  // object-type-aware namespace (hubspotcompany/hubspotdeal) — task rows
+  // always associate to contacts, so "hubspot" is correct on all HubSpot
+  // task views. The server registry only routes on the base name.
+  const codeBody = {};
+  if (dial.taskId && dial.number && dial.ctcCrmId) {
+    codeBody.task_id  = String(dial.taskId);
+    codeBody.phone    = String(dial.number);
+    codeBody.crm_name = String(dial.ctcCrmId);
+  }
   let code = "";
   try {
-    const resp = await api("core/softphone_auth_code.php");
+    const resp = await api("core/softphone_auth_code.php", codeBody);
     if (resp && resp.ok && resp.code) code = resp.code;
   } catch (e) {
     console.error("softphone_auth_code failed", e);
@@ -263,16 +281,27 @@ function detectCrmFromUrl(tabUrl) {
       else if (typeId === "0-3") objectType = "deal";
     }
     // List pages: /objects/0-X/
+    // NOTE: HubSpot uses object-type 0-27 for TASKS. The "All Tasks" table view
+    // lives at /contacts/{portalId}/objects/0-27/views/{viewId}/list — the same
+    // URL shape as contact/company/deal lists, just with 0-27. Treat that as
+    // pageType="tasks" (not "list") so the Task Queue launch card in the popup
+    // and the CTC pill finder both activate on it. Customers reach this view
+    // from HubSpot's left-nav "Tasks" link, which is distinct from the older
+    // /tasks/{portalId}/view/ queue URL handled below.
     else if (path.match(/\/objects\/(0-[0-9]+)\//)) {
-      pageType = "list";
       const listMatch = path.match(/\/objects\/(0-[0-9]+)\//);
       const typeId = listMatch[1];
-      if (typeId === "0-1") objectType = "contact";
-      else if (typeId === "0-2") objectType = "company";
-      else if (typeId === "0-3") objectType = "deal";
+      if (typeId === "0-27") {
+        pageType = "tasks";
+      } else {
+        pageType = "list";
+        if (typeId === "0-1") objectType = "contact";
+        else if (typeId === "0-2") objectType = "company";
+        else if (typeId === "0-3") objectType = "deal";
+      }
     }
     // Tasks pages: /tasks/{portalId}/view/...
-    // (Customer's task queue / list view. Used by the Task Queue dialing feature.)
+    // (Older task queue URL. Same feature; different URL shape.)
     else if (path.match(/\/tasks\/\d+\/(view|queue)\//)) {
       pageType = "tasks";
       // Portal ID is in the path here too: /tasks/{portalId}/view/...
@@ -293,32 +322,55 @@ function detectCrmFromUrl(tabUrl) {
   return { host, path, crmId: "generic", crmName: host, level: 1 };
 }
 
-// Ensure content script is injected on a tab (top frame only; safe if already injected)
+// Ensure content script is injected on a tab (top frame only; safe if already injected).
+//
+// Serialize per-tab injection via an in-flight promise map. Without this,
+// concurrent triggers (tab update + tab activate + popup open all firing on the
+// same tab within the same event loop turn) each PING → all get null before
+// any injection completes → all call executeScript. That triggers a double
+// injection into the isolated world, where content.js's top-level
+// `const BASE_URLS` and crm_config.js's top-level `const CRM_REGISTRY` throw
+// SyntaxError on second evaluation and spam the customer's console.
+// Sharing one promise across concurrent callers eliminates that race.
+const inFlightInjections = new Map();
 async function ensureContentScript(tabId) {
   if (!tabId) return;
 
-  const pong = await new Promise((resolve) => {
-    try {
-      chrome.tabs.sendMessage(
-        tabId,
-        { type: "PING" },
-        { frameId: 0 },
-        (res) => {
-          if (chrome.runtime.lastError) return resolve(null);
-          resolve(res);
-        },
-      );
-    } catch (e) {
-      resolve(null);
-    }
-  });
+  if (inFlightInjections.has(tabId)) {
+    return inFlightInjections.get(tabId);
+  }
 
-  if (pong && pong.ok) return;
+  const p = (async () => {
+    const pong = await new Promise((resolve) => {
+      try {
+        chrome.tabs.sendMessage(
+          tabId,
+          { type: "PING" },
+          { frameId: 0 },
+          (res) => {
+            if (chrome.runtime.lastError) return resolve(null);
+            resolve(res);
+          },
+        );
+      } catch (e) {
+        resolve(null);
+      }
+    });
 
-  await chrome.scripting.executeScript({
-    target: { tabId, allFrames: false },
-    files: CONTENT_SCRIPT_FILES,
-  });
+    if (pong && pong.ok) return;
+
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      files: CONTENT_SCRIPT_FILES,
+    });
+  })();
+
+  inFlightInjections.set(tabId, p);
+  try {
+    await p;
+  } finally {
+    inFlightInjections.delete(tabId);
+  }
 }
 
 // Register session + tell content script to follow
@@ -436,6 +488,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       number: msg.number,
       recordId: msg.recordId || ctx.recordId || null, // becomes crm_id
       crmName: ctcCrmName(ctx.crmId, msg.objectType || ctx.objectType),
+      // Only set when the click originated on a task row (finder branches
+      // #3/#4). The softphone_auth_code endpoint writes a CTC intent record
+      // when both task_id + number are present so the softphone_call_done
+      // webhook can auto-complete the task on disposition. See issue #170.
+      taskId: msg.taskId || null,
+      // Base CRM identifier for task-completion dispatch. Server registers
+      // task-completers per crm_name (currently only "hubspot"; Close /
+      // Apollo etc. plug in without changes to the storage layer). Sent
+      // as the intent's crm_name so the webhook dispatcher knows which
+      // provider's completer to invoke. Distinct from `crmName` above,
+      // which is the object-type-aware namespace PB uses for
+      // external_crm_data (hubspot / hubspotcompany / hubspotdeal).
+      ctcCrmId: msg.taskId ? (ctx.crmId || null) : null,
     };
     // Open (or reuse) our hosted softphone window and pass the dial via the URL.
     // Routing every CRM through this one page means one registered iframe origin
@@ -449,13 +514,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // (recordId came from the URL). event_type disambiguates from dial-session
     // uses of the same launch_source values on the server side.
     try {
+      // object_type telemetry: prefer per-row identity from the pill click;
+      // fall through to the page context's objectType; then to a page-aware
+      // default. Don't hard-default to "contact" — on tasks pages the pill
+      // may fire with no per-row identity (unbound task, or ambiguous
+      // multi-contact row bailed to null), and mislabeling those as
+      // "contact" skews the CTC dashboard.
+      var objType =
+        msg.objectType ||
+        ctx.objectType ||
+        (ctx.pageType === "tasks" ? "task" : "unknown");
       api("core/track_crm_usage.php", {
         event_type: "click_to_call",
         crm_id: ctx.crmId || "unknown",
         host: ctx.host || "",
         path: ctx.path || "",
         level: ctx.level || 3,
-        object_type: msg.objectType || ctx.objectType || "contact",
+        object_type: objType,
         launch_source: msg.recordId ? "list" : "record",
         selected_count: 1,
       }).catch(function () {});
@@ -1010,10 +1085,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
         }
 
-        // Extract portal_id + hostname from the active HubSpot tab
+        // Extract portal_id + hostname from the active HubSpot tab.
+        // Two URL shapes to handle:
+        //   /tasks/{portalId}/view/...                   — older task queue view
+        //   /contacts/{portalId}/objects/0-27/views/...  — newer "All Tasks" table view
+        // Both use the same numeric portalId; try each pattern in turn.
         let portalId = null;
-        const portalMatch = hubTab.url.match(/\/tasks\/(\d+)\//);
-        if (portalMatch) portalId = portalMatch[1];
+        const tasksPortalMatch = hubTab.url.match(/\/tasks\/(\d+)\//);
+        if (tasksPortalMatch) portalId = tasksPortalMatch[1];
+        if (!portalId) {
+          const contactsPortalMatch = hubTab.url.match(/\/contacts\/(\d+)\//);
+          if (contactsPortalMatch) portalId = contactsPortalMatch[1];
+        }
         const hp = deriveHostPathFromTabUrl(hubTab.url);
 
         // Track usage (best effort — never block the launch on this)

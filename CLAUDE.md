@@ -103,6 +103,7 @@ Before committing, verify:
 - [ ] No credentials in URLs (use temp codes)
 - [ ] CORS origins still whitelisted (no origin reflection)
 - [ ] Input validation on all user-controlled data
+- [ ] **If you added a new call site that reads tokens** (`load_pb_token()`, `load_hs_tokens()`, `load_close_tokens()`, `load_apollo_tokens()`), add the endpoint's basename to the matching `$token_read_whitelist` array in `server/public/metrics/crm_usage_dashboard.php`. Missing this fires a false-positive dashboard anomaly the morning after prod deploy — see LESSONS.md 2026-07-09 for the repeat we don't want to hit a third time.
 - [ ] **If you touched `utils.php` (or any function tested in `tests/`), PHPUnit is green.** Run `composer test` locally. CI blocks red PRs and requires a `## Test Impact` declaration for changes to security-critical files — see [TESTING.md](TESTING.md).
 
 ### Critical Security Utilities (ALWAYS USE)
@@ -748,7 +749,7 @@ Every PR gets classified by CI into `risk:tier-0`, `risk:tier-1`, or `risk:tier-
 
 - **Tier 0** (docs, dashboard, tests, tooling, marketing, changelog): ships freely. Only the KB Impact check applies.
 - **Tier 1** (extension code, popup UI, most api/ endpoints, softphone.php): requires a filled-in "Adversarial Review" section in the PR body. CI enforces this.
-- **Tier 2** (security-critical: `utils.php`, `bootstrap.php`, webhooks, `sse.php`, `config.sample.php`, OAuth endpoints, `*_call_logger.php`, `SECURITY.md`): requires Adversarial Review AND a 4-hour cool-off from PR open before merge. Add the `hotfix` or `urgent` label to override cool-off for genuine emergencies. Also requires a Security Impact declaration (see SECURITY.md).
+- **Tier 2** (security-critical: `utils.php`, `bootstrap.php`, webhooks, `sse.php`, `config.sample.php`, OAuth endpoints, `*_call_logger.php`, `SECURITY.md`): requires Adversarial Review and a Security Impact declaration (see SECURITY.md). The 4-hour cool-off is enforced at **production deploy time** (`prod-*` tag push), NOT at PR merge. Merging to main auto-deploys to dev for soak-testing — that's when the cool-off clock starts. Cut the prod tag once the freshest Tier-2 commit has been on dev for 4 hours. Emergency override: cut the prod tag with a `-hotfix`, `-urgent`, or `-rollback` suffix (e.g. `prod-v0.8.2-hotfix`).
 
 **Post-Deploy Verification** is required in the PR body for anything Tier 1+ that changes production behavior — write the specific checks you'll perform within 24h of the prod tag. Not CI-enforced, but a written-down habit so nothing is skipped and future contributors know what "confirming a deploy worked" looks like.
 

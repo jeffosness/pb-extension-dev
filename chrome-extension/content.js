@@ -2117,6 +2117,143 @@ function pbCtcFindHubspot() {
         objectType: objectType,
       });
     }
+
+    // ── 3. Newer Tasks table (/objects/0-27/): phone cell IDs follow the
+    // object-based pattern cell-0-27-hs_task_contact_phone-{taskId}. The
+    // dialable identity is the ASSOCIATED CONTACT — grab the contactId
+    // from the association link in the same row so pill clicks carry
+    // per-row identity the softphone can resolve.
+    var taskPhoneCells = document.querySelectorAll(
+      'td[id^="cell-0-27-hs_task_contact_phone-"]'
+    );
+    for (var k = 0; k < taskPhoneCells.length; k++) {
+      var taskCell = taskPhoneCells[k];
+      var taskPhoneText = taskCell.textContent || "";
+      // Explicit "--" skip mirrors branch #4 (classic view). pbCtcNormalizePhone
+      // catches this too, but being consistent across the two task branches
+      // makes the intent obvious.
+      if (!taskPhoneText || taskPhoneText.trim() === "--") continue;
+      var taskNum = pbCtcNormalizePhone(taskPhoneText);
+      if (!taskNum) continue; // task with no phone yet
+
+      // The associated contact ID lives on the row's contact-link:
+      //   <a data-test-id="association-link-0-1-{contactId}" href="...">
+      //
+      // IMPORTANT: HubSpot tasks can have MULTIPLE contact associations
+      // (pb_dialsession_from_tasks.php iterates associations.contacts.results
+      // as a list). The task's hs_task_contact_phone value is one specific
+      // contact's phone, but we can't tell WHICH contact from the DOM. If
+      // there are 2+ association links, picking the first one risks binding
+      // the displayed phone to the wrong contact — the call would connect
+      // but PhoneBurner would log the recording/disposition against the
+      // wrong CRM record. Bail to null instead; the softphone path handles
+      // recordId=null gracefully (call still places, just logs unbound).
+      var row = taskCell.closest("tr");
+      var contactId = null;
+      if (row) {
+        var assocLinks = row.querySelectorAll(
+          'a[data-test-id^="association-link-0-1-"]'
+        );
+        if (assocLinks.length === 1) {
+          var assocMatch = (assocLinks[0].getAttribute("data-test-id") || "")
+            .match(/^association-link-0-1-(\d+)$/);
+          if (assocMatch) contactId = assocMatch[1];
+        }
+        // assocLinks.length === 0: unbound task; contactId stays null.
+        // assocLinks.length >= 2: ambiguous; contactId stays null.
+      }
+
+      // Anchor the pill inside the phone cell, after the visible phone text.
+      // The task-row phone value is wrapped in <span>+1 (585) 381-0810</span>
+      // inside the truncate wrapper — anchor after that span so the pill
+      // sits inline with the number.
+      var taskAnchor =
+        taskCell.querySelector('[data-test-id="truncated-object-label"] span') ||
+        taskCell;
+
+      // Task ID from the row's data-test-id="row-{taskId}" attribute. Used
+      // for auto-completing the task server-side via the CTC intent bridge
+      // (see softphone_auth_code.php + softphone_call_done.php + issue #170).
+      var taskId = null;
+      if (row) {
+        var rowTestId = row.getAttribute("data-test-id") || "";
+        var rowMatch = rowTestId.match(/^row-(\d+)$/);
+        if (rowMatch) taskId = rowMatch[1];
+      }
+
+      out.push({
+        el: taskAnchor,
+        number: taskNum,
+        recordId: contactId,        // may be null for tasks with no contact association
+        objectType: contactId ? "contact" : null,
+        taskId: taskId,             // triggers server-side auto-complete on disposition
+      });
+    }
+
+    // ── 4. Classic Task Queue (/tasks/{portalId}/view/): completely different
+    // cell-id namespace than the object-based views above. Phone cell is
+    // td[id="cell-DEFAULT_NAMESPACE-contactPhoneNumber-{taskId}"] with a bare
+    // <span>{phone}</span> inside. The contact ID isn't exposed via
+    // data-test-id here — it's only in the href of the association cell's
+    // link (cell-DEFAULT_NAMESPACE-association-0-204-{taskId} → contains
+    // <a href="/contacts/{portalId}/record/0-1/{contactId}">Name</a>).
+    var classicTaskPhoneCells = document.querySelectorAll(
+      'td[id^="cell-DEFAULT_NAMESPACE-contactPhoneNumber-"]'
+    );
+    for (var n = 0; n < classicTaskPhoneCells.length; n++) {
+      var classicCell = classicTaskPhoneCells[n];
+      var classicText = classicCell.textContent || "";
+      // Skip empty phone cells (rendered as "--").
+      if (!classicText || classicText.trim() === "--") continue;
+      var classicNum = pbCtcNormalizePhone(classicText);
+      if (!classicNum) continue;
+
+      // Extract contactId from the row's contact-association cell's link href.
+      // Same multi-association trap as branch #3: if the association cell
+      // renders >1 contact record link, we can't tell which one owns the
+      // displayed phone. Bail to null on ambiguity so we don't log the call
+      // against the wrong CRM record.
+      var classicRow = classicCell.closest("tr");
+      var classicContactId = null;
+      if (classicRow) {
+        var classicAssocCell = classicRow.querySelector(
+          'td[id^="cell-DEFAULT_NAMESPACE-association-0-204-"]'
+        );
+        if (classicAssocCell) {
+          var classicLinks = classicAssocCell.querySelectorAll(
+            'a[href*="/record/0-1/"]'
+          );
+          if (classicLinks.length === 1) {
+            var hrefMatch = (classicLinks[0].getAttribute("href") || "")
+              .match(/\/record\/0-1\/(\d+)/);
+            if (hrefMatch) classicContactId = hrefMatch[1];
+          }
+          // 0 or 2+: contactId stays null (unbound / ambiguous).
+        }
+      }
+
+      // The phone value is a bare <span>{phone}</span> child of the <td>.
+      // Anchor after that span so the pill sits inline with the number.
+      var classicAnchor = classicCell.querySelector("span") || classicCell;
+
+      // Task ID from the row's data-test-id — same attribute the newer view
+      // uses (verified: <tr data-test-id="row-28047676047" ...>). Powers the
+      // CTC intent bridge → server-side task completion.
+      var classicTaskId = null;
+      if (classicRow) {
+        var classicRowTestId = classicRow.getAttribute("data-test-id") || "";
+        var classicRowMatch = classicRowTestId.match(/^row-(\d+)$/);
+        if (classicRowMatch) classicTaskId = classicRowMatch[1];
+      }
+
+      out.push({
+        el: classicAnchor,
+        number: classicNum,
+        recordId: classicContactId,
+        objectType: classicContactId ? "contact" : null,
+        taskId: classicTaskId,
+      });
+    }
   } catch (e) {}
   return out;
 }
@@ -2185,7 +2322,7 @@ function pbCtcDecorate() {
         "margin-left:6px;padding:2px;background:transparent;border:0;" +
         "cursor:pointer;vertical-align:middle;line-height:1;";
 
-      (function (number, recordId, objectType) {
+      (function (number, recordId, objectType, taskId) {
         btn.addEventListener("click", function (ev) {
           ev.preventDefault();
           ev.stopPropagation();
@@ -2193,16 +2330,22 @@ function pbCtcDecorate() {
           // recordId/objectType travel with the click so list-view pills carry
           // per-row identity; record-page pills omit them (null) and let
           // background.js resolve from the tab URL.
+          //
+          // taskId is only set on the two task-view finders (branches #3/#4).
+          // When present, background.js passes it to softphone_auth_code which
+          // drops a CTC intent record — softphone_call_done.php consumes that
+          // record and auto-completes the task on disposition. See issue #170.
           try {
             chrome.runtime.sendMessage({
               type: "CLICK_TO_CALL",
               number: number,
               recordId: recordId || null,
               objectType: objectType || null,
+              taskId: taskId || null,
             });
           } catch (e) {}
         });
-      })(t.number, t.recordId, t.objectType);
+      })(t.number, t.recordId, t.objectType, t.taskId);
 
       anchor.insertAdjacentElement("afterend", btn);
     }
@@ -2410,6 +2553,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The HubSpot tasks table marks each row with data-test-id="row-{taskId}".
   // If any rows have their checkbox checked, return only those task IDs;
   // otherwise return all visible task IDs (the customer dials the whole view).
+  //
+  // WORKS ON BOTH TASK VIEWS: verified via a captured DOM from the newer
+  // /objects/0-27/views/{viewId}/list table — those rows carry the same
+  // <tr data-test-id="row-{taskId}"> attribute as the classic Task Queue
+  // (/tasks/{portalId}/view/) rows. Cell-id namespaces differ between the
+  // two views (cell-0-27-* vs cell-DEFAULT_NAMESPACE-*), which matters for
+  // the CTC pill finder above, but the row-level test id is identical.
   if (msg && msg.type === "HS_GET_TASK_IDS") {
     try {
       const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
