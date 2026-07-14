@@ -3,8 +3,8 @@
 **Audience:** PhoneBurner customers using the Chrome extension, PhoneBurner support reps, and AI support agents.
 
 **Product:** PhoneBurner Dial Session Companion (Chrome extension)
-**Latest released version (at time of writing):** 0.7.0 — verify against the Chrome Web Store listing for the current published version. Some features described here may be unavailable in older installed versions; the extension auto-updates by default in Chrome.
-**Chrome Web Store:** Search "PhoneBurner Dial Session Companion"
+**Current version:** check the store listing for the latest published version — the extension auto-updates by default in Chrome and Edge, so most customers will be on the latest within a day of any release. Some features described here may be unavailable in older installed versions.
+**Install:** [Chrome Web Store](https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj) · [Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/phoneburner-dial-session-/mdkihhcphnngfcldfbkpjmifnnhinian)
 
 ---
 
@@ -82,17 +82,25 @@ The extension supports two integration levels. The level determines which featur
 
 **Symptom:** Customer can't find or install the extension.
 
-**Resolution:**
-1. Direct them to the Chrome Web Store and search for "PhoneBurner Dial Session Companion."
-2. Click **Add to Chrome**.
-3. Pin the extension to the toolbar (puzzle-piece icon → pin).
-4. Open a CRM page (e.g., HubSpot, Close, Apollo) and click the PhoneBurner icon.
+**Resolution by browser:**
+
+| Browser | Where to install |
+|---------|------------------|
+| Google Chrome | [Chrome Web Store listing](https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj) |
+| Microsoft Edge | [Edge Add-ons listing](https://microsoftedge.microsoft.com/addons/detail/phoneburner-dial-session-/mdkihhcphnngfcldfbkpjmifnnhinian) (preferred) — or the Chrome Web Store link above (Edge supports both) |
+| Brave, Arc, Vivaldi, Opera, other Chromium browsers | Use the [Chrome Web Store link](https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj). Most Chromium browsers install Chrome extensions natively — the install button substitutes the browser's own name. Opera may require enabling Chrome extensions via its add-on store first if the install button doesn't appear. |
+| Firefox, Safari | **Not supported.** The extension is built on Chromium's extension API and won't work in non-Chromium browsers. |
+
+**After installing (all browsers):**
+1. Click **Add to Chrome / Edge / Brave / etc.** in the store listing.
+2. Pin the extension to the toolbar (puzzle-piece icon → pin).
+3. Open a CRM page (e.g., HubSpot, Close, Apollo) and click the PhoneBurner icon.
 
 **Requirements:**
-- Google Chrome (or any Chromium-based browser: Edge, Brave, Arc).
+- Chrome, Edge, Brave, Arc, Vivaldi, or Opera (any Chromium-based browser).
 - Active PhoneBurner account (see [No PhoneBurner account](#2-no-phoneburner-account)).
 
-**Escalate if:** The extension installs but the popup is blank or shows JavaScript errors. Ask for a screenshot of the popup and any errors visible in Chrome DevTools (right-click extension icon → Inspect popup → Console tab).
+**Escalate if:** The extension installs but the popup is blank or shows JavaScript errors. Ask for a screenshot of the popup and any errors visible in the browser's DevTools (right-click extension icon → Inspect popup → Console tab).
 
 ---
 
@@ -525,7 +533,7 @@ A: Yes — but **disconnect before uninstalling** for a complete cleanup:
 3. **Disable and re-enable** the extension (Chrome → puzzle-piece icon → Manage Extensions → toggle off, then on).
 4. **Reload the extension** (chrome://extensions → "Reload" arrow on the extension card).
 5. **Disconnect everything** (extension Settings → Disconnect PhoneBurner, Disconnect HubSpot/Close/Apollo) and reconnect fresh.
-6. **Uninstall and reinstall** (chrome://extensions → Remove → reinstall from Chrome Web Store). The customer will need to re-enter their PAT and reconnect OAuth providers, but no CRM data is lost.
+6. **Uninstall and reinstall** (chrome://extensions or edge://extensions → Remove → reinstall from the appropriate store: [Chrome Web Store](https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj) or [Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/phoneburner-dial-session-/mdkihhcphnngfcldfbkpjmifnnhinian)). The customer will need to re-enter their PAT and reconnect OAuth providers, but no CRM data is lost.
 
 **Escalate if:** Even a fresh reinstall doesn't work. Ask for: Chrome version, OS, the CRM URL, screenshots of the extension popup, and any errors visible in Chrome DevTools console.
 
