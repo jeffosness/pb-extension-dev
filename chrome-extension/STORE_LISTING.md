@@ -18,14 +18,23 @@ The PhoneBurner Dial Session Companion bridges your CRM workflow with PhoneBurne
 🚀 Key Features
 
 🔹 Launch Dial Sessions from Your CRM
-Two ways to start dialing:
+Three ways to start dialing:
 
 • Select & Launch: Choose records from any CRM list view and launch instantly
 • List-Based Launch (HubSpot): Pick a saved HubSpot list from a dropdown and dial up to 500 contacts or companies
+• Task-Based Launch: Dial straight from your HubSpot Task Queue or your AgencyZoom task list — turn your task queue into a power-dialing session
 
 ✅ Automatically sends contacts to PhoneBurner
 ✅ Eliminates manual CSV exports and imports
 ✅ Works with contacts, companies, and deals
+
+🔹 Click-to-Call — Single Calls Without a Full Dial Session (HubSpot)
+A small PhoneBurner flame icon appears next to phone numbers on HubSpot contact records, company records, list views, and your tasks list. Click it to place a single call in seconds — perfect for one-off follow-ups when you don't need a whole dial session.
+
+• Every phone field is dialable — Phone Number, Mobile, Home Phone, and any custom phone properties
+• Task rows auto-complete — click the flame on a task, disposition the call, and HubSpot marks the task done automatically
+• Icon-only design stays out of your way; hover for context
+• Toggle it off in Settings if you already use another dialer's click-to-call
 
 🔹 Real-Time "Follow" Widget
 Stay in sync with your dialer:
@@ -40,6 +49,7 @@ Full API integration with HubSpot:
 
 • Launch from selected records (contacts, companies, or deals)
 • Launch from saved HubSpot lists (up to 500 records per session)
+• Launch from the HubSpot Task Queue — dial through the contacts associated with your visible tasks, and have those tasks auto-complete in HubSpot as you finish each call
 • Automatically discovers all phone properties (mobile, work, custom fields)
 • Set a preferred primary phone field in Settings
 • OAuth authentication — secure, no scraping required
@@ -67,9 +77,10 @@ Full API integration with Apollo:
 • HubSpot — Advanced Level 3 integration (API-based)
 • Close — Advanced Level 3 integration (API-based)
 • Apollo.io — Advanced Level 3 integration (API-based)
+• AgencyZoom — Optimized Level 2 support (task-list dialing)
 • Pipedrive — Optimized Level 2 support
 • Salesforce — Optimized Level 2 support
-• Zoho, monday.com, and others — Generic Level 1 support
+• Zoho CRM, monday.com, and others — Generic Level 1 support
 
 ⚙️ How It Works
 
@@ -81,10 +92,10 @@ Full API integration with Apollo:
 
 🔐 Security & Privacy
 
-✅ Your PhoneBurner Personal Access Token is stored locally in your browser
+✅ Your PhoneBurner Personal Access Token is stored server-side with strict owner-only file permissions — your browser keeps only an anonymous lookup key, never the token itself
 ✅ HubSpot, Close, and Apollo authentication uses industry-standard OAuth
 ✅ No data is sold or shared with third parties
-✅ The extension only runs on pages you visit
+✅ The extension only reads CRM data when you initiate an action (clicking Launch)
 ✅ All communication is encrypted over HTTPS
 
 🧾 Requirements
@@ -110,6 +121,10 @@ This extension is ideal for:
 • PhoneBurner dial sessions support up to 500 contacts
 • Features may vary slightly by CRM platform
 
-🆕 What's New in v0.6.0
+🆕 What's New in v0.8.2
 
-✨ Apollo.io Integration: Connect your Apollo account via OAuth and launch dial sessions from your People page or sequence call tasks. Pick a sequence, filter by due tasks, and power-dial contacts directly through PhoneBurner. The Follow widget auto-navigates to Apollo contact profiles during calls.
+📋 Click-to-Call on your HubSpot tasks — the flame icon now appears next to phone numbers on your tasks list (both the classic Task Queue and the newer All Tasks table). Click to call a task's contact in one step.
+
+✅ Tasks auto-complete after task-row calls — click the flame on a task, disposition the call, and HubSpot marks the task complete automatically. Same behavior the Task-Based Dial Session flow already had, now on the single-click side too.
+
+🐛 Fixed a HubSpot console-error that some users saw on page load.

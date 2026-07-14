@@ -1,14 +1,207 @@
 // background.js — Unified extension service worker (on-demand injection + no follow-me toggles)
 
 importScripts("crm_config.js");
+importScripts("softphone_config.js");
 
-const BASE_URL = "https://extension-dev.phoneburner.biz";
+// -----------------------------------------------------------------------------
+// Backend env — runtime toggle support.
+// Each extension version pins a DEFAULT_ENV. A user-set value in
+// chrome.storage.local.pb_env_override overrides the default for that profile.
+//
+// In v0.7.0 the default flipped from "dev" to "prod" — the prod backend is now
+// the canonical home for all customer tokens and dial activity. Existing
+// customers auto-updating to v0.7.0 have no pb_env_override set, so they
+// follow the new default and land on prod. Their previous tokens were on
+// dev and don't carry over; the popup naturally surfaces the connect prompts
+// on first open. This is the Phase 4 cutover trigger — see the v0.7.0
+// changelog entry and KB section "Reconnecting after the v0.7.0 upgrade" for
+// the customer-facing details.
+//
+// The dev backend remains online for internal testing (toggleable via
+// Settings → Developer Options) and to serve any in-flight session whose
+// webhooks were already pointed at dev at session creation time.
+//
+// BASE_URL stays as a mutable module-level variable so existing call sites work
+// unchanged. The value is eager-loaded from storage on service worker wake-up
+// and live-updated by a storage.onChanged listener if the user toggles.
+// -----------------------------------------------------------------------------
+const BASE_URLS = {
+  dev: "https://extension-dev.phoneburner.biz",
+  prod: "https://extension.phoneburner.biz",
+};
+const DEFAULT_ENV = "prod";
+let BASE_URL = BASE_URLS[DEFAULT_ENV];
+let CURRENT_ENV = DEFAULT_ENV; // resolved env (dev|prod), used by feature gates
+
+chrome.storage.local.get(["pb_env_override"]).then((res) => {
+  const env = res?.pb_env_override;
+  if (env === "prod" || env === "dev") {
+    BASE_URL = BASE_URLS[env];
+    CURRENT_ENV = env;
+  }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.pb_env_override) return;
+  const env = changes.pb_env_override.newValue;
+  CURRENT_ENV = env === "dev" || env === "prod" ? env : DEFAULT_ENV;
+  BASE_URL = BASE_URLS[CURRENT_ENV];
+});
+
+// ── Click-to-Call feature gate ────────────────────────────────────────────
+// Click-to-call is live in v0.8.0. Both prod and dev backends have the
+// softphone infrastructure fully wired up — softphone.php is deployed,
+// each backend has its own PhoneBurner softphone registration (with its
+// own HMAC secret in config.php), and both are ready to serve. The user
+// can still switch off the in-page pill via Settings (see
+// CTC_USER_ENABLED + ctcShouldShowPills below), but the underlying
+// feature is no longer env-gated.
+//
+// This function stays as a named check so future gated features can copy
+// the pattern (e.g. `return CURRENT_ENV === "dev"` for the next feature
+// we want to soak-test with just us before shipping to customers).
+function clickToCallEnabled() {
+  return true;
+}
+
+// Per-user toggle for the in-page pill. Default true. The popup writes this
+// via the Click-to-Call settings card. Distinct from clickToCallEnabled()
+// (which is the env-level feature flag) so the user pref persists across
+// env switches and survives the eventual flip to "feature live in prod".
+let CTC_USER_ENABLED = true;
+chrome.storage.local.get(["pb_ctc_user_enabled"]).then((res) => {
+  CTC_USER_ENABLED = res?.pb_ctc_user_enabled !== false;
+});
+
+// Should the pill render right now? Combines the env feature gate with the
+// per-user toggle. Used by maybeActivateCtcInTab; the CLICK_TO_CALL handler
+// still only checks clickToCallEnabled() because if there are no pills there
+// shouldn't be any clicks to handle.
+function ctcShouldShowPills() {
+  return clickToCallEnabled() && CTC_USER_ENABLED;
+}
 
 // Content script files (crm_config.js must be first — defines CRM_REGISTRY)
 const CONTENT_SCRIPT_FILES = ["crm_config.js", "content.js"];
 
 // Track CRM context per tab (populated when content.js runs)
 const tabContexts = {}; // { [tabId]: { crmId, crmName, level, host, path } }
+
+// ── Click-to-Call (embedded softphone) state ──────────────────────────────
+// CRMs whose record pages support click-to-call decoration today. Record-level
+// context (id/type) is resolved from the URL via detectCrmFromUrl(); CRMs not
+// listed here can still be added later (L1/L2 can place calls without a
+// record id — they just can't log the call back).
+const CTC_SUPPORTED_CRMS = ["hubspot"];
+
+// Map a CRM object type to the PhoneBurner crm_name used in external_crm_data.
+// Mirrors the dial-session convention (see pb_dialsession_selection.php):
+// HubSpot contact → "hubspot", company → "hubspotcompany", deal → "hubspotdeal".
+function ctcCrmName(crmId, objectType) {
+  if (crmId === "hubspot") {
+    if (objectType === "company") return "hubspotcompany";
+    if (objectType === "deal") return "hubspotdeal";
+    return "hubspot"; // contact / default
+  }
+  return crmId || null; // other CRMs: baseline to the crmId
+}
+
+// ── Hosted softphone window ────────────────────────────────────────────────
+// We open our backend-hosted softphone page (BASE_URL/softphone.php) in a
+// popup window and pass the dial via URL params. The hosted page frames the PB
+// softphone and relays the dial. One window is reused across dials.
+let softphoneWindowId = null;
+
+async function resolveSoftphoneRuntime() {
+  try {
+    const { pb_softphone_runtime_override } = await chrome.storage.local.get(
+      "pb_softphone_runtime_override",
+    );
+    return (
+      pb_softphone_runtime_override ||
+      softphoneRuntimeUrl(CURRENT_ENV)
+    );
+  } catch (e) {
+    return softphoneRuntimeUrl(CURRENT_ENV);
+  }
+}
+
+async function buildSoftphoneUrl(dial) {
+  const runtime = await resolveSoftphoneRuntime();
+
+  // Mint a single-use code; softphone.php exchanges it server-side for this
+  // user's PhoneBurner bearer token and injects it into the iframe (?token=).
+  // The token never travels through the extension or the top-window URL.
+  //
+  // When the dial carries a taskId (CTC originated on a task row), pass
+  // task_id + phone + crm_name in the mint request so softphone_auth_code
+  // writes a CTC intent record. That record is the bridge that lets
+  // softphone_call_done auto-complete the task on disposition — PB drops
+  // arbitrary custom_data we try to pass through the dial payload, so we
+  // can't correlate at the webhook without this server-side breadcrumb.
+  //
+  // crm_name here is the base identifier (e.g. "hubspot"), not the
+  // object-type-aware namespace (hubspotcompany/hubspotdeal) — task rows
+  // always associate to contacts, so "hubspot" is correct on all HubSpot
+  // task views. The server registry only routes on the base name.
+  const codeBody = {};
+  if (dial.taskId && dial.number && dial.ctcCrmId) {
+    codeBody.task_id  = String(dial.taskId);
+    codeBody.phone    = String(dial.number);
+    codeBody.crm_name = String(dial.ctcCrmId);
+  }
+  let code = "";
+  try {
+    const resp = await api("core/softphone_auth_code.php", codeBody);
+    if (resp && resp.ok && resp.code) code = resp.code;
+  } catch (e) {
+    console.error("softphone_auth_code failed", e);
+  }
+
+  const qs = new URLSearchParams();
+  qs.set("runtime", runtime);
+  if (code) qs.set("code", code);
+  if (dial.number) qs.set("number", dial.number);
+  // Identity travels as external_crm_data (crm_name + crm_id); the record id IS
+  // the crm_id. recordType / display labels are no longer sent.
+  if (dial.recordId) qs.set("crm_id", dial.recordId);
+  if (dial.crmName) qs.set("crm_name", dial.crmName);
+  return `${BASE_URL}/softphone.php?${qs.toString()}`;
+}
+
+async function openSoftphoneWindow(dial) {
+  const url = await buildSoftphoneUrl(dial);
+
+  // Reuse the existing window: navigate its tab to the new dial and focus it.
+  if (softphoneWindowId != null) {
+    try {
+      const win = await chrome.windows.get(softphoneWindowId, { populate: true });
+      if (win && win.tabs && win.tabs[0]) {
+        await chrome.tabs.update(win.tabs[0].id, { url });
+        await chrome.windows.update(softphoneWindowId, { focused: true });
+        return;
+      }
+    } catch (e) {
+      softphoneWindowId = null; // window was closed
+    }
+  }
+
+  try {
+    const created = await chrome.windows.create({
+      url,
+      type: "popup",
+      width: 420,
+      height: 680,
+    });
+    softphoneWindowId = created?.id ?? null;
+  } catch (e) {
+    console.error("openSoftphoneWindow failed", e);
+  }
+}
+
+chrome.windows.onRemoved.addListener((winId) => {
+  if (winId === softphoneWindowId) softphoneWindowId = null;
+});
 
 // Track which tab "owns" the current follow session
 let currentSession = {
@@ -88,13 +281,32 @@ function detectCrmFromUrl(tabUrl) {
       else if (typeId === "0-3") objectType = "deal";
     }
     // List pages: /objects/0-X/
+    // NOTE: HubSpot uses object-type 0-27 for TASKS. The "All Tasks" table view
+    // lives at /contacts/{portalId}/objects/0-27/views/{viewId}/list — the same
+    // URL shape as contact/company/deal lists, just with 0-27. Treat that as
+    // pageType="tasks" (not "list") so the Task Queue launch card in the popup
+    // and the CTC pill finder both activate on it. Customers reach this view
+    // from HubSpot's left-nav "Tasks" link, which is distinct from the older
+    // /tasks/{portalId}/view/ queue URL handled below.
     else if (path.match(/\/objects\/(0-[0-9]+)\//)) {
-      pageType = "list";
       const listMatch = path.match(/\/objects\/(0-[0-9]+)\//);
       const typeId = listMatch[1];
-      if (typeId === "0-1") objectType = "contact";
-      else if (typeId === "0-2") objectType = "company";
-      else if (typeId === "0-3") objectType = "deal";
+      if (typeId === "0-27") {
+        pageType = "tasks";
+      } else {
+        pageType = "list";
+        if (typeId === "0-1") objectType = "contact";
+        else if (typeId === "0-2") objectType = "company";
+        else if (typeId === "0-3") objectType = "deal";
+      }
+    }
+    // Tasks pages: /tasks/{portalId}/view/...
+    // (Older task queue URL. Same feature; different URL shape.)
+    else if (path.match(/\/tasks\/\d+\/(view|queue)\//)) {
+      pageType = "tasks";
+      // Portal ID is in the path here too: /tasks/{portalId}/view/...
+      const tasksPortalMatch = path.match(/\/tasks\/(\d+)\//);
+      if (tasksPortalMatch && !portalId) portalId = tasksPortalMatch[1];
     }
 
     return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType, pageType, recordId, portalId };
@@ -110,32 +322,55 @@ function detectCrmFromUrl(tabUrl) {
   return { host, path, crmId: "generic", crmName: host, level: 1 };
 }
 
-// Ensure content script is injected on a tab (top frame only; safe if already injected)
+// Ensure content script is injected on a tab (top frame only; safe if already injected).
+//
+// Serialize per-tab injection via an in-flight promise map. Without this,
+// concurrent triggers (tab update + tab activate + popup open all firing on the
+// same tab within the same event loop turn) each PING → all get null before
+// any injection completes → all call executeScript. That triggers a double
+// injection into the isolated world, where content.js's top-level
+// `const BASE_URLS` and crm_config.js's top-level `const CRM_REGISTRY` throw
+// SyntaxError on second evaluation and spam the customer's console.
+// Sharing one promise across concurrent callers eliminates that race.
+const inFlightInjections = new Map();
 async function ensureContentScript(tabId) {
   if (!tabId) return;
 
-  const pong = await new Promise((resolve) => {
-    try {
-      chrome.tabs.sendMessage(
-        tabId,
-        { type: "PING" },
-        { frameId: 0 },
-        (res) => {
-          if (chrome.runtime.lastError) return resolve(null);
-          resolve(res);
-        },
-      );
-    } catch (e) {
-      resolve(null);
-    }
-  });
+  if (inFlightInjections.has(tabId)) {
+    return inFlightInjections.get(tabId);
+  }
 
-  if (pong && pong.ok) return;
+  const p = (async () => {
+    const pong = await new Promise((resolve) => {
+      try {
+        chrome.tabs.sendMessage(
+          tabId,
+          { type: "PING" },
+          { frameId: 0 },
+          (res) => {
+            if (chrome.runtime.lastError) return resolve(null);
+            resolve(res);
+          },
+        );
+      } catch (e) {
+        resolve(null);
+      }
+    });
 
-  await chrome.scripting.executeScript({
-    target: { tabId, allFrames: false },
-    files: CONTENT_SCRIPT_FILES,
-  });
+    if (pong && pong.ok) return;
+
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      files: CONTENT_SCRIPT_FILES,
+    });
+  })();
+
+  inFlightInjections.set(tabId, p);
+  try {
+    await p;
+  } finally {
+    inFlightInjections.delete(tabId);
+  }
 }
 
 // Register session + tell content script to follow
@@ -232,6 +467,77 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.action.setIcon({ tabId, path: DEFAULT_ICON_PATH });
     sendResponse && sendResponse({ ok: true });
     return;
+  }
+
+  // Click-to-Call: a "Call with PhoneBurner" pill on a CRM record was clicked.
+  // On a record page the pill omits per-row context and we resolve identity
+  // from the tab URL (detectCrmFromUrl). On a list view the pill carries
+  // recordId + objectType from its row — those win over URL-derived context
+  // because the list URL has no per-row identity to extract.
+  if (msg.type === "CLICK_TO_CALL") {
+    if (!clickToCallEnabled()) {
+      sendResponse({ ok: false, error: "click_to_call_disabled" });
+      return true;
+    }
+    const tab = sender.tab;
+    const ctx = detectCrmFromUrl(tab?.url || "");
+    // Identity travels as external_crm_data (crm_name + crm_id). crm_name (the
+    // object-type-aware namespace, e.g. hubspot / hubspotcompany / hubspotdeal)
+    // is what PB dedupes/logs on — not a display label.
+    const dial = {
+      number: msg.number,
+      recordId: msg.recordId || ctx.recordId || null, // becomes crm_id
+      crmName: ctcCrmName(ctx.crmId, msg.objectType || ctx.objectType),
+      // Only set when the click originated on a task row (finder branches
+      // #3/#4). The softphone_auth_code endpoint writes a CTC intent record
+      // when both task_id + number are present so the softphone_call_done
+      // webhook can auto-complete the task on disposition. See issue #170.
+      taskId: msg.taskId || null,
+      // Base CRM identifier for task-completion dispatch. Server registers
+      // task-completers per crm_name (currently only "hubspot"; Close /
+      // Apollo etc. plug in without changes to the storage layer). Sent
+      // as the intent's crm_name so the webhook dispatcher knows which
+      // provider's completer to invoke. Distinct from `crmName` above,
+      // which is the object-type-aware namespace PB uses for
+      // external_crm_data (hubspot / hubspotcompany / hubspotdeal).
+      ctcCrmId: msg.taskId ? (ctx.crmId || null) : null,
+    };
+    // Open (or reuse) our hosted softphone window and pass the dial via the URL.
+    // Routing every CRM through this one page means one registered iframe origin
+    // and works even for CRMs we can't embed into.
+    openSoftphoneWindow(dial);
+
+    // Fire-and-forget usage tracking for the CTC dashboard. Wrapped in try/catch
+    // + a promise the caller never awaits so a tracking failure never blocks
+    // the actual call. launch_source: "list" means the pill was in a list-view
+    // cell (msg carries per-row recordId); "record" means a single-record page
+    // (recordId came from the URL). event_type disambiguates from dial-session
+    // uses of the same launch_source values on the server side.
+    try {
+      // object_type telemetry: prefer per-row identity from the pill click;
+      // fall through to the page context's objectType; then to a page-aware
+      // default. Don't hard-default to "contact" — on tasks pages the pill
+      // may fire with no per-row identity (unbound task, or ambiguous
+      // multi-contact row bailed to null), and mislabeling those as
+      // "contact" skews the CTC dashboard.
+      var objType =
+        msg.objectType ||
+        ctx.objectType ||
+        (ctx.pageType === "tasks" ? "task" : "unknown");
+      api("core/track_crm_usage.php", {
+        event_type: "click_to_call",
+        crm_id: ctx.crmId || "unknown",
+        host: ctx.host || "",
+        path: ctx.path || "",
+        level: ctx.level || 3,
+        object_type: objType,
+        launch_source: msg.recordId ? "list" : "record",
+        selected_count: 1,
+      }).catch(function () {});
+    } catch (e) {}
+
+    sendResponse({ ok: true });
+    return true;
   }
 
   // Popup asks for context (works even if content.js not injected yet)
@@ -738,6 +1044,125 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       // -------------------------
+      // HubSpot L3: launch from task queue (visible tasks on the HS tasks page)
+      // -------------------------
+      if (msg.type === "HS_LAUNCH_FROM_TASKS") {
+        // Find the active HubSpot tab — that's where the user has the tasks
+        // page open and where the content script will scrape task IDs from.
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const hubTab = (tabs || []).find((t) =>
+          (t.url || "").includes("hubspot.com"),
+        );
+        if (!hubTab?.id) {
+          return sendResponse({
+            ok: false,
+            error: "No active HubSpot tab found.",
+          });
+        }
+
+        // Ensure content script is injected, then ask it to scrape task IDs
+        await ensureContentScript(hubTab.id);
+        const taskIdsResp = await new Promise((resolve) => {
+          chrome.tabs.sendMessage(
+            hubTab.id,
+            { type: "HS_GET_TASK_IDS" },
+            { frameId: 0 },
+            (res) => {
+              if (chrome.runtime.lastError) return resolve(null);
+              resolve(res);
+            },
+          );
+        });
+
+        const taskIds = Array.isArray(taskIdsResp?.taskIds) ? taskIdsResp.taskIds : [];
+        if (taskIds.length === 0) {
+          return sendResponse({
+            ok: false,
+            error: "No tasks found on the page. Make sure you're viewing a HubSpot task queue with at least one task visible.",
+          });
+        }
+
+        // Extract portal_id + hostname from the active HubSpot tab.
+        // Two URL shapes to handle:
+        //   /tasks/{portalId}/view/...                   — older task queue view
+        //   /contacts/{portalId}/objects/0-27/views/...  — newer "All Tasks" table view
+        // Both use the same numeric portalId; try each pattern in turn.
+        let portalId = null;
+        const tasksPortalMatch = hubTab.url.match(/\/tasks\/(\d+)\//);
+        if (tasksPortalMatch) portalId = tasksPortalMatch[1];
+        if (!portalId) {
+          const contactsPortalMatch = hubTab.url.match(/\/contacts\/(\d+)\//);
+          if (contactsPortalMatch) portalId = contactsPortalMatch[1];
+        }
+        const hp = deriveHostPathFromTabUrl(hubTab.url);
+
+        // Track usage (best effort — never block the launch on this)
+        try {
+          await api("core/track_crm_usage.php", {
+            crm_id: "hubspot",
+            host: hp.host || "app.hubspot.com",
+            path: hp.path || "",
+            level: 3,
+            portal_id: portalId,
+            object_type: "tasks",
+            selected_count: taskIds.length,
+            launch_source: "queue-tasks",
+          });
+        } catch (e) {}
+
+        const resp = await api("crm/hubspot/pb_dialsession_from_tasks.php", {
+          task_ids: taskIds,
+          portal_id: portalId || "",
+          hs_host: hp.host || "",
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const tempCode =
+          resp.temp_code || resp.data?.temp_code || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session from task queue.",
+            details: resp,
+          });
+        }
+
+        // Register the follow session against the HubSpot tab so SSE-driven
+        // navigation can move the user through each contact's record page.
+        await registerSessionForTab(hubTab.id, sessionToken, tempCode, BASE_URL);
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({
+          ok: true,
+          sessionToken,
+          dialUrl,
+          contactsSent: resp.contacts_sent ?? resp.data?.contacts_sent ?? null,
+          tasksProcessed: resp.tasks_processed ?? resp.data?.tasks_processed ?? null,
+          skipped: resp.skipped ?? resp.data?.skipped ?? null,
+          successMessage: resp.success_message ?? resp.data?.success_message ?? null,
+          truncationMessage: resp.truncation_message ?? resp.data?.truncation_message ?? null,
+        });
+      }
+
+      // -------------------------
       // Close L3: launch from selected contacts
       // -------------------------
       if (msg.type === "CLOSE_LAUNCH_FROM_SELECTED") {
@@ -1230,6 +1655,72 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (Object.prototype.hasOwnProperty.call(tabContexts, tabId))
     delete tabContexts[tabId];
+});
+
+// ── Click-to-Call: show the "Call with PhoneBurner" pill on supported CRM
+// record pages whenever the extension ALREADY has host access to that site.
+// Gated on an explicit host-permission grant (a user action) — NOT on the
+// softphone window being open — so the pill is present before the user reaches
+// for it. Clicking the pill is what opens the softphone (see CLICK_TO_CALL
+// handler above).
+async function maybeActivateCtcInTab(tabId, url) {
+  try {
+    if (!ctcShouldShowPills()) return; // env gate OR user toggle off
+    const ctx = detectCrmFromUrl(url || "");
+    if (!CTC_SUPPORTED_CRMS.includes(ctx.crmId) || !ctx.host) return;
+    const granted = await chrome.permissions.contains({
+      origins: [`https://${ctx.host}/*`],
+    });
+    if (!granted) return; // no host access → no passive injection
+    await ensureContentScript(tabId);
+    chrome.tabs.sendMessage(tabId, { type: "CTC_ACTIVATE" }, { frameId: 0 }, () => {
+      void chrome.runtime.lastError; // ignore "no receiver" races
+    });
+  } catch (e) {}
+}
+
+// React to the user toggling click-to-call on/off in popup Settings.
+// Toggle OFF → fire CTC_DEACTIVATE to every supported CRM tab so existing
+// pills disappear immediately without a reload.
+// Toggle ON  → re-run maybeActivateCtcInTab for every tab so pills come back.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !("pb_ctc_user_enabled" in changes)) return;
+  const newValue = changes.pb_ctc_user_enabled.newValue;
+  CTC_USER_ENABLED = newValue !== false;
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs || []) {
+      if (tab.id == null) continue;
+      if (CTC_USER_ENABLED) {
+        maybeActivateCtcInTab(tab.id, tab.url);
+      } else {
+        chrome.tabs.sendMessage(tab.id, { type: "CTC_DEACTIVATE" }, { frameId: 0 }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    }
+  });
+});
+
+// Decorate on tab switch and on (SPA) navigation. The content-script side is
+// idempotent and keeps a MutationObserver running, so re-activating is cheap.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    maybeActivateCtcInTab(tab.id, tab.url);
+  });
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" || changeInfo.url) {
+    maybeActivateCtcInTab(tabId, tab?.url);
+  }
+});
+
+// On extension (re)load, decorate any already-open supported CRM tabs so the
+// pill appears without the user having to switch tabs or navigate.
+chrome.tabs.query({}, (tabs) => {
+  for (const tab of tabs || []) {
+    if (tab.id != null) maybeActivateCtcInTab(tab.id, tab.url);
+  }
 });
 
 // Re-inject after navigation/reload IF:

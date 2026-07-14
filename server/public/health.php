@@ -22,9 +22,15 @@ $results = [
   'php_version' => PHP_VERSION,
   'curl_loaded' => extension_loaded('curl'),
 
-  // NEW: version stamp
+  // Version stamp — written by scripts/deploy-on-server.sh on each deploy.
+  // `version` tracks the EXTENSION version (from manifest.json or the prod tag);
+  // it can be identical across many server-only deploys. `commit` is the unique
+  // git short SHA of the actual deployed code, so consecutive server-only
+  // deploys are always distinguishable here.
   'version' => $versionInfo['version'] ?? null,
-  'env'     => $versionInfo['env'] ?? null,
+  'commit'  => $versionInfo['commit']  ?? null,
+  'env'     => $versionInfo['env']     ?? null,
+  'built_at'=> $versionInfo['built_at']?? null,
 
   'checks' => [],
 ];

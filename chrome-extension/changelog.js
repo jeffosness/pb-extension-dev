@@ -16,6 +16,57 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.2": {
+    title: "What's New in v0.8.2",
+    items: [
+      "Click-to-Call from a HubSpot task row now automatically marks the task complete once the call dispositions — same behavior as the Task-Based Dial Session, now on the single-click flow too",
+      "Works on both the classic Task Queue view and the newer All Tasks table"
+    ]
+  },
+  "0.8.1": {
+    title: "What's Fixed in v0.8.1",
+    items: [
+      "Click-to-Call flame now appears next to phone numbers on the HubSpot Tasks list — both the classic Task Queue view and the newer All Tasks table",
+      "Task-Based Dial Session card in the popup now recognizes the newer All Tasks table URL, not just the classic Task Queue",
+      "Cleared up a console error some HubSpot users were seeing on page load"
+    ]
+  },
+  "0.8.0": {
+    title: "What's New in v0.8.0",
+    items: [
+      "Click-to-Call for HubSpot — click the PhoneBurner flame next to any phone number for a quick single call, no dial session needed",
+      "Every HubSpot phone field is dialable — Phone Number, Mobile, Home Phone, and custom phone fields",
+      "AgencyZoom support — launch a dial session from your AgencyZoom task list in one click",
+      "Cleaner setup — stay on the Dial tab after saving your PAT, with inline \"Connect\" prompts for your CRM",
+      "Follow widget fix — now navigates between contacts correctly on all supported CRMs",
+      "Turn Click-to-Call off in Settings if you use another dialer's version"
+    ]
+  },
+  "0.7.1": {
+    title: "What's Fixed in v0.7.1",
+    items: [
+      "Fix: the live Follow widget now connects properly during dial sessions. After the v0.7.0 backend migration, some users saw the dialer work but the in-CRM Follow widget never appeared — this update fixes that.",
+      "No action needed on your part — the Follow widget will work as expected on your next dial session after the update."
+    ]
+  },
+  "0.7.0": {
+    title: "What's New in v0.7.0",
+    items: [
+      "We've migrated to a new production backend with better reliability and room to grow",
+      "Most users: nothing to do! Your PhoneBurner, HubSpot, and Apollo connections carry over automatically",
+      "Close users: you'll see a one-time reconnect prompt the next time you launch a Close dial session — takes about 30 seconds",
+      "Your data is untouched throughout — contacts, lists, call history, and CRM records all stay where they are"
+    ]
+  },
+  "0.6.4": {
+    title: "What's New in v0.6.4",
+    items: [
+      "HubSpot Task Queue dialing — launch a dial session for all contacts associated with the tasks visible on your HubSpot tasks page",
+      "Tasks are automatically marked complete in HubSpot as you finish each call",
+      "Tip: check specific task rows in HubSpot to dial just those, or leave none checked to dial the entire visible queue",
+      "HubSpot users will need to reconnect HubSpot once to enable the new task-completion behavior — a one-time prompt appears in the Task Queue card"
+    ]
+  },
   "0.6.2": {
     title: "What's New in v0.6.2",
     items: [
