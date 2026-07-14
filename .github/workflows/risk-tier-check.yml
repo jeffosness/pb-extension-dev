@@ -1,0 +1,199 @@
+name: Risk Tier Check
+
+# Classifies every PR into a risk tier based on the files touched, labels it
+# with `risk:tier-N`, and enforces per-tier gates:
+#
+#   Tier 0 — docs, dashboard, tests, tooling, marketing, changelog. Ships
+#            freely (no extra gates beyond the existing KB/Security/Test
+#            impact checks).
+#
+#   Tier 1 — extension code, provider integrations, popup UI, most api/**
+#            endpoints. Requires an "Adversarial Review" section in the PR
+#            body (argue against your own change).
+#
+#   Tier 2 — security-critical: utils.php, api/core/bootstrap.php, webhooks,
+#            sse.php, config.sample.php, OAuth flows, SECURITY.md. Requires
+#            Adversarial Review section (enforced here). The 4-hour cool-off
+#            is enforced at PRODUCTION DEPLOY TIME (deploy-prod.yml), not
+#            here — merging a Tier 2 PR to main is fine and auto-deploys to
+#            dev for soak-testing. The prod tag (prod-*) is what triggers
+#            the cool-off gate; suffix a tag with `-hotfix`, `-urgent`, or
+#            `-rollback` to override for genuine emergencies.
+#
+# Design notes:
+#   - Mirrors the existing kb-impact / security-impact / test-impact
+#     workflow shape. Same pattern; different gates.
+#   - Rationale for each Tier 2 file pattern lives inline below and is
+#     kept in sync with SECURITY.md's "Files that trigger Security Impact
+#     review" list.
+#   - The cool-off moved from PR-merge time to prod-deploy time on
+#     2026-07-08. See LESSONS.md for the reasoning.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  risk-tier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Classify and enforce risk tier
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // ─── File patterns per tier ─────────────────────────────────
+            // Tier 2: security-critical / huge blast radius.
+            // Keep in sync with SECURITY.md's "Files that trigger Security
+            // Impact review" list.
+            const TIER_2_PATTERNS = [
+              /^server\/public\/utils\.php$/,
+              /^server\/public\/api\/core\/bootstrap\.php$/,
+              /^server\/public\/webhooks\/.*\.php$/,
+              /^server\/public\/sse\.php$/,
+              /^server\/public\/config\.sample\.php$/,
+              /^server\/public\/api\/.*oauth_.*\.php$/,
+              /^server\/public\/api\/.*_call_logger\.php$/,
+              /^server\/public\/api\/core\/oauth_pb_(save|clear)\.php$/,
+              /^SECURITY\.md$/,
+            ];
+
+            // Tier 1: customer-facing code, extension internals, provider
+            // integrations. Not security-critical individually but code
+            // changes here can regress user-visible behavior.
+            const TIER_1_PATTERNS = [
+              /^chrome-extension\/(background|content|popup|crm_config|softphone_config)\.js$/,
+              /^chrome-extension\/popup\.html$/,
+              /^chrome-extension\/manifest\.json$/,
+              /^server\/public\/api\/.*\.php$/,      // any api endpoint not caught by Tier 2 above
+              /^server\/public\/softphone\.php$/,
+              /^server\/public\/softphone_host\.js$/,
+            ];
+
+            // Everything else is Tier 0: docs, dashboard, tests, tooling,
+            // marketing site, changelog. Ships freely.
+
+            // ─── Load the PR's file list ────────────────────────────────
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            // ─── Classify ───────────────────────────────────────────────
+            // Take the highest tier of any touched file.
+            let tier = 0;
+            const tier2Hits = [];
+            const tier1Hits = [];
+            for (const f of files) {
+              if (TIER_2_PATTERNS.some(p => p.test(f.filename))) {
+                tier = Math.max(tier, 2);
+                tier2Hits.push(f.filename);
+              } else if (TIER_1_PATTERNS.some(p => p.test(f.filename))) {
+                tier = Math.max(tier, 1);
+                tier1Hits.push(f.filename);
+              }
+            }
+
+            core.info(`PR classified as Tier ${tier}.`);
+            if (tier2Hits.length) core.info(`  Tier 2 files: ${tier2Hits.join(', ')}`);
+            if (tier1Hits.length) core.info(`  Tier 1 files: ${tier1Hits.join(', ')}`);
+
+            // ─── Label ──────────────────────────────────────────────────
+            const targetLabel = `risk:tier-${tier}`;
+            const currentLabels = (context.payload.pull_request.labels || []).map(l => l.name);
+
+            // Remove other tier labels if present.
+            for (const existing of currentLabels) {
+              if (existing.startsWith('risk:tier-') && existing !== targetLabel) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.payload.pull_request.number,
+                    name: existing,
+                  });
+                  core.info(`Removed stale label: ${existing}`);
+                } catch (e) {
+                  core.warning(`Could not remove label ${existing}: ${e.message}`);
+                }
+              }
+            }
+            // Add the correct one.
+            if (!currentLabels.includes(targetLabel)) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  labels: [targetLabel],
+                });
+                core.info(`Applied label: ${targetLabel}`);
+              } catch (e) {
+                core.warning(`Could not add label ${targetLabel}: ${e.message}`);
+              }
+            }
+
+            // ─── Enforce Adversarial Review section (Tier 1+) ───────────
+            const body = context.payload.pull_request.body || '';
+
+            if (tier >= 1) {
+              // Extract the section
+              const lines = body.split(/\r?\n/);
+              const sectionLines = [];
+              let inSection = false;
+              for (const ln of lines) {
+                if (/^##\s+Adversarial Review\b/i.test(ln)) {
+                  inSection = true;
+                  continue; // don't include the heading itself in "content"
+                }
+                if (inSection) {
+                  if (/^##\s/.test(ln)) break;
+                  sectionLines.push(ln);
+                }
+              }
+
+              // Content must exist and be more than the template placeholder.
+              const content = sectionLines.join('\n').trim();
+              // Filter out HTML comments (which is where our template placeholder lives).
+              const contentSansComments = content.replace(/<!--[\s\S]*?-->/g, '').trim();
+
+              if (!inSection) {
+                core.setFailed(
+                  `Tier ${tier} PR is missing the "## Adversarial Review" section. ` +
+                  `Add it to your PR body. Argue against your own change — what's the ` +
+                  `most likely way this ships wrong? See the PR template.`
+                );
+                return;
+              }
+              if (contentSansComments.length < 20) {
+                core.setFailed(
+                  `Tier ${tier} PR has an empty "## Adversarial Review" section. ` +
+                  `Fill it in — argue against your own change. Placeholder HTML comments ` +
+                  `don't count.`
+                );
+                return;
+              }
+              core.info('Adversarial Review section present and filled in.');
+            }
+
+            // ─── Cool-off enforcement moved to deploy-prod.yml ──────────
+            // The 4-hour cool-off for Tier 2 changes lives on the PRODUCTION
+            // deploy (prod-* tag push), NOT on PR merge to main. Rationale:
+            // main auto-deploys to DEV (see deploy-dev.yml), and the whole
+            // point of the cool-off is a soak window on dev BEFORE prod
+            // ships. Enforcing it at merge time blocked dev testing — the
+            // opposite of the intent. Anchoring the timer to the deploying
+            // commit's dev-merge time (deploy-prod.yml's cool-off step)
+            // preserves the safety window at the correct boundary.
+            //
+            // See LESSONS.md 2026-07-08 "Cool-off was gating the wrong
+            // boundary" for the reasoning + history.
+
+            core.info(`Tier ${tier} PR passes all applicable gates (cool-off enforced at prod-deploy).`);

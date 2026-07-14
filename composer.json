@@ -1,0 +1,18 @@
+{
+  "name": "phoneburner/pb-extension-dev",
+  "description": "PhoneBurner CRM Extension — Chrome extension + PHP backend for CRM-to-PhoneBurner dial sessions",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.1"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.5"
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}

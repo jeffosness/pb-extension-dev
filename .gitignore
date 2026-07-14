@@ -20,6 +20,14 @@ Thumbs.db
 ############################################
 node_modules/
 dist/
+build/
+
+############################################
+# PHP / Composer / PHPUnit
+############################################
+vendor/
+.phpunit.cache/
+.phpunit.result.cache
 
 ############################################
 # Server: keep secrets and runtime OUT of git

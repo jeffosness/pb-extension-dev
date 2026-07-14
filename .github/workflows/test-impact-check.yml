@@ -1,0 +1,145 @@
+name: Test Impact Check
+
+# Enforces the Test Impact section of the PR template when a PR modifies
+# files that are covered by (or should be covered by) automated tests.
+# Mirrors the KB Impact and Security Impact check patterns.
+#
+# Trigger surface is intentionally narrow — start with the files where a
+# regression would cause real customer-facing harm. Broaden the list only
+# if we notice PRs slipping through without tests where they should have
+# had them.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  test-impact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out PR with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Test Impact declaration
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Files that trigger required Test Impact declaration.
+            // Keep this in sync with TESTING.md's "When you must add/run tests"
+            // section and the PR template's Test Impact block.
+            const TEST_RELEVANT_PATTERNS = [
+              /^server\/public\/utils\.php$/,
+              /^server\/public\/api\/core\/bootstrap\.php$/,
+              /^tests\/.+/,
+              /^composer\.json$/,
+              /^composer\.lock$/,
+              /^phpunit\.xml$/,
+            ];
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            const triggeringFiles = files.filter(f =>
+              TEST_RELEVANT_PATTERNS.some(p => p.test(f.filename))
+            );
+
+            if (triggeringFiles.length === 0) {
+              core.info('No test-relevant files modified. Test Impact check not required for this PR.');
+              return;
+            }
+
+            core.info(`Test-relevant files in this PR: ${triggeringFiles.map(f => f.filename).join(', ')}`);
+
+            const body = context.payload.pull_request.body || '';
+
+            // Extract the Test Impact section using line-by-line parsing.
+            // Accumulate lines starting from the H2 heading until the next
+            // H2 or end of body.
+            const allLines = body.split(/\r?\n/);
+            const sectionLines = [];
+            let inSection = false;
+            for (const ln of allLines) {
+              if (/^##\s+Test Impact\b/i.test(ln)) {
+                inSection = true;
+                sectionLines.push(ln);
+                continue;
+              }
+              if (inSection) {
+                if (/^##\s/.test(ln)) break; // hit next H2 — stop
+                sectionLines.push(ln);
+              }
+            }
+
+            if (sectionLines.length === 0) {
+              core.setFailed(
+                'This PR modifies test-relevant files but is missing a "## Test Impact" section. Add this block to your PR description:\n\n' +
+                '## Test Impact\n\n' +
+                '- [ ] **No new testable behavior** — refactor, docs, config, formatting, or purely UI change\n' +
+                '- [ ] **Tests added or updated in this PR** — see `tests/` in the diff\n' +
+                '- [ ] **Test follow-up tracked** — paste the follow-up issue/PR link and a one-line rationale: `<link>` — <why>\n\n' +
+                'See TESTING.md for the full review criteria.'
+              );
+              return;
+            }
+
+            const section = sectionLines.join('\n');
+
+            // Parse the "- [x] **Label**" style checkboxes within the section.
+            const checkboxes = sectionLines
+              .map(l => l.match(/^\s*-\s*\[([ xX])\]\s*\*\*(.+?)\*\*/))
+              .filter(Boolean)
+              .map(m => ({ checked: m[1].toLowerCase() === 'x', label: m[2].trim() }));
+
+            if (checkboxes.length === 0) {
+              core.setFailed(
+                'No Test Impact checkboxes found in the PR body. Reset your PR description from the template — the checkboxes must use "- [ ] **Label**" format.'
+              );
+              return;
+            }
+
+            const checked = checkboxes.filter(c => c.checked);
+
+            if (checked.length === 0) {
+              core.setFailed(
+                'The Test Impact section has no checked box. Check exactly one to declare this PR\'s test impact.'
+              );
+              return;
+            }
+
+            if (checked.length > 1) {
+              core.setFailed(
+                `The Test Impact section has ${checked.length} checked boxes: ${checked.map(c => c.label).join(', ')}. Check exactly one.`
+              );
+              return;
+            }
+
+            const label = checked[0].label;
+            const validLabels = [
+              'No new testable behavior',
+              'Tests added or updated in this PR',
+              'Test follow-up tracked',
+            ];
+
+            // Match on a stable label prefix so em-dashes / punctuation
+            // after the bold label don't cause mismatches.
+            const matched = validLabels.find(vl => label.startsWith(vl));
+            if (!matched) {
+              core.setFailed(
+                `Could not match the checked Test Impact option ("${label}") to a known choice. See TESTING.md for the exact checkbox labels expected.`
+              );
+              return;
+            }
+
+            core.info(`Test Impact declared: "${matched}"`);

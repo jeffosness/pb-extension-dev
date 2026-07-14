@@ -22,11 +22,23 @@ $objectType    = isset($data['object_type'])    ? (string)$data['object_type']  
 $launchSource  = isset($data['launch_source'])  ? (string)$data['launch_source']  : '';
 $selectedCount = isset($data['selected_count']) ? (int)$data['selected_count']    : 0;
 
+// Event type: dial_session (batch launch, existing behavior) vs click_to_call
+// (single-call pill on a CRM record/list). Missing → dial_session so legacy
+// entries still classify correctly.
+$eventType = isset($data['event_type']) ? (string)$data['event_type'] : 'dial_session';
+$allowedEventTypes = ['dial_session', 'click_to_call'];
+if (!in_array($eventType, $allowedEventTypes, true)) {
+    $eventType = 'dial_session';
+}
+
 // Normalize object_type to plural form (extension sends singular from URL detection)
 $normalizeMap = ['contact' => 'contacts', 'company' => 'companies', 'deal' => 'deals'];
 $objectType = $normalizeMap[$objectType] ?? $objectType;
 
-// Whitelist launch_source values
+// Whitelist launch_source values. For click_to_call, "record" and "list"
+// mean "the pill was on a record page" vs "the pill was in a list-view row"
+// (distinct from dial-session's "list" which meant Launch-from-List dropdown).
+// event_type disambiguates the two meanings downstream.
 $allowedSources = ['selection', 'list', 'scan', 'record', 'sequence-tasks', ''];
 if (!in_array($launchSource, $allowedSources, true)) {
     $launchSource = '';
@@ -52,6 +64,7 @@ $entry = [
     'ts'             => date('c'),
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'member_user_id' => $memberUserId,
+    'event_type'     => $eventType,
     'crm_id'         => $crmId,
     'host'           => $host,
     'path'           => $path,

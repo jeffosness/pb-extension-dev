@@ -1,9 +1,36 @@
-name: Deploy to production VPS
+name: Deploy to PROD VPS (on prod-* tag)
+
+# Deploys when a tag matching "prod-*" is pushed (e.g., "prod-v0.6.3" or
+# "prod-v0.6.5-rollback") → /opt/pb-extension/ on the VPS, which serves
+# extension.phoneburner.biz.
+#
+# Also supports manual trigger via workflow_dispatch with a tag input.
+#
+# Promotion process:
+#   git tag prod-v0.6.5 main
+#   git push origin prod-v0.6.5
+#
+# Rollback:
+#   git tag prod-v0.6.4-rollback <previous-good-commit>
+#   git push origin prod-v0.6.4-rollback
+#
+# Tier-2 cool-off gate: if this deploy contains any change to a security-
+# critical file (see the TIER_2_PATTERNS list below and in
+# risk-tier-check.yml), the deploy requires the freshest such commit to
+# have been on dev for at least 4 hours. That's the soak-time invariant
+# from CLAUDE.md's Deployment Checklist. To override for a genuine
+# emergency, cut the tag with a `-hotfix`, `-urgent`, or `-rollback`
+# suffix — e.g., `prod-v0.6.5-hotfix`.
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch: {}
+    tags:
+      - 'prod-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to deploy (e.g., prod-v0.6.5). Must exist on the repo.'
+        required: true
 
 concurrency:
   group: deploy-prod
@@ -14,6 +41,139 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Determine tag to deploy
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Resolved tag: $TAG"
+
+      - name: Checkout for cool-off inspection
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce Tier-2 cool-off (4h since dev-merge)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tagName = '${{ steps.tag.outputs.tag }}';
+            const COOLOFF_HOURS = 4;
+
+            // Emergency-override suffixes on the tag. Rollbacks are treated
+            // the same as hotfixes — the whole point of a rollback is to
+            // get to a known-good state fast, so waiting 4h defeats it.
+            if (/-(hotfix|urgent|rollback)$/.test(tagName)) {
+              core.info(`Tag ${tagName} matches emergency pattern; cool-off waived.`);
+              return;
+            }
+
+            // Tier 2 file patterns — KEEP IN SYNC with risk-tier-check.yml's
+            // TIER_2_PATTERNS list. If a file gets added there and not here
+            // (or vice versa), the cool-off silently mis-fires.
+            const TIER_2_PATTERNS = [
+              /^server\/public\/utils\.php$/,
+              /^server\/public\/api\/core\/bootstrap\.php$/,
+              /^server\/public\/webhooks\/.*\.php$/,
+              /^server\/public\/sse\.php$/,
+              /^server\/public\/config\.sample\.php$/,
+              /^server\/public\/api\/.*oauth_.*\.php$/,
+              /^server\/public\/api\/.*_call_logger\.php$/,
+              /^server\/public\/api\/core\/oauth_pb_(save|clear)\.php$/,
+              /^SECURITY\.md$/,
+            ];
+
+            // Find the previous prod-* tag so we can compute what's in
+            // this deploy (i.e. what's changed since the last time prod
+            // went live).
+            const { data: tags } = await github.rest.repos.listTags({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const prodTags = tags.filter(t =>
+              t.name.startsWith('prod-') && t.name !== tagName
+            );
+
+            if (prodTags.length === 0) {
+              core.warning('No prior prod-* tag found; treating as initial deploy and skipping cool-off.');
+              return;
+            }
+            const prevTag = prodTags[0].name;
+            core.info(`Previous prod tag: ${prevTag}`);
+
+            // Compare the range prevTag..tagName. Any Tier 2 file in the diff
+            // triggers cool-off enforcement. Anchor timer to the MOST RECENT
+            // commit in the range that touched a Tier 2 file — that's the
+            // freshest change most in need of soak time.
+            const { data: comparison } = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: prevTag,
+              head: tagName,
+            });
+
+            const changedFiles = comparison.files || [];
+            const tier2Changed = changedFiles.filter(f =>
+              TIER_2_PATTERNS.some(p => p.test(f.filename))
+            );
+
+            if (tier2Changed.length === 0) {
+              core.info('No Tier 2 files changed in this range; cool-off not applicable.');
+              return;
+            }
+            core.info(`Tier 2 files in this deploy: ${tier2Changed.map(f => f.filename).join(', ')}`);
+
+            // Walk commits from newest to oldest, find the newest one that
+            // touched a Tier 2 file. compareCommits returns commits in
+            // chronological order (oldest first), so iterate in reverse.
+            const commits = comparison.commits || [];
+            let anchorCommit = null;
+            for (let i = commits.length - 1; i >= 0; i--) {
+              const c = commits[i];
+              const { data: detail } = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: c.sha,
+              });
+              const touches = (detail.files || []).some(f =>
+                TIER_2_PATTERNS.some(p => p.test(f.filename))
+              );
+              if (touches) {
+                anchorCommit = c;
+                break;
+              }
+            }
+
+            if (!anchorCommit) {
+              core.warning('Range-level diff shows Tier 2 files but no commit found — file must have been touched via a merge with no changes attributed to individual commits. Skipping cool-off (conservative).');
+              return;
+            }
+
+            // Anchor is the committer date on main, which is the moment
+            // the code hit dev via auto-deploy (deploy-dev.yml triggers on
+            // push to main).
+            const anchorAt = new Date(anchorCommit.commit.committer.date);
+            const now = new Date();
+            const hoursSince = (now - anchorAt) / (1000 * 60 * 60);
+
+            if (hoursSince < COOLOFF_HOURS) {
+              const readyAt = new Date(anchorAt.getTime() + COOLOFF_HOURS * 3600 * 1000);
+              core.setFailed(
+                `Tier 2 deploy requires ${COOLOFF_HOURS}h of dev soak time. ` +
+                `Freshest Tier-2 commit in this deploy (${anchorCommit.sha.substring(0, 7)}) ` +
+                `landed on dev ${hoursSince.toFixed(1)}h ago; ready at ${readyAt.toISOString()}. ` +
+                `To override for a genuine emergency, re-cut the tag with a -hotfix, ` +
+                `-urgent, or -rollback suffix (e.g. prod-vX.Y.Z-hotfix).`
+              );
+              return;
+            }
+            core.info(`Cool-off satisfied: freshest Tier-2 commit landed ${hoursSince.toFixed(1)}h ago (threshold ${COOLOFF_HOURS}h).`);
+
       - name: Install SSH key and known_hosts
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -25,10 +185,15 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Run deploy script on server
+      - name: Run deploy script on server (prod env)
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # The script lives in dev's checkout (always up-to-date due to auto-deploy)
+          # and is invoked with overrides to target the prod directory + tag mode.
+          # Invoke via `bash <path>` so the script doesn't need the executable
+          # bit — git tracks it as mode 100644 and pulls don't preserve +x.
           ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            'sudo -n /opt/pb-extension-dev/scripts/deploy-on-server.sh'
+            "sudo -n REPO_DIR=/opt/pb-extension BRANCH=$TAG ENV=prod bash /opt/pb-extension-dev/scripts/deploy-on-server.sh"

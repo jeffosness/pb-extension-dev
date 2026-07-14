@@ -2,7 +2,36 @@
 //  content.js – Unified CRM extension (L1/L2 generic + L3 HubSpot standalone parity)
 // ============================================================================
 
-const BASE_URL = "https://extension-dev.phoneburner.biz";
+// -----------------------------------------------------------------------------
+// Backend env — runtime toggle support.
+// See background.js for the full explanation. Content scripts re-run on every
+// page load, so we eager-load the env preference from storage and keep BASE_URL
+// in sync via storage.onChanged.
+//
+// MUST stay in sync with the same constant in background.js and popup.js.
+// In v0.7.0 we flipped the default to "prod" in background.js + popup.js but
+// missed this file, which caused content scripts to open EventSource against
+// dev for customers with no explicit pb_env_override. Fixed in v0.7.1.
+// -----------------------------------------------------------------------------
+const BASE_URLS = {
+  dev: "https://extension-dev.phoneburner.biz",
+  prod: "https://extension.phoneburner.biz",
+};
+const DEFAULT_ENV = "prod";
+let BASE_URL = BASE_URLS[DEFAULT_ENV];
+
+chrome.storage.local.get(["pb_env_override"]).then((res) => {
+  const env = res?.pb_env_override;
+  if (env === "prod" || env === "dev") {
+    BASE_URL = BASE_URLS[env];
+  }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.pb_env_override) return;
+  const env = changes.pb_env_override.newValue;
+  BASE_URL = BASE_URLS[env] || BASE_URLS[DEFAULT_ENV];
+});
 
 // CRM_REGISTRY is defined in crm_config.js (injected before this script)
 
@@ -739,6 +768,97 @@ function scanCloseContacts(maxContacts) {
 }
 
 // ============================================================================
+//  🧩 AGENCYZOOM-SPECIFIC SCANNER (LEVEL 2 — task list only)
+// ============================================================================
+// AgencyZoom is task-oriented: reps work a queue at /task/list. Each row is
+// one open task on one lead; the same lead can appear many times if it has
+// multiple open tasks (a lead with 5 open tasks = 5 rows). We dedup by lead
+// id so that lead becomes ONE dial-session entry — the rep dials the person
+// once, not five times. If any batch-checkbox in the table is checked we
+// honor that as an explicit selection; otherwise we scan every visible row.
+//
+// AgencyZoom has no public API we can hit here, so this is DOM-scraping only.
+// That means we can't auto-mark tasks complete after a call — users mark
+// tasks done in AgencyZoom's own UI (the "mark to done" checkbox on each row)
+// after their dial session.
+
+function scanAgencyZoomTasks(maxContacts) {
+  maxContacts = maxContacts || 500;
+
+  var host = window.location.hostname || "";
+  var path = window.location.pathname || "";
+  if (!host.includes("agencyzoom.com") || path.indexOf("/task/list") !== 0) return [];
+
+  var table = document.getElementById("taskTable");
+  if (!table) return [];
+
+  var rows = table.querySelectorAll("tbody tr");
+  if (!rows.length) return [];
+
+  // If any row-level checkbox is checked, only scan those rows (matches the
+  // Close / HubSpot pattern where partial selection means "dial these").
+  var checkedInputs = table.querySelectorAll('tbody tr input[type="checkbox"]:checked');
+  var restrictToChecked = checkedInputs.length > 0;
+
+  var contacts = [];
+  var seenLeadIds = {};
+  var phoneShape = /^\(?\d{3}\)?[\s.\-]*\d{3}[\s.\-]*\d{4}$/;
+
+  for (var i = 0; i < rows.length && contacts.length < maxContacts; i++) {
+    var row = rows[i];
+
+    if (restrictToChecked) {
+      var cb = row.querySelector('input[type="checkbox"]');
+      if (!cb || !cb.checked) continue;
+    }
+
+    // Customer name + lead id — the first <a> in the row that links to
+    // /lead/index?id=… on the same host.
+    var custLink = row.querySelector('a[href^="/lead/index?id="]');
+    if (!custLink) continue;
+
+    var name = (custLink.textContent || "").replace(/\s+/g, " ").trim();
+    var idMatch = (custLink.getAttribute("href") || "").match(/id=(\d+)/);
+    var leadId = idMatch ? idMatch[1] : null;
+    if (!leadId) continue;
+    if (seenLeadIds[leadId]) continue; // dedup: same lead across multiple tasks
+
+    // Phone — plain text in a <td>, no tel: link. Find the first cell whose
+    // trimmed textContent matches a US phone shape.
+    var phone = "";
+    var tds = row.querySelectorAll("td");
+    for (var j = 0; j < tds.length; j++) {
+      var txt = (tds[j].textContent || "").trim();
+      if (phoneShape.test(txt)) {
+        phone = txt;
+        break;
+      }
+    }
+    if (!phone) continue;
+
+    seenLeadIds[leadId] = true;
+
+    contacts.push({
+      name: name,
+      phone: phone,
+      email: "",
+      source_url: window.location.href,
+      source_label: document.title || "AgencyZoom Tasks",
+      record_url: "https://app.agencyzoom.com/lead/index?id=" + leadId,
+      crm_identifier: leadId,
+    });
+  }
+
+  console.log(
+    "[PB-CRM] AgencyZoom contacts extracted:",
+    contacts.length,
+    restrictToChecked ? "(from checked rows)" : "(from all visible rows)",
+    "— deduped by lead id",
+  );
+  return contacts;
+}
+
+// ============================================================================
 //  🧩 SALESFORCE-SPECIFIC SCANNER (LEVEL 2 with virtual scrolling support)
 // ============================================================================
 
@@ -892,6 +1012,8 @@ async function scanPageForContacts() {
     contacts = scanMondayContacts();
   } else if (crmId === "pipedrive") {
     contacts = scanPipedriveContacts();
+  } else if (crmId === "agencyzoom") {
+    contacts = scanAgencyZoomTasks();
   } else if (crmId === "salesforce") {
     // Use specialized Salesforce scanner with virtual scrolling support
     contacts = await scanSalesforceContactsWithSelection();
@@ -972,7 +1094,18 @@ function isSameCrmRecord(currentUrl, targetUrl) {
       return cur.hash === tgt.hash;
     }
 
-    return cur.origin + cur.pathname === tgt.origin + tgt.pathname;
+    // Include the query string in the comparison so CRMs that put the record
+    // id in a query param — e.g. AgencyZoom's /lead/index?id={leadId} — are
+    // detected as different records. Prior code compared origin+pathname only,
+    // which returned "same record" for two different AgencyZoom leads and
+    // suppressed the Follow widget's auto-navigation between contacts.
+    // Safe for other CRMs: their record IDs live in the pathname (HubSpot
+    // /record/0-1/{id}, Close /lead/{id}, Salesforce /r/Lead/{id}/view, etc.)
+    // so their paths already differ and including search is a no-op there.
+    return (
+      cur.origin + cur.pathname + cur.search ===
+      tgt.origin + tgt.pathname + tgt.search
+    );
   } catch (e) {
     return false;
   }
@@ -1875,6 +2008,376 @@ async function hs_collectSelectedIdsDeep({
 }
 
 // ============================================================================
+//  📞 CLICK-TO-CALL — inject "Call with PhoneBurner" affordances on CRM records
+// ============================================================================
+// Activated on supported CRM record pages AND list views when the extension
+// has host access (CTC_ACTIVATE/CTC_DEACTIVATE from background.js). Per-CRM
+// "finders" return [{ el, number, recordId?, objectType? }]; the generic
+// injector decorates each target with a button that asks background.js to
+// dial.
+//
+// recordId + objectType (when present) travel with the click so the dial
+// carries per-row identity. On a record page they're optional — background.js
+// falls back to detectCrmFromUrl(tab.url). On a list page they're REQUIRED
+// because the page URL has no per-row context.
+//
+// Selectors follow the content.js safety rules: stable attributes only,
+// idempotent, and everything wrapped so a DOM quirk can never break the page.
+
+var PB_CTC_BTN_CLASS = "pb-ctc-call-btn";
+var pbCtcObserver = null;
+var pbCtcDebounce = null;
+
+// 16x16 PhoneBurner brand flame, base64-encoded as a data URL. Inlined
+// (not loaded via chrome.runtime.getURL) so the injected pill has no
+// chrome-extension:// URL leaking the extension ID to CRM pages, no HTTP
+// request per pill, and no dependency on host_permissions for the icon
+// to render. Source: /icons/pb-flame-16.png (extracted from PB's favicon).
+var PB_CTC_FLAME_ICON =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAG9SURBVDhPjZJLa1NBGIbfpqioqPgfWoQqIriwK0VQCEiLtzNnTtLGlf0BoqgLXYlSEBduRHEjKBRB3AklS3deFl6gWhC0EgTjQhQxCXPyyEzTmEwv+sDA8M33vnyXkdagkWikPq4tcfy/IFERq6fzRW2I3/7J9yPanlsteIOe8EDPfW2ckeWUaGd6/3ZE60Ms02WsjsW5K4LVPSYFZYHVfZdoAqvPpKp9K2prnN/FpZoi1TRGPzGCkghGnZNbzdX2alOs65IbzYbkM0Nw9TBdk45RbvTI580PrTJYjGaYHIQ3VWj+hvN7IO0YlEU71VcyzbiTqiwbaivRgbykZ0xtgx91qM3B2V1/DTomZHKNRDv6xB5nVKYiSAvwahZeV+FEj9ifiTDUd0ub6aM5pp1YtULfVw4SuGnh6AAkQdg1WPFz+fWQ6lMo0wue3IDmL7hzGqq3FgebibbVh1U3gdXt0EbmS163KFzi+WPICr6CFw+lwVgbaBzXcG5VD6v0Jr7s6+Pw4Bxc2geVAs7qYqzro2W0Py/pZejXG/mZ+E0YOazuftmtzbFmGQuj2ojRodzoGlYfXaYLLaPROM/zBzxsM6qsXqD1AAAAAElFTkSuQmCC";
+
+// Normalize a displayed phone string ("(202) 838-8961") to a dialable number.
+// US-centric best-effort for v1; refine for international later.
+function pbCtcNormalizePhone(text) {
+  var digits = (text || "").replace(/[^\d]/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) return "+1" + digits;
+  if (digits.length === 11 && digits.charAt(0) === "1") return "+" + digits;
+  return "+" + digits;
+}
+
+// HubSpot finder — surfaces both record-page phone fields AND list-view phone
+// cells. The list cells embed the contact/company ID in the <td> id, so we
+// can pass per-row identity through the click.
+//
+//   Record page:  <span data-selenium-test="property-input-{propName}">…</span>
+//                 where {propName} is the property's internal name — phone,
+//                 mobilephone, home_phone_1, faxnumber, or custom.
+//   List view:    <td id="cell-0-1-phone-{contactId}"> (or 0-2 for companies)
+function pbCtcFindHubspot() {
+  var out = [];
+  try {
+    // ── 1. Record-page property panel ────────────────────────────────
+    // We can't enumerate every phone-typed property name (custom fields
+    // exist — "Home Phone 1", "Cell", "Best Number", etc.), so we widen the
+    // selector to ALL property-input-* spans and content-filter to values
+    // that look like phone numbers. This catches phone/mobilephone/custom
+    // phone fields while excluding notes, IDs, dates, statuses, etc. that
+    // also use the property-input-* attribute pattern.
+    var spans = document.querySelectorAll('[data-selenium-test^="property-input-"]');
+    var phoneShape = /^[\d\s\-+().]+$/;
+    for (var i = 0; i < spans.length; i++) {
+      var el = spans[i];
+      // Skip outer matches — decorate the INNERMOST one only.
+      if (el.querySelector('[data-selenium-test^="property-input-"]')) continue;
+      var text = (el.textContent || "").trim();
+      // Length cap rejects long-text fields like PhoneBurner Notes that may
+      // contain a phone number somewhere inside paragraphs of activity log.
+      if (!text || text.length > 25) continue;
+      // Character whitelist rejects fields with letters (City, dates with AM/PM,
+      // statuses, tags). Has to come before normalize so we don't accidentally
+      // dial "06/30/2026 8:00 AM MDT" by stripping non-digits.
+      if (!phoneShape.test(text)) continue;
+      // Min length 10 rejects things that pass the shape check but aren't
+      // phones — Folder IDs (8 digits), extension numbers, empty separators
+      // like "--".
+      var digits = text.replace(/\D/g, "");
+      if (digits.length < 10) continue;
+      var num = pbCtcNormalizePhone(text);
+      if (num) out.push({ el: el, number: num });
+    }
+
+    // ── 2. List view: contact (0-1) and company (0-2) phone cells ────
+    var phoneCells = document.querySelectorAll(
+      'td[id^="cell-0-1-phone-"], td[id^="cell-0-2-phone-"]'
+    );
+    for (var j = 0; j < phoneCells.length; j++) {
+      var cell = phoneCells[j];
+      var phoneText = cell.textContent || "";
+      var listNum = pbCtcNormalizePhone(phoneText);
+      if (!listNum) continue; // empty phone cell
+
+      // Cell id pattern: "cell-{0-1|0-2}-phone-{recordId}"
+      var m = cell.id.match(/^cell-(0-[123])-phone-(\d+)$/);
+      if (!m) continue;
+      var typeCode = m[1];
+      var recordId = m[2];
+      var objectType =
+        typeCode === "0-1" ? "contact" :
+        typeCode === "0-2" ? "company" :
+        typeCode === "0-3" ? "deal" : null;
+
+      // The displayed phone sits inside an <a data-link-use="dark"> inside
+      // the cell. Anchor the pill right after that link.
+      var listAnchor = cell.querySelector('a[data-link-use="dark"]') || cell;
+      out.push({
+        el: listAnchor,
+        number: listNum,
+        recordId: recordId,
+        objectType: objectType,
+      });
+    }
+
+    // ── 3. Newer Tasks table (/objects/0-27/): phone cell IDs follow the
+    // object-based pattern cell-0-27-hs_task_contact_phone-{taskId}. The
+    // dialable identity is the ASSOCIATED CONTACT — grab the contactId
+    // from the association link in the same row so pill clicks carry
+    // per-row identity the softphone can resolve.
+    var taskPhoneCells = document.querySelectorAll(
+      'td[id^="cell-0-27-hs_task_contact_phone-"]'
+    );
+    for (var k = 0; k < taskPhoneCells.length; k++) {
+      var taskCell = taskPhoneCells[k];
+      var taskPhoneText = taskCell.textContent || "";
+      // Explicit "--" skip mirrors branch #4 (classic view). pbCtcNormalizePhone
+      // catches this too, but being consistent across the two task branches
+      // makes the intent obvious.
+      if (!taskPhoneText || taskPhoneText.trim() === "--") continue;
+      var taskNum = pbCtcNormalizePhone(taskPhoneText);
+      if (!taskNum) continue; // task with no phone yet
+
+      // The associated contact ID lives on the row's contact-link:
+      //   <a data-test-id="association-link-0-1-{contactId}" href="...">
+      //
+      // IMPORTANT: HubSpot tasks can have MULTIPLE contact associations
+      // (pb_dialsession_from_tasks.php iterates associations.contacts.results
+      // as a list). The task's hs_task_contact_phone value is one specific
+      // contact's phone, but we can't tell WHICH contact from the DOM. If
+      // there are 2+ association links, picking the first one risks binding
+      // the displayed phone to the wrong contact — the call would connect
+      // but PhoneBurner would log the recording/disposition against the
+      // wrong CRM record. Bail to null instead; the softphone path handles
+      // recordId=null gracefully (call still places, just logs unbound).
+      var row = taskCell.closest("tr");
+      var contactId = null;
+      if (row) {
+        var assocLinks = row.querySelectorAll(
+          'a[data-test-id^="association-link-0-1-"]'
+        );
+        if (assocLinks.length === 1) {
+          var assocMatch = (assocLinks[0].getAttribute("data-test-id") || "")
+            .match(/^association-link-0-1-(\d+)$/);
+          if (assocMatch) contactId = assocMatch[1];
+        }
+        // assocLinks.length === 0: unbound task; contactId stays null.
+        // assocLinks.length >= 2: ambiguous; contactId stays null.
+      }
+
+      // Anchor the pill inside the phone cell, after the visible phone text.
+      // The task-row phone value is wrapped in <span>+1 (585) 381-0810</span>
+      // inside the truncate wrapper — anchor after that span so the pill
+      // sits inline with the number.
+      var taskAnchor =
+        taskCell.querySelector('[data-test-id="truncated-object-label"] span') ||
+        taskCell;
+
+      // Task ID from the row's data-test-id="row-{taskId}" attribute. Used
+      // for auto-completing the task server-side via the CTC intent bridge
+      // (see softphone_auth_code.php + softphone_call_done.php + issue #170).
+      var taskId = null;
+      if (row) {
+        var rowTestId = row.getAttribute("data-test-id") || "";
+        var rowMatch = rowTestId.match(/^row-(\d+)$/);
+        if (rowMatch) taskId = rowMatch[1];
+      }
+
+      out.push({
+        el: taskAnchor,
+        number: taskNum,
+        recordId: contactId,        // may be null for tasks with no contact association
+        objectType: contactId ? "contact" : null,
+        taskId: taskId,             // triggers server-side auto-complete on disposition
+      });
+    }
+
+    // ── 4. Classic Task Queue (/tasks/{portalId}/view/): completely different
+    // cell-id namespace than the object-based views above. Phone cell is
+    // td[id="cell-DEFAULT_NAMESPACE-contactPhoneNumber-{taskId}"] with a bare
+    // <span>{phone}</span> inside. The contact ID isn't exposed via
+    // data-test-id here — it's only in the href of the association cell's
+    // link (cell-DEFAULT_NAMESPACE-association-0-204-{taskId} → contains
+    // <a href="/contacts/{portalId}/record/0-1/{contactId}">Name</a>).
+    var classicTaskPhoneCells = document.querySelectorAll(
+      'td[id^="cell-DEFAULT_NAMESPACE-contactPhoneNumber-"]'
+    );
+    for (var n = 0; n < classicTaskPhoneCells.length; n++) {
+      var classicCell = classicTaskPhoneCells[n];
+      var classicText = classicCell.textContent || "";
+      // Skip empty phone cells (rendered as "--").
+      if (!classicText || classicText.trim() === "--") continue;
+      var classicNum = pbCtcNormalizePhone(classicText);
+      if (!classicNum) continue;
+
+      // Extract contactId from the row's contact-association cell's link href.
+      // Same multi-association trap as branch #3: if the association cell
+      // renders >1 contact record link, we can't tell which one owns the
+      // displayed phone. Bail to null on ambiguity so we don't log the call
+      // against the wrong CRM record.
+      var classicRow = classicCell.closest("tr");
+      var classicContactId = null;
+      if (classicRow) {
+        var classicAssocCell = classicRow.querySelector(
+          'td[id^="cell-DEFAULT_NAMESPACE-association-0-204-"]'
+        );
+        if (classicAssocCell) {
+          var classicLinks = classicAssocCell.querySelectorAll(
+            'a[href*="/record/0-1/"]'
+          );
+          if (classicLinks.length === 1) {
+            var hrefMatch = (classicLinks[0].getAttribute("href") || "")
+              .match(/\/record\/0-1\/(\d+)/);
+            if (hrefMatch) classicContactId = hrefMatch[1];
+          }
+          // 0 or 2+: contactId stays null (unbound / ambiguous).
+        }
+      }
+
+      // The phone value is a bare <span>{phone}</span> child of the <td>.
+      // Anchor after that span so the pill sits inline with the number.
+      var classicAnchor = classicCell.querySelector("span") || classicCell;
+
+      // Task ID from the row's data-test-id — same attribute the newer view
+      // uses (verified: <tr data-test-id="row-28047676047" ...>). Powers the
+      // CTC intent bridge → server-side task completion.
+      var classicTaskId = null;
+      if (classicRow) {
+        var classicRowTestId = classicRow.getAttribute("data-test-id") || "";
+        var classicRowMatch = classicRowTestId.match(/^row-(\d+)$/);
+        if (classicRowMatch) classicTaskId = classicRowMatch[1];
+      }
+
+      out.push({
+        el: classicAnchor,
+        number: classicNum,
+        recordId: classicContactId,
+        objectType: classicContactId ? "contact" : null,
+        taskId: classicTaskId,
+      });
+    }
+  } catch (e) {}
+  return out;
+}
+
+var PB_CTC_FINDERS = {
+  hubspot: pbCtcFindHubspot,
+};
+
+function pbCtcDecorate() {
+  try {
+    var ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+    var finder = PB_CTC_FINDERS[ctx.crmId];
+    if (!finder) return;
+    var targets = finder();
+
+    // Dedupe by ANCHOR element, not by phone number. On the record page the
+    // finder's innermost-only filter means each phone resolves to exactly one
+    // anchor — so dedup-by-anchor degenerates to dedup-by-number naturally.
+    // On a list view, multiple rows can legitimately share a phone number
+    // (multiple contacts at the same company) and EACH row should get a pill;
+    // anchor-keyed dedup gives us that for free.
+    var seenAnchors = new Set();
+
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      if (!t.el || !t.number) continue;
+      var anchor = (t.el.closest && t.el.closest("a")) || t.el;
+      if (seenAnchors.has(anchor)) continue;
+      seenAnchors.add(anchor);
+
+      // If the pill is already sitting right after this anchor, nothing to do.
+      var sib = anchor.nextElementSibling;
+      if (sib && sib.classList && sib.classList.contains(PB_CTC_BTN_CLASS)) {
+        continue;
+      }
+
+      // HubSpot is a React app and may RELOCATE our injected pill on re-render
+      // (on the record page it kept landing BEFORE the number; on list views
+      // re-renders happen on scroll/filter). Look within the row (list view)
+      // or the immediate parent (record page) for a stray pill that was moved,
+      // and pull it back into place. The MutationObserver fires on React's
+      // re-renders so this self-heals; React doesn't react to our move, so it
+      // settles (no loop).
+      var scope = anchor.closest("tr") || anchor.parentElement;
+      var stray = scope ? scope.querySelector("." + PB_CTC_BTN_CLASS) : null;
+      if (stray) {
+        anchor.insertAdjacentElement("afterend", stray);
+        continue;
+      }
+
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = PB_CTC_BTN_CLASS;
+      btn.dataset.pbNum = t.number.replace(/[^\d]/g, "");
+      if (t.recordId) btn.dataset.pbRecordId = t.recordId;
+      if (t.objectType) btn.dataset.pbObjectType = t.objectType;
+      // Icon-only affordance: the PhoneBurner brand flame, no background,
+      // no text. Cleanest visual next to a phone number — the flame IS
+      // the button. The title attribute carries "Call with PhoneBurner"
+      // for the tooltip / screen-reader path.
+      btn.innerHTML =
+        '<img src="' + PB_CTC_FLAME_ICON + '" alt="" width="16" height="16" ' +
+        'style="display:block;">';
+      btn.title = "Call with PhoneBurner";
+      btn.style.cssText =
+        "margin-left:6px;padding:2px;background:transparent;border:0;" +
+        "cursor:pointer;vertical-align:middle;line-height:1;";
+
+      (function (number, recordId, objectType, taskId) {
+        btn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          // Background opens our hosted softphone window and places the dial.
+          // recordId/objectType travel with the click so list-view pills carry
+          // per-row identity; record-page pills omit them (null) and let
+          // background.js resolve from the tab URL.
+          //
+          // taskId is only set on the two task-view finders (branches #3/#4).
+          // When present, background.js passes it to softphone_auth_code which
+          // drops a CTC intent record — softphone_call_done.php consumes that
+          // record and auto-completes the task on disposition. See issue #170.
+          try {
+            chrome.runtime.sendMessage({
+              type: "CLICK_TO_CALL",
+              number: number,
+              recordId: recordId || null,
+              objectType: objectType || null,
+              taskId: taskId || null,
+            });
+          } catch (e) {}
+        });
+      })(t.number, t.recordId, t.objectType, t.taskId);
+
+      anchor.insertAdjacentElement("afterend", btn);
+    }
+  } catch (e) {}
+}
+
+function pbCtcScheduleDecorate() {
+  if (pbCtcDebounce) clearTimeout(pbCtcDebounce);
+  pbCtcDebounce = setTimeout(pbCtcDecorate, 300);
+}
+
+function pbCtcActivate() {
+  pbCtcDecorate();
+  if (pbCtcObserver) return; // already watching
+  try {
+    pbCtcObserver = new MutationObserver(pbCtcScheduleDecorate);
+    pbCtcObserver.observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+}
+
+function pbCtcDeactivate() {
+  try {
+    if (pbCtcObserver) {
+      pbCtcObserver.disconnect();
+      pbCtcObserver = null;
+    }
+    var btns = document.querySelectorAll("." + PB_CTC_BTN_CLASS);
+    for (var i = 0; i < btns.length; i++) btns[i].remove();
+  } catch (e) {}
+}
+
+// ============================================================================
 //  🔁 MESSAGE HANDLER (popup/background ↔ content) — SINGLE LISTENER
 // ============================================================================
 
@@ -1883,6 +2386,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- Required for ensureContentScript() ping test ---
   if (msg?.type === "PING") {
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // --- Click-to-Call decoration toggles (from background.js) ---
+  if (msg?.type === "CTC_ACTIVATE") {
+    if (isTopWindow) pbCtcActivate();
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg?.type === "CTC_DEACTIVATE") {
+    if (isTopWindow) pbCtcDeactivate();
     sendResponse({ ok: true });
     return true;
   }
@@ -2032,6 +2547,58 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })();
 
     return true; // async response
+  }
+
+  // --- HubSpot Task Queue: scrape task IDs from the tasks page DOM ---
+  // The HubSpot tasks table marks each row with data-test-id="row-{taskId}".
+  // If any rows have their checkbox checked, return only those task IDs;
+  // otherwise return all visible task IDs (the customer dials the whole view).
+  //
+  // WORKS ON BOTH TASK VIEWS: verified via a captured DOM from the newer
+  // /objects/0-27/views/{viewId}/list table — those rows carry the same
+  // <tr data-test-id="row-{taskId}"> attribute as the classic Task Queue
+  // (/tasks/{portalId}/view/) rows. Cell-id namespaces differ between the
+  // two views (cell-0-27-* vs cell-DEFAULT_NAMESPACE-*), which matters for
+  // the CTC pill finder above, but the row-level test id is identical.
+  if (msg && msg.type === "HS_GET_TASK_IDS") {
+    try {
+      const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+      if (ctx.crmId !== "hubspot") {
+        sendResponse({ error: "Not on a HubSpot page." });
+        return true;
+      }
+
+      const rows = document.querySelectorAll('tr[data-test-id^="row-"]');
+      const allIds = [];
+      const selectedIds = [];
+
+      rows.forEach((row) => {
+        const testId = row.getAttribute("data-test-id") || "";
+        const m = testId.match(/^row-(\d+)$/);
+        if (!m) return;
+        const taskId = m[1];
+        allIds.push(taskId);
+
+        // Per-row checkbox state — if checked, this task is in the user's explicit selection.
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (cb && cb.checked) {
+          selectedIds.push(taskId);
+        }
+      });
+
+      // If anything is checked, dial only those; otherwise dial all visible tasks.
+      const taskIds = selectedIds.length > 0 ? selectedIds : allIds;
+
+      sendResponse({
+        taskIds: [...new Set(taskIds)],
+        totalVisible: allIds.length,
+        selectedCount: selectedIds.length,
+        usedSelection: selectedIds.length > 0,
+      });
+    } catch (e) {
+      sendResponse({ error: e?.message || String(e) });
+    }
+    return true;
   }
 
   // Ignore SCAN_PAGE in iframes

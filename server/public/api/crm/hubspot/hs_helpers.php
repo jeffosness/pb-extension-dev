@@ -12,10 +12,25 @@
 // HubSpot API helpers (v3)
 // -----------------------------------------------------------------------------
 
+/**
+ * Refresh a HubSpot OAuth token, with optional fallback to legacy credentials.
+ *
+ * Tries the primary HS_CLIENT_ID/HS_CLIENT_SECRET first. If HubSpot returns a
+ * 4xx (typically because the refresh token was issued by a different OAuth
+ * app), and HS_LEGACY_CLIENT_ID/HS_LEGACY_CLIENT_SECRET are configured, retries
+ * with the legacy credentials.
+ *
+ * This supports the OAuth app migration where existing customer tokens were
+ * issued by the previous (demo-org) app, but new connections go through the
+ * new (PB-portal) app. The legacy fallback keeps existing customers refreshing
+ * cleanly until they reconnect.
+ */
 function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): array {
   $cfg = cfg();
   $hsClientId     = $cfg['HS_CLIENT_ID'] ?? null;
   $hsClientSecret = $cfg['HS_CLIENT_SECRET'] ?? null;
+  $hsLegacyId     = $cfg['HS_LEGACY_CLIENT_ID'] ?? null;
+  $hsLegacySecret = $cfg['HS_LEGACY_CLIENT_SECRET'] ?? null;
 
   if (!$hsClientId || !$hsClientSecret) {
     api_error('Server missing HS_CLIENT_ID/HS_CLIENT_SECRET for token refresh', 'server_error', 500);
@@ -26,23 +41,33 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
     api_error('HubSpot token expired and no refresh_token is available. Please reconnect HubSpot.', 'unauthorized', 401);
   }
 
-  $t0 = microtime(true);
-  list($status, $resp) = http_post_form(
-    'https://api.hubapi.com/oauth/v1/token',
-    [
-      'grant_type'    => 'refresh_token',
-      'client_id'     => $hsClientId,
-      'client_secret' => $hsClientSecret,
-      'refresh_token' => $refresh,
-    ]
-  );
-  $hs_ms = (int) round((microtime(true) - $t0) * 1000);
+  $clientIdHash = substr(hash('sha256', (string)$client_id), 0, 12);
+
+  // Attempt 1: primary credentials
+  list($status, $resp, $hs_ms) = hs_attempt_token_refresh($refresh, $hsClientId, $hsClientSecret);
+
+  // Attempt 2: legacy credentials (only if primary returned a 4xx AND legacy creds exist).
+  // We don't fall back on 5xx because that's a HubSpot-side issue, not a credential mismatch.
+  $usedLegacy = false;
+  if (($status >= 400 && $status < 500) && $hsLegacyId && $hsLegacySecret) {
+    list($status, $resp, $legacy_ms) = hs_attempt_token_refresh($refresh, $hsLegacyId, $hsLegacySecret);
+    $hs_ms += $legacy_ms;
+    $usedLegacy = true;
+    if ($status >= 200 && $status < 300 && is_array($resp)) {
+      api_log('hubspot_refresh.legacy_creds.ok', [
+        'client_id_hash' => $clientIdHash,
+        'status'         => (int)$status,
+        'hs_ms'          => $hs_ms,
+      ]);
+    }
+  }
 
   if ($status < 200 || $status >= 300 || !is_array($resp)) {
     api_log('hubspot_refresh.error', [
-      'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-      'status' => (int)$status,
-      'hs_ms' => $hs_ms,
+      'client_id_hash' => $clientIdHash,
+      'status'         => (int)$status,
+      'hs_ms'          => $hs_ms,
+      'tried_legacy'   => $usedLegacy,
     ]);
     api_error('HubSpot token refresh failed. Please reconnect HubSpot.', 'unauthorized', 401);
   }
@@ -60,12 +85,33 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
   save_hs_tokens($client_id, $resp);
 
   api_log('hubspot_refresh.ok', [
-    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    'hub_id' => $resp['hub_id'] ?? null,
-    'hs_ms' => $hs_ms,
+    'client_id_hash' => $clientIdHash,
+    'hub_id'         => $resp['hub_id'] ?? null,
+    'hs_ms'          => $hs_ms,
+    'used_legacy'    => $usedLegacy,
   ]);
 
   return $resp;
+}
+
+/**
+ * Internal: POST to HubSpot's token endpoint with a specific client_id/secret pair.
+ * Returns [http_status, decoded_response_array_or_null, elapsed_ms].
+ * Separate from the main refresh function so we can call it twice (primary + legacy).
+ */
+function hs_attempt_token_refresh(string $refreshToken, string $clientId, string $clientSecret): array {
+  $t0 = microtime(true);
+  list($status, $resp) = http_post_form(
+    'https://api.hubapi.com/oauth/v1/token',
+    [
+      'grant_type'    => 'refresh_token',
+      'client_id'     => $clientId,
+      'client_secret' => $clientSecret,
+      'refresh_token' => $refreshToken,
+    ]
+  );
+  $hs_ms = (int) round((microtime(true) - $t0) * 1000);
+  return [(int)$status, is_array($resp) ? $resp : null, $hs_ms];
 }
 
 function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array $phoneProperties = [], array &$diag = [], ?string $preferredPrimary = null) {
@@ -80,6 +126,168 @@ function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, str
   }
 
   return $contacts;
+}
+
+/**
+ * Fetch HubSpot task objects with contact associations.
+ *
+ * HubSpot's `POST /crm/v3/objects/tasks/batch/read` endpoint does NOT return
+ * associations even when you include `associations: ['contacts']` in the body
+ * (that parameter is silently ignored). To get task→contact links we have to
+ * call the v4 associations batch endpoint separately and merge the results.
+ *
+ * This function does both:
+ *   1. POST /crm/v3/objects/tasks/batch/read  — fetches task properties
+ *   2. POST /crm/v4/associations/tasks/contacts/batch/read — fetches associations
+ *
+ * Then embeds the associations into each task object under
+ * `task['associations']['contacts']['results']` to match what callers expect.
+ *
+ * Batches input in groups of 100 (HubSpot's batch endpoint limit).
+ * Returns an array of task objects.
+ */
+function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) {
+  $tasks = [];
+  $diag['tasks_fetch']        = ['ok' => 0, 'fail' => 0, 'last_http' => null];
+  $diag['associations_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
+
+  if (empty($taskIds)) return $tasks;
+
+  // Task properties we surface — useful for diagnostics and (later) for the
+  // call_done handler to construct a meaningful task-completion note if needed.
+  $properties = [
+    'hs_task_subject',
+    'hs_task_status',
+    'hs_task_type',
+    'hs_timestamp',
+    'hubspot_owner_id',
+    'hs_queue_membership_ids',
+  ];
+
+  $batches = array_chunk(array_values($taskIds), 100);
+
+  // -------------------------------------------------------------------------
+  // Step 1: fetch task properties
+  // -------------------------------------------------------------------------
+  foreach ($batches as $batch) {
+    $inputs = array_map(function ($id) { return ['id' => (string)$id]; }, $batch);
+    $body = [
+      'inputs'     => $inputs,
+      'properties' => $properties,
+    ];
+
+    list($code, $json, $_raw) = hs_api_post_json(
+      $accessToken,
+      'https://api.hubapi.com/crm/v3/objects/tasks/batch/read',
+      $body
+    );
+    $diag['tasks_fetch']['last_http'] = $code;
+
+    // HubSpot batch endpoints return 200 for full success and 207
+    // (Multi-Status) for partial success. Both responses include a 'results'
+    // array we should parse — only 4xx/5xx are total failures.
+    if (($code !== 200 && $code !== 207) || !is_array($json)) {
+      $diag['tasks_fetch']['fail'] += count($batch);
+      continue;
+    }
+
+    $results = $json['results'] ?? [];
+    if (is_array($results)) {
+      foreach ($results as $task) {
+        if (is_array($task)) {
+          // Pre-initialize the associations structure so downstream code can
+          // safely read $task['associations']['contacts']['results'] even when
+          // a task has no associated contacts.
+          if (!isset($task['associations'])) $task['associations'] = [];
+          if (!isset($task['associations']['contacts'])) {
+            $task['associations']['contacts'] = ['results' => []];
+          }
+          $tasks[] = $task;
+          $diag['tasks_fetch']['ok']++;
+        }
+      }
+    }
+  }
+
+  if (empty($tasks)) return $tasks;
+
+  // -------------------------------------------------------------------------
+  // Step 2: fetch task → contact associations (v4 endpoint, separate call)
+  // -------------------------------------------------------------------------
+  // Index tasks by ID so we can attach associations efficiently.
+  $tasksById = [];
+  foreach ($tasks as $i => $t) {
+    $tid = (string)($t['id'] ?? '');
+    if ($tid !== '') $tasksById[$tid] = $i;
+  }
+
+  foreach ($batches as $batch) {
+    $inputs = array_map(function ($id) { return ['id' => (string)$id]; }, $batch);
+    $body = ['inputs' => $inputs];
+
+    list($code, $json, $_raw) = hs_api_post_json(
+      $accessToken,
+      'https://api.hubapi.com/crm/v4/associations/tasks/contacts/batch/read',
+      $body
+    );
+    $diag['associations_fetch']['last_http'] = $code;
+
+    // HubSpot's v4 associations batch endpoint returns 207 (Multi-Status) when
+    // ANY of the input task IDs has no associations attached — that's most
+    // batches in practice, since not every task has an associated contact.
+    // The response body still includes a `results` array with the tasks that
+    // DO have associations, plus a `numErrors` / `errors` block for the
+    // ones that don't (or that the API couldn't resolve). We parse `results`
+    // regardless; the "errors" are informational and expected.
+    if (($code !== 200 && $code !== 207) || !is_array($json)) {
+      $diag['associations_fetch']['fail'] += count($batch);
+      continue;
+    }
+
+    $results = $json['results'] ?? [];
+    if (!is_array($results)) continue;
+
+    foreach ($results as $row) {
+      if (!is_array($row)) continue;
+      $fromId = (string)($row['from']['id'] ?? '');
+      if ($fromId === '' || !isset($tasksById[$fromId])) continue;
+
+      $taskIdx = $tasksById[$fromId];
+      $associatedContacts = [];
+      foreach (($row['to'] ?? []) as $toItem) {
+        if (!is_array($toItem)) continue;
+        // v4 response shape uses `toObjectId`; we map it to {id: ...} so the
+        // downstream parser (looking under associations.contacts.results[].id)
+        // sees a consistent shape regardless of which API version we used.
+        $toId = $toItem['toObjectId'] ?? null;
+        if ($toId === null) continue;
+        $associatedContacts[] = ['id' => (string)$toId];
+      }
+
+      if (!empty($associatedContacts)) {
+        $tasks[$taskIdx]['associations']['contacts']['results'] = $associatedContacts;
+        $diag['associations_fetch']['ok']++;
+      }
+    }
+  }
+
+  return $tasks;
+}
+
+/**
+ * Fetch tasks with auto-refresh on 401 (same pattern as the contacts equivalent).
+ */
+function hs_fetch_tasks_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $taskIds, array &$diag = []) {
+  $tasks = hs_fetch_tasks_by_ids($hsAccess, $taskIds, $diag);
+
+  $lastHttp = $diag['tasks_fetch']['last_http'] ?? null;
+  if (empty($tasks) && $lastHttp === 401) {
+    $hs = hs_refresh_access_token_or_fail($client_id, $hs);
+    $hsAccess = (string)($hs['access_token'] ?? '');
+    $tasks = hs_fetch_tasks_by_ids($hsAccess, $taskIds, $diag);
+  }
+
+  return $tasks;
 }
 
 function hs_token_is_expired(array $hsTokens): bool {

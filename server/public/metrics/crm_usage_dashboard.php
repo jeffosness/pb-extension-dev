@@ -338,6 +338,74 @@ api_log('crm_usage_dashboard.view', [
       .controls-bar { flex-direction: column; align-items: stretch; }
       .auto-refresh { margin-left: 0; }
     }
+
+    /* ---------------------------------------------------------------- */
+    /* Tab navigation                                                   */
+    /* ---------------------------------------------------------------- */
+    .tab-nav {
+      display: flex;
+      gap: 2px;
+      margin: 36px 0 0;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      position: sticky;
+      top: 0;
+      background: var(--bg, #ffffff);
+      z-index: 10;
+      padding: 8px 0 0;
+    }
+    .tab-btn {
+      padding: 10px 18px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+      margin-bottom: -1px;
+      border-radius: 6px 6px 0 0;
+      font-family: inherit;
+    }
+    .tab-btn:hover {
+      color: var(--text);
+      background: rgba(0, 0, 0, 0.025);
+    }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: rgba(0, 102, 204, 0.04);
+    }
+    .tab-pane {
+      display: none;
+    }
+    .tab-pane.active {
+      display: block;
+      animation: tabFadeIn 0.15s ease;
+    }
+    @keyframes tabFadeIn {
+      from { opacity: 0; transform: translateY(2px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    /* Mobile: tabs scroll horizontally rather than wrap */
+    @media (max-width: 720px) {
+      .tab-nav {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+        margin: 24px -16px 0;
+        padding: 8px 16px 0;
+      }
+      .tab-btn {
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+    }
+    /* Section title spacing inside tabs — first one should hug the tab nav */
+    .tab-pane > .section-title:first-child {
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
@@ -383,102 +451,499 @@ api_log('crm_usage_dashboard.view', [
     <!-- Section 1: Executive Summary -->
     <div class="grid-5" id="exec-grid"></div>
 
-    <!-- Section 2: Usage Trends -->
-    <h2 class="section-title">Usage Trends</h2>
-    <div id="trends-section">
+    <!-- Section 1b: Token Security (server-rendered from token-audit.log) -->
+    <?php
+    // Read the audit log and compute summary + anomalies for the last 24h.
+    // This is server-rendered (no JS) because the audit log is small and
+    // we want it visible immediately on page load.
+    require_once __DIR__ . '/../utils.php';
+
+    $token_summary = [
+        'reads'    => 0,
+        'writes'   => 0,
+        'deletes'  => 0,
+        'errors'   => 0,
+        'by_prov'  => ['pb' => 0, 'hubspot' => 0, 'close' => 0, 'apollo' => 0],
+        'anomalies'=> [],
+        'log_missing' => false,
+    ];
+
+    // Per-provider whitelist of script names that are EXPECTED to read tokens.
+    // Anything outside this list gets flagged as an anomaly so we can spot a
+    // suspicious endpoint reading tokens we didn't intend to give it access.
+    $token_read_whitelist = [
+        'pb' => [
+            'state', 'oauth_pb_save', 'oauth_pb_clear', 'session_stop',
+            'dialsession_from_scan', 'pb_dialsession_selection',
+            'pb_dialsession_from_list', 'pb_dialsession_from_tasks',
+            'hs_call_logger', 'close_call_logger', 'apollo_call_logger',
+            'call_done', 'contact_displayed', 'refresh_sse_code',
+            'user_settings_get', 'user_settings_save', 'track_crm_usage',
+            'apollo_sequences', 'apollo_sequence_tasks',
+            'hs_lists', 'hs_phone_properties',
+            // v0.8.0 click-to-call flow. Both endpoints call load_pb_token():
+            //   softphone_auth_code — mints a single-use code for the extension
+            //   softphone           — exchanges the code and embeds the PAT in
+            //                         the softphone iframe src
+            'softphone_auth_code', 'softphone',
+        ],
+        'hubspot' => [
+            'state', 'oauth_hs_finish', 'oauth_disconnect',
+            'pb_dialsession_selection', 'pb_dialsession_from_list',
+            'pb_dialsession_from_tasks', 'hs_lists', 'hs_phone_properties',
+            'hs_call_logger', 'call_done', 'contact_displayed',
+            // v0.8.2 CTC-completes-task flow (PR #172) added HubSpot token
+            // reads on both softphone endpoints:
+            //   softphone_auth_code — reads HS tokens to check "is HS
+            //                         connected?" before writing an intent
+            //   softphone_call_done — reads HS tokens to complete the task
+            //                         via hubspot_complete_task_for_client()
+            // Failing to whitelist these here fires a false-positive anomaly
+            // on the dashboard for every CTC-from-task-row click, exactly
+            // the class of drift LESSONS.md 2026-07-03 warns about.
+            'softphone_auth_code', 'softphone_call_done',
+        ],
+        'close' => [
+            'state', 'oauth_close_finish', 'oauth_disconnect',
+            'pb_dialsession_selection', 'close_call_logger',
+            'call_done', 'contact_displayed',
+        ],
+        'apollo' => [
+            'state', 'oauth_apollo_finish', 'oauth_disconnect', 'save_api_key',
+            'pb_dialsession_selection', 'pb_dialsession_from_tasks',
+            'apollo_sequences', 'apollo_sequence_tasks',
+            'apollo_call_logger', 'call_done', 'contact_displayed',
+        ],
+    ];
+
+    // Anomaly-detection tunables. Adjust these in one place if the dashboard
+    // starts crying wolf — or going quiet — about real-world traffic patterns.
+    //
+    // Why the carve-outs:
+    //   - `state.php` is the popup connection-probe. Every popup open reads
+    //     all 4 providers, and a non-connected user generates "misses" by
+    //     design. Including state in burst/miss thresholds buries real signal
+    //     under normal popup polling.
+    //   - The original miss rule fired on (1 IP × many misses on 1 provider),
+    //     but actual enumeration looks like (1 IP × many DISTINCT client_ids).
+    //     One client repeatedly missing one provider = user without that CRM
+    //     connected, opening popup a lot.
+    //   - The enumeration rule ALSO ignores IPs that had ANY successful token
+    //     reads in the window. A corporate NAT with N employees produces the
+    //     same distinct-cid signature as an enumeration attacker, but a NAT
+    //     will have some employees who successfully authenticate — an actual
+    //     spray-attacker won't. Adding this compensating check killed the
+    //     "6 employees behind an AWS VPN" false positive we hit 2026-07-06.
+    //     The trade-off: an attacker who successfully steals one token during
+    //     a spray campaign is no longer flagged by THIS rule, but they'd
+    //     already have escalated to a bigger concern (successful token theft),
+    //     which is a different alert to build.
+    $BURST_THRESHOLD             = 50;          // reads/5min from same client
+    $BURST_EXCLUDE_ENDPOINTS     = ['state'];   // endpoints exempt from burst
+    $ENUM_DISTINCT_CIDS_PER_IP   = 5;           // distinct cids/IP triggers enum
+    $DELETE_SPIKE_THRESHOLD      = 10;          // deletes/hour
+    $DELETE_SPIKE_BUCKET_SECONDS = 3600;
+
+    $audit_path = audit_token_log_path();
+    if (!is_file($audit_path)) {
+        $token_summary['log_missing'] = true;
+    } else {
+        $cutoff = time() - 86400;
+        // Burst detection: tally reads per (client_id_hash, 5-min bucket)
+        $burst_buckets = [];
+        // Miss tracking: per IP, count + the set of distinct client_ids that missed
+        $miss_by_ip = [];
+        // Delete spike tracking: per 1-hour bucket
+        $delete_buckets = [];
+
+        $fh = @fopen($audit_path, 'r');
+        if ($fh) {
+            while (($line = fgets($fh)) !== false) {
+                $r = json_decode(trim($line), true);
+                if (!is_array($r)) continue;
+                $t = strtotime($r['t'] ?? '') ?: 0;
+                if ($t < $cutoff) continue;
+
+                $evt = $r['evt'] ?? '';
+                $prov = $r['prov'] ?? '';
+                $ep = $r['ep'] ?? '';
+                $res = $r['res'] ?? '';
+                $cid = $r['cid'] ?? '';
+                $ip = $r['ip'] ?? '';
+
+                if ($evt === 'read')   $token_summary['reads']++;
+                if ($evt === 'write')  $token_summary['writes']++;
+                if ($evt === 'delete') $token_summary['deletes']++;
+                if ($res === 'error')  $token_summary['errors']++;
+
+                if (isset($token_summary['by_prov'][$prov])) {
+                    $token_summary['by_prov'][$prov]++;
+                }
+
+                // Anomaly check 1: endpoint not in whitelist for this provider
+                if ($evt === 'read' && isset($token_read_whitelist[$prov])
+                    && !in_array($ep, $token_read_whitelist[$prov], true)) {
+                    $token_summary['anomalies'][] = $r + ['why' => 'Endpoint "' . htmlspecialchars($ep) . '" is not in the whitelist for ' . htmlspecialchars($prov) . ' token reads'];
+                }
+
+                // Anomaly check 2: burst — many reads from same client in 5 min.
+                // Skip endpoints that are expected to be polled (e.g. state.php).
+                if ($evt === 'read' && $cid !== ''
+                    && !in_array($ep, $BURST_EXCLUDE_ENDPOINTS, true)) {
+                    $bucket = $cid . '|' . floor($t / 300);
+                    if (!isset($burst_buckets[$bucket])) $burst_buckets[$bucket] = ['count' => 0, 'sample' => $r];
+                    $burst_buckets[$bucket]['count']++;
+                }
+
+                // Anomaly check 3: enumeration. True enumeration = one IP
+                // probing MANY DISTINCT client_ids AND finding zero. Track
+                // both raw miss counts + distinct cids per IP, AND whether
+                // the IP produced ANY successful reads (a real spray hits
+                // nothing; a corporate NAT hits plenty for its connected
+                // employees).
+                if ($evt === 'read' && $ip !== '') {
+                    if (!isset($miss_by_ip[$ip])) {
+                        $miss_by_ip[$ip] = [
+                            'count' => 0,
+                            'sample' => $r,
+                            'cids' => [],
+                            'has_success' => false,
+                        ];
+                    }
+                    if ($res === 'missing') {
+                        $miss_by_ip[$ip]['count']++;
+                        if ($cid !== '') $miss_by_ip[$ip]['cids'][$cid] = true;
+                    } elseif ($res === 'ok') {
+                        $miss_by_ip[$ip]['has_success'] = true;
+                    }
+                }
+
+                // Anomaly check 4: delete spike — many tokens deleted in a
+                // short window. Could indicate mass-disconnect (legit, e.g. a
+                // bulk-cleanup script) or compromise-and-cleanup (concerning).
+                if ($evt === 'delete') {
+                    $bucket = (int) floor($t / $DELETE_SPIKE_BUCKET_SECONDS);
+                    if (!isset($delete_buckets[$bucket])) {
+                        $delete_buckets[$bucket] = ['count' => 0, 'sample' => $r];
+                    }
+                    $delete_buckets[$bucket]['count']++;
+                }
+            }
+            fclose($fh);
+        }
+
+        // Promote burst buckets over threshold into anomalies
+        foreach ($burst_buckets as $bucket => $info) {
+            if ($info['count'] > $BURST_THRESHOLD) {
+                $token_summary['anomalies'][] = $info['sample'] + [
+                    'why' => 'Read burst: ' . $info['count'] . ' reads from same client in a 5-minute window (excluding state.php polling)',
+                ];
+            }
+        }
+
+        // Promote IPs probing MANY DISTINCT client_ids — true enumeration shape.
+        // One client missing many times is normal (user without that CRM connected);
+        // one IP missing many DIFFERENT client_ids is the actual scan signature.
+        //
+        // Compensating filter: if this IP ALSO produced any successful reads
+        // in the window, it's a corporate NAT (or shared egress) with a mix
+        // of connected and unconnected users behind it — not enumeration.
+        // Real spray-attackers hit universally missing. See the tunables
+        // block above for the trade-off rationale.
+        foreach ($miss_by_ip as $ip => $info) {
+            if ($info['has_success']) continue;
+            $distinct = count($info['cids']);
+            if ($distinct >= $ENUM_DISTINCT_CIDS_PER_IP) {
+                $token_summary['anomalies'][] = $info['sample'] + [
+                    'why' => 'Possible enumeration: ' . $info['count'] . ' missing-token reads from IP ' . htmlspecialchars($ip) . ' across ' . $distinct . ' distinct client_ids in 24h (no successful reads from this IP in the window)',
+                ];
+            }
+        }
+
+        // Promote delete spikes — many tokens deleted within a 1-hour bucket
+        foreach ($delete_buckets as $bucket => $info) {
+            if ($info['count'] > $DELETE_SPIKE_THRESHOLD) {
+                $token_summary['anomalies'][] = $info['sample'] + [
+                    'why' => 'Delete spike: ' . $info['count'] . ' token deletions within a 1-hour window — possible mass-disconnect or compromise-and-cleanup',
+                ];
+            }
+        }
+    }
+    ?>
+    <h2 class="section-title">Token Security (last 24h)</h2>
+    <?php if ($token_summary['log_missing']): ?>
+      <div class="alert alert-warning">
+        Token audit log not found at <code><?= htmlspecialchars(audit_token_log_path()) ?></code>.
+        This is expected if no token operations have happened since the audit log feature was deployed.
+        The log will be created automatically on the next token read/write/delete.
+      </div>
+    <?php else: ?>
+      <div class="grid-5">
+        <div class="stat">
+          <div class="label">Reads</div>
+          <div class="value"><?= number_format($token_summary['reads']) ?></div>
+        </div>
+        <div class="stat">
+          <div class="label">Writes</div>
+          <div class="value"><?= number_format($token_summary['writes']) ?></div>
+        </div>
+        <div class="stat">
+          <div class="label">Deletes</div>
+          <div class="value"><?= number_format($token_summary['deletes']) ?></div>
+        </div>
+        <div class="stat">
+          <div class="label">Read errors</div>
+          <div class="value" style="color: <?= $token_summary['errors'] > 0 ? '#92400e' : 'inherit' ?>;">
+            <?= number_format($token_summary['errors']) ?>
+          </div>
+        </div>
+        <div class="stat">
+          <div class="label">Anomalies</div>
+          <div class="value" style="color: <?= count($token_summary['anomalies']) > 0 ? '#991b1b' : '#16a34a' ?>;">
+            <?= count($token_summary['anomalies']) ?>
+          </div>
+        </div>
+      </div>
+      <div class="grid-4" style="margin-top: 12px;">
+        <?php foreach (['pb', 'hubspot', 'close', 'apollo'] as $prov): ?>
+          <div class="stat">
+            <div class="label"><?= strtoupper($prov) ?> events</div>
+            <div class="value"><?= number_format($token_summary['by_prov'][$prov]) ?></div>
+          </div>
+        <?php endforeach; ?>
+      </div>
+      <?php if (!empty($token_summary['anomalies'])): ?>
+        <details open style="margin-top: 16px;">
+          <summary class="section-title" style="margin-top: 0; cursor: pointer;">
+            🚨 Anomalies (<?= count($token_summary['anomalies']) ?>)
+          </summary>
+          <table style="width:100%; margin-top: 10px; border-collapse: collapse; font-size: 13px;">
+            <thead>
+              <tr style="background: #fef2f2;">
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">When</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Event</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Provider</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Endpoint</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">IP</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">client_id (hash)</th>
+                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Why flagged</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach (array_slice($token_summary['anomalies'], 0, 50) as $a): ?>
+                <tr>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['t'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['evt'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['prov'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['ep'] ?? '') ?></code></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['ip'] ?? '') ?></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['cid'] ?? '') ?></code></td>
+                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['why'] ?? '') ?></td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+          <?php if (count($token_summary['anomalies']) > 50): ?>
+            <p style="font-size:12px; color: var(--text-muted); margin-top: 8px;">
+              Showing 50 of <?= count($token_summary['anomalies']) ?> anomalies. Check the audit log directly for the full list:
+              <code><?= htmlspecialchars(audit_token_log_path()) ?></code>
+            </p>
+          <?php endif; ?>
+        </details>
+      <?php endif; ?>
+    <?php endif; ?>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-nav" role="tablist" aria-label="Dashboard sections">
+      <button type="button" class="tab-btn active" data-tab="trends"       role="tab" aria-selected="true"  aria-controls="tab-trends">📈 Trends</button>
+      <button type="button" class="tab-btn"        data-tab="users"        role="tab" aria-selected="false" aria-controls="tab-users">👥 Users</button>
+      <button type="button" class="tab-btn"        data-tab="productivity" role="tab" aria-selected="false" aria-controls="tab-productivity">📞 Productivity</button>
+      <button type="button" class="tab-btn"        data-tab="sessions"     role="tab" aria-selected="false" aria-controls="tab-sessions">⚡ Sessions</button>
+      <button type="button" class="tab-btn"        data-tab="ctc"          role="tab" aria-selected="false" aria-controls="tab-ctc">🔥 Click-to-Call</button>
+      <button type="button" class="tab-btn"        data-tab="detail"       role="tab" aria-selected="false" aria-controls="tab-detail">🔎 Detail</button>
+    </nav>
+
+    <!-- Tab: Trends (Usage Trends + CRM Distribution) -->
+    <div class="tab-pane active" data-tab="trends" id="tab-trends" role="tabpanel" aria-labelledby="tab-trends-btn">
+      <!-- Section 2: Usage Trends -->
+      <h2 class="section-title">Usage Trends</h2>
+      <div id="trends-section">
+        <div class="chart-row">
+          <div class="chart-box">
+            <h3>Sessions & Users per Day</h3>
+            <div class="chart-container"><canvas id="chart-sessions"></canvas></div>
+          </div>
+          <div class="chart-box">
+            <h3>Calls & Connections per Day</h3>
+            <div class="chart-container"><canvas id="chart-calls"></canvas></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: CRM Distribution -->
+      <h2 class="section-title">CRM Distribution</h2>
       <div class="chart-row">
         <div class="chart-box">
-          <h3>Sessions & Users per Day</h3>
-          <div class="chart-container"><canvas id="chart-sessions"></canvas></div>
+          <h3>Dial Sessions by CRM</h3>
+          <div class="chart-container"><canvas id="chart-crm-dist"></canvas></div>
+        </div>
+        <div>
+          <table id="crm-combined-table">
+            <thead><tr><th>CRM</th><th>Sessions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Users (Activity by User) -->
+    <div class="tab-pane" data-tab="users" id="tab-users" role="tabpanel" hidden>
+      <!-- Section 3.5: Activity by User -->
+      <h2 class="section-title">Activity by User</h2>
+      <div class="alert alert-info" style="margin: 0 0 12px;">
+        <strong>Privacy note:</strong> Only the PhoneBurner <code>member_user_id</code> is shown here.
+        Names and email addresses are intentionally omitted &mdash; if you need to identify a specific
+        user, look the ID up in the PhoneBurner admin. We may surface richer profile data in the
+        future once we&rsquo;ve formalized access controls for it.
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; margin: 8px 0 12px;">
+        <input type="text" id="user-search"
+               placeholder="Filter by member_user_id&hellip;"
+               style="flex:1; max-width:300px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+        <span class="muted" id="user-search-count"></span>
+      </div>
+      <table id="by-user-table">
+        <thead>
+          <tr>
+            <th>Member User ID</th>
+            <th style="text-align:right;">Launches</th>
+            <th>CRMs Used</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Tab: Productivity (Dial Session Productivity + Records per Session) -->
+    <div class="tab-pane" data-tab="productivity" id="tab-productivity" role="tabpanel" hidden>
+      <!-- Section 4: Dial Session Productivity -->
+      <h2 class="section-title">Dial Session Productivity</h2>
+      <div class="grid-3" id="productivity-grid"></div>
+      <table id="call-outcomes-table">
+        <thead><tr><th>Call Outcome</th><th>Count</th><th>%</th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <!-- Section 5: Records per Session -->
+      <h2 class="section-title">Records per Session</h2>
+      <div class="grid" id="records-grid"></div>
+      <div class="chart-box" style="margin-top: 12px;">
+        <h3>Records per Launch Distribution</h3>
+        <div class="chart-container" style="height: 200px;"><canvas id="chart-histogram"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Tab: Sessions (SSE Session Details + Launch Sources & Object Types) -->
+    <div class="tab-pane" data-tab="sessions" id="tab-sessions" role="tabpanel" hidden>
+      <!-- Section 6: SSE Session Details -->
+      <h2 class="section-title">SSE Session Details</h2>
+      <div class="grid" id="sse-grid"></div>
+
+      <!-- Section 7: Launch Source & Object Type -->
+      <h2 class="section-title">Launch Sources & Object Types</h2>
+      <div class="grid" id="launch-grid"></div>
+      <div class="chart-row" style="margin-top: 12px;">
+        <div>
+          <table id="by-launch-source-table">
+            <thead><tr><th>Launch Source</th><th>Events</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div>
+          <table id="by-object-type-table">
+            <thead><tr><th>Object Type</th><th>Events</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Click-to-Call (single-call pill usage, distinct from dial sessions) -->
+    <div class="tab-pane" data-tab="ctc" id="tab-ctc" role="tabpanel" hidden>
+      <h2 class="section-title">Click-to-Call Activity</h2>
+      <div class="alert alert-info" style="margin: 0 0 12px;">
+        Click-to-Call is the single-call pill embedded on CRM record pages and list rows.
+        The daily chart overlays two series:
+        <strong>Calls initiated</strong> (extension-side <code>event_type=click_to_call</code>, fired when the pill is clicked)
+        vs <strong>Calls dispositioned</strong> (server-side <code>event_type=click_to_call_done</code>, fired by the
+        PhoneBurner <code>softphone_call_done</code> webhook after the user dispositions the call).
+        Any gap between the two lines is calls where the softphone popup was abandoned mid-flow —
+        watching this over time surfaces how often users skip disposition.
+      </div>
+
+      <div class="grid-4" id="ctc-summary-grid"></div>
+
+      <div class="chart-row" style="margin-top: 12px;">
+        <div class="chart-box">
+          <h3>Calls per Day</h3>
+          <div class="chart-container"><canvas id="chart-ctc-daily"></canvas></div>
         </div>
         <div class="chart-box">
-          <h3>Calls & Connections per Day</h3>
-          <div class="chart-container"><canvas id="chart-calls"></canvas></div>
+          <h3>By CRM</h3>
+          <div class="chart-container"><canvas id="chart-ctc-by-crm"></canvas></div>
         </div>
       </div>
-    </div>
 
-    <!-- Section 3: CRM Distribution -->
-    <h2 class="section-title">CRM Distribution</h2>
-    <div class="chart-row">
-      <div class="chart-box">
-        <h3>Events by CRM</h3>
-        <div class="chart-container"><canvas id="chart-crm-dist"></canvas></div>
+      <div class="chart-row" style="margin-top: 12px;">
+        <div>
+          <h3 style="font-size:14px; color:#666; margin-bottom:8px;">By Object Type</h3>
+          <table id="ctc-by-object-table">
+            <thead><tr><th>Object Type</th><th>Calls</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div>
+          <h3 style="font-size:14px; color:#666; margin-bottom:8px;">By Page Type</h3>
+          <table id="ctc-by-page-table">
+            <thead><tr><th>Page</th><th>Calls</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
-      <div>
-        <table id="crm-combined-table">
-          <thead><tr><th>CRM</th><th>Sessions</th></tr></thead>
-          <tbody></tbody>
-        </table>
+
+      <h2 class="section-title">Activity by User</h2>
+      <div class="alert alert-info" style="margin: 0 0 12px;">
+        Same privacy model as the Users tab — <code>member_user_id</code> only,
+        no names or emails. Look up specific agents in PhoneBurner admin.
       </div>
+      <table id="ctc-by-user-table">
+        <thead>
+          <tr>
+            <th>Member User ID</th>
+            <th style="text-align:right;">Initiated</th>
+            <th style="text-align:right;">Dispositioned</th>
+            <th style="text-align:right;">Rate</th>
+            <th>CRMs used</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p style="font-size:12px; color:#666; margin-top:8px;">
+        Dispositioned counts key on <code>payload.custom_data.pb_user_id</code> from the
+        <code>softphone_call_done</code> webhook (PhoneBurner echoes our custom_data back
+        on every call webhook). Same <code>member_user_id</code> the extension uses for
+        initiated entries — so this table shows one row per agent with both sides side by
+        side. If dispositioned stays at 0 while initiated is non-zero, either the agent
+        didn't disposition their calls (real signal) or PB stopped populating custom_data
+        (regression — check the softphone_call_done log line's <code>pb_user_id</code>
+        field).
+      </p>
     </div>
 
-    <!-- Section 3.5: Activity by User -->
-    <h2 class="section-title">Activity by User</h2>
-    <div class="alert alert-info" style="margin: 0 0 12px;">
-      <strong>Privacy note:</strong> Only the PhoneBurner <code>member_user_id</code> is shown here.
-      Names and email addresses are intentionally omitted &mdash; if you need to identify a specific
-      user, look the ID up in the PhoneBurner admin. We may surface richer profile data in the
-      future once we&rsquo;ve formalized access controls for it.
-    </div>
-    <div style="display:flex; gap:8px; align-items:center; margin: 8px 0 12px;">
-      <input type="text" id="user-search"
-             placeholder="Filter by member_user_id&hellip;"
-             style="flex:1; max-width:300px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
-      <span class="muted" id="user-search-count"></span>
-    </div>
-    <table id="by-user-table">
-      <thead>
-        <tr>
-          <th>Member User ID</th>
-          <th style="text-align:right;">Launches</th>
-          <th>CRMs Used</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-
-    <!-- Section 4: Dial Session Productivity -->
-    <h2 class="section-title">Dial Session Productivity</h2>
-    <div class="grid-3" id="productivity-grid"></div>
-    <table id="call-outcomes-table">
-      <thead><tr><th>Call Outcome</th><th>Count</th><th>%</th></tr></thead>
-      <tbody></tbody>
-    </table>
-
-    <!-- Section 5: Records per Session -->
-    <h2 class="section-title">Records per Session</h2>
-    <div class="grid" id="records-grid"></div>
-    <div class="chart-box" style="margin-top: 12px;">
-      <h3>Records per Launch Distribution</h3>
-      <div class="chart-container" style="height: 200px;"><canvas id="chart-histogram"></canvas></div>
-    </div>
-
-    <!-- Section 6: SSE Session Details -->
-    <h2 class="section-title">SSE Session Details</h2>
-    <div class="grid" id="sse-grid"></div>
-
-    <!-- Section 7: Launch Source & Object Type -->
-    <h2 class="section-title">Launch Sources & Object Types</h2>
-    <div class="grid" id="launch-grid"></div>
-    <div class="chart-row" style="margin-top: 12px;">
-      <div>
-        <table id="by-launch-source-table">
-          <thead><tr><th>Launch Source</th><th>Events</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div>
-        <table id="by-object-type-table">
-          <thead><tr><th>Object Type</th><th>Events</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Section 8: Detail Breakdown (collapsed) -->
-    <details>
-      <summary class="section-title">Detailed Breakdown</summary>
+    <!-- Tab: Detail (Detailed Breakdown by Hostname & Level) -->
+    <div class="tab-pane" data-tab="detail" id="tab-detail" role="tabpanel" hidden>
+      <!-- Section 8: Detail Breakdown -->
+      <h2 class="section-title">Detailed Breakdown</h2>
       <div class="chart-row">
         <div>
           <h3 style="font-size:14px; color:#666; margin-bottom:8px;">By Hostname</h3>
@@ -495,7 +960,7 @@ api_log('crm_usage_dashboard.view', [
           </table>
         </div>
       </div>
-    </details>
+    </div>
 
     <p class="muted" style="margin-top:24px;">
       Data: <code>crm_usage_stats.php</code> &middot; <code>sse_usage_stats.php</code> &middot; <code>daily_agent_stats.php</code>
@@ -523,7 +988,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let autoRefreshTimer = null;
 
   // Last loaded data (for CSV export)
-  let lastSse = null, lastCrm = null, lastAgent = null;
+  let lastSse = null, lastCrm = null, lastCrmSess = null, lastAgent = null, lastCtc = null, lastCtcDone = null;
 
   // Cached "by user" rows for live filter without re-fetching
   let lastByUserRows = [];
@@ -592,23 +1057,41 @@ document.addEventListener("DOMContentLoaded", () => {
   function loadDashboard() {
     const dr  = getDateRange(currentRange);
     const t   = Date.now();
-    const sseUrl   = sseEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
-    const crmUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
-    const agentUrl = agentEndpoint + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    const sseUrl       = sseEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    // crmUrl (unfiltered) — used for the "Activity by User" table and other
+    // aggregates where every event_type belongs in the count.
+    const crmUrl       = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
+    // crmSessUrl (dial_session only) — used for the CRM Distribution chart +
+    // table so the per-CRM numbers stay proportional to the top KPI's
+    // "Dial Sessions" total. Without this filter, CTC clicks (click_to_call,
+    // click_to_call_done) inflate the CRM slices and diverge from the KPI —
+    // was fine historically when dial_session was the only event_type; broke
+    // silently once CTC events started landing in the same log. See
+    // LESSONS.md entry "Dashboard CRM Distribution drift" for the pattern.
+    const crmSessUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=dial_session&t=" + t;
+    const ctcUrl       = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call&t=" + t;
+    const ctcDoneUrl   = crmEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&event_type=click_to_call_done&t=" + t;
+    const agentUrl     = agentEndpoint + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
 
     Promise.all([
       fetch(sseUrl).then(r => { if (!r.ok) throw new Error("SSE HTTP " + r.status); return r.json(); }),
       fetch(crmUrl).then(r => { if (!r.ok) throw new Error("CRM HTTP " + r.status); return r.json(); }),
+      fetch(crmSessUrl).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(ctcUrl).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(ctcDoneUrl).then(r => r.ok ? r.json() : null).catch(() => null),
       fetch(agentUrl).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([sseResp, crmResp, agentResp]) => {
-      const sse   = normalize(sseResp);
-      const crm   = normalize(crmResp);
-      const agent = agentResp ? normalize(agentResp) : null;
+    ]).then(([sseResp, crmResp, crmSessResp, ctcResp, ctcDoneResp, agentResp]) => {
+      const sse     = normalize(sseResp);
+      const crm     = normalize(crmResp);
+      const crmSess = crmSessResp ? normalize(crmSessResp) : null;
+      const ctc     = ctcResp     ? normalize(ctcResp)     : null;
+      const ctcDone = ctcDoneResp ? normalize(ctcDoneResp) : null;
+      const agent   = agentResp   ? normalize(agentResp)   : null;
 
       if (!sseResp?.ok || !sse) { showError("SSE stats API error."); return; }
       if (!crmResp?.ok || !crm) { showError("CRM stats API error."); return; }
 
-      lastSse = sse; lastCrm = crm; lastAgent = agent;
+      lastSse = sse; lastCrm = crm; lastCrmSess = crmSess; lastAgent = agent; lastCtc = ctc; lastCtcDone = ctcDone;
 
       msgEl.innerHTML = "";
       contentEl.style.display = "block";
@@ -697,7 +1180,12 @@ document.addEventListener("DOMContentLoaded", () => {
       // ====================================================================
       // Section 3: CRM Distribution
       // ====================================================================
-      const byCrmId = crm.by_crm_id || {};
+      // Feed byCrmId from the dial-session-filtered response so the per-CRM
+      // slices stay in sync with the top KPI's "Dial Sessions" total. Falling
+      // back to the unfiltered crm response only if the filtered fetch failed
+      // — that preserves the pre-fix behavior on network hiccups rather than
+      // showing an empty chart.
+      const byCrmId = (crmSess && crmSess.by_crm_id) || crm.by_crm_id || {};
       if (hasChartJs && Object.keys(byCrmId).length > 0) {
         const crmLabels = Object.keys(byCrmId).sort((a, b) => byCrmId[b] - byCrmId[a]);
         const crmValues = crmLabels.map(k => byCrmId[k]);
@@ -707,7 +1195,7 @@ document.addEventListener("DOMContentLoaded", () => {
         destroyChart("chart-crm-dist");
       }
 
-      // CRM table (dial sessions per CRM from usage tracking)
+      // CRM table (dial sessions per CRM from usage tracking, event_type=dial_session)
       const crmTableBody = document.querySelector("#crm-combined-table tbody");
       crmTableBody.innerHTML = "";
       if (Object.keys(byCrmId).length > 0) {
@@ -732,6 +1220,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }))
         .sort((a, b) => b.total - a.total);
       renderByUser(document.getElementById("user-search").value || "");
+
+      // ====================================================================
+      // Click-to-Call tab (populated from a filtered fetch of crm_usage_stats)
+      // ====================================================================
+      renderCtc(ctc, ctcDone);
 
       // ====================================================================
       // Section 4: Productivity
@@ -938,6 +1431,142 @@ document.addEventListener("DOMContentLoaded", () => {
       : lastByUserRows.length + " user" + (lastByUserRows.length === 1 ? "" : "s");
   }
 
+  // Render the Click-to-Call tab from a filtered crm_usage_stats response
+  // (event_type=click_to_call). ctc may be null if the API errored — the
+  // tab renders zeroed-out stats in that case so it always looks intentional.
+  function renderCtc(ctc, ctcDone) {
+    const summaryGrid = document.getElementById("ctc-summary-grid");
+    summaryGrid.innerHTML = "";
+
+    const total = ctc?.total_events || 0;
+    const uniqueUsers = ctc?.unique_users || 0;
+    const perDay = ctc?.per_day || [];
+    const daysActive = perDay.filter(d => (d.total_events || 0) > 0).length;
+
+    // Disposition side (softphone_call_done webhook events).
+    const totalDone = ctcDone?.total_events || 0;
+    const perDayDone = ctcDone?.per_day || [];
+
+    // Disposition rate: what % of clicked calls ended with a disposition
+    // fired back through the softphone_call_done webhook. Anything under
+    // 100% is calls where the user clicked the pill but never dispositioned
+    // (closed the popup, walked away, etc.). Over 100% happens if a call
+    // dispositions after the click-to-call log line has already rotated to
+    // the next day — real but rare.
+    const dispositionRate = (total > 0)
+      ? Math.min(100, Math.round((totalDone / total) * 100))
+      : 0;
+    const rateLabel = (total > 0) ? (dispositionRate + "%") : "N/A";
+
+    summaryGrid.appendChild(statCard("Calls initiated", String(total)));
+    summaryGrid.appendChild(statCard("Calls dispositioned", String(totalDone)));
+    summaryGrid.appendChild(statCard("Disposition rate", rateLabel));
+    summaryGrid.appendChild(statCard("Unique users", String(uniqueUsers)));
+
+    // Time-series chart — overlay initiated vs dispositioned so any gap is
+    // immediately visible. If the two lines track together, drift is low.
+    // If "Dispositioned" runs materially below "Initiated" day over day,
+    // that's calls where the softphone popup was abandoned mid-flow.
+    if (hasChartJs) {
+      // Build a merged date axis that includes both series' dates.
+      const dateSet = new Set();
+      perDay.forEach(d => dateSet.add(d.date));
+      perDayDone.forEach(d => dateSet.add(d.date));
+      const allDates = Array.from(dateSet).sort();
+
+      const initByDate = new Map(perDay.map(d => [d.date, d.total_events || 0]));
+      const doneByDate = new Map(perDayDone.map(d => [d.date, d.total_events || 0]));
+
+      const dailyLabels = allDates.map(shortDate);
+      const dailyInitiated = allDates.map(d => initByDate.get(d) || 0);
+      const dailyDispositioned = allDates.map(d => doneByDate.get(d) || 0);
+
+      renderLineChart("chart-ctc-daily", dailyLabels, [
+        { label: "Calls initiated (pill clicks)", data: dailyInitiated, color: "#ff7a59" },
+        { label: "Calls dispositioned (softphone webhook)", data: dailyDispositioned, color: "#3e6ff0" },
+      ]);
+
+      // Per-CRM doughnut (only meaningful once multiple CRMs are wired up,
+      // but works fine with one slice too).
+      const byCrm = ctc?.by_crm_id || {};
+      const crmLabels = Object.keys(byCrm);
+      const crmValues = crmLabels.map(k => byCrm[k]);
+      const crmColors = crmLabels.map(k => crmColor(k));
+      if (crmLabels.length === 0) {
+        // Destroy any prior chart so the box shows empty, not stale data
+        destroyChart("chart-ctc-by-crm");
+      } else {
+        renderDoughnutChart("chart-ctc-by-crm", crmLabels, crmValues, crmColors);
+      }
+    }
+
+    // Object-type table (contacts / companies / deals)
+    fillTableFriendly("ctc-by-object-table", ctc?.by_object_type || {}, friendlyObjectType);
+
+    // Page-type table (record vs list). launch_source is the discriminator:
+    // "record" = pill on a single-record page, "list" = pill in a list-view row.
+    const byPage = {};
+    const bySource = ctc?.by_launch_source || {};
+    if (bySource.record) byPage["Record page"] = bySource.record;
+    if (bySource.list) byPage["List view"] = bySource.list;
+    fillTableFriendly("ctc-by-page-table", byPage, k => k);
+
+    // Per-user activity table. Merges initiated (extension-side clicks) with
+    // dispositioned (softphone webhook events) keyed on member_user_id.
+    // The dispositioned side only populates if PhoneBurner includes
+    // payload.agent.user_id in the softphone_call_done webhook — see the
+    // caveat below the table.
+    const ctcUserTbody = document.querySelector("#ctc-by-user-table tbody");
+    ctcUserTbody.innerHTML = "";
+
+    const ctcByUser     = ctc?.by_user     || {};
+    const ctcDoneByUser = ctcDone?.by_user || {};
+
+    // Union of user IDs across both sides.
+    const userIds = new Set([
+      ...Object.keys(ctcByUser),
+      ...Object.keys(ctcDoneByUser),
+    ]);
+
+    const ctcRows = Array.from(userIds).map(uid => {
+      const init = ctcByUser[uid]     || { total: 0, by_crm: {} };
+      const done = ctcDoneByUser[uid] || { total: 0 };
+      const initiated     = init.total || 0;
+      const dispositioned = done.total || 0;
+      const rate = (initiated > 0)
+        ? Math.min(100, Math.round((dispositioned / initiated) * 100)) + "%"
+        : "N/A";
+      return {
+        uid,
+        initiated,
+        dispositioned,
+        rate,
+        byCrm: init.by_crm || {},
+      };
+    }).sort((a, b) => b.initiated - a.initiated);
+
+    if (ctcRows.length === 0) {
+      ctcUserTbody.innerHTML =
+        '<tr><td colspan="5" class="empty-msg">No click-to-call activity yet in this date range.</td></tr>';
+      return;
+    }
+
+    ctcRows.forEach(row => {
+      const crmList = Object.entries(row.byCrm)
+        .sort((a, b) => b[1] - a[1])
+        .map(([crm, n]) => esc(crm) + " (" + n + ")")
+        .join(", ");
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td><code>' + esc(row.uid) + '</code></td>' +
+        '<td class="num">' + row.initiated + '</td>' +
+        '<td class="num">' + row.dispositioned + '</td>' +
+        '<td class="num">' + row.rate + '</td>' +
+        '<td>' + crmList + '</td>';
+      ctcUserTbody.appendChild(tr);
+    });
+  }
+
   function fillTableFriendly(tableId, obj, labelFn) {
     const tbody = document.querySelector("#" + tableId + " tbody");
     tbody.innerHTML = "";
@@ -1129,7 +1758,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     csv += "\nCRM,Sessions\n";
-    Object.entries(lastCrm.by_crm_id || {}).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => {
+    // Same filtering as the on-screen CRM Distribution table: dial-session-only
+    // so the CSV column labeled "Sessions" actually contains sessions, not
+    // events. Falls back to the unfiltered response if the filtered fetch
+    // failed on load.
+    const csvByCrm = (lastCrmSess && lastCrmSess.by_crm_id) || lastCrm.by_crm_id || {};
+    Object.entries(csvByCrm).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => {
       csv += k + "," + v + "\n";
     });
 
@@ -1188,6 +1822,60 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("user-search").addEventListener("input", function() {
     renderByUser(this.value);
   });
+
+  // ========================================================================
+  // Tab navigation
+  // ------------------------------------------------------------------------
+  // - URL hash (#users, #productivity, etc.) drives the active tab so links
+  //   are shareable and refresh-friendly.
+  // - Chart.js charts inside an initially-hidden tab compute width=0 on
+  //   first render; we fire a resize event after activation so they pick up
+  //   the correct dimensions.
+  // ========================================================================
+  const VALID_TABS = ["trends", "users", "productivity", "sessions", "ctc", "detail"];
+
+  function activateTab(name, opts) {
+    if (!VALID_TABS.includes(name)) name = "trends";
+    opts = opts || {};
+
+    document.querySelectorAll(".tab-btn").forEach(btn => {
+      const isActive = btn.dataset.tab === name;
+      btn.classList.toggle("active", isActive);
+      btn.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+    document.querySelectorAll(".tab-pane").forEach(pane => {
+      const isActive = pane.dataset.tab === name;
+      pane.classList.toggle("active", isActive);
+      if (isActive) {
+        pane.removeAttribute("hidden");
+      } else {
+        pane.setAttribute("hidden", "");
+      }
+    });
+
+    // Charts laid out while hidden need a nudge to recompute their canvas size.
+    window.dispatchEvent(new Event("resize"));
+
+    if (opts.updateHash !== false) {
+      const newHash = "#" + name;
+      if (window.location.hash !== newHash) {
+        history.replaceState(null, "", newHash);
+      }
+    }
+  }
+
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+  });
+
+  window.addEventListener("hashchange", () => {
+    const fromHash = (window.location.hash || "").replace(/^#/, "");
+    activateTab(fromHash, { updateHash: false });
+  });
+
+  // Honor an initial hash like /crm_usage_dashboard.php#users
+  const initialTab = (window.location.hash || "").replace(/^#/, "") || "trends";
+  activateTab(initialTab, { updateHash: false });
 
   // Initial load
   loadDashboard();

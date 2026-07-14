@@ -296,12 +296,19 @@
         padding: 16px;
         max-width: 300px;
         width: 90%;
+        /* Cap the dialog height so a long "What's New" body can't push the
+           OK button off the bottom of the popup. Flex column keeps the
+           buttons pinned; the message is the scrollable middle. */
+        max-height: calc(100vh - 32px);
+        display: flex;
+        flex-direction: column;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
       }
       .modal-title {
         font-weight: 900;
         font-size: 14px;
         margin-bottom: 10px;
+        flex-shrink: 0;
       }
       .modal-message {
         font-size: 12px;
@@ -309,6 +316,11 @@
         margin-bottom: 16px;
         line-height: 1.5;
         white-space: pre-wrap;
+        /* Scroll long content within the modal instead of growing the
+           dialog to fit — keeps the buttons always visible. */
+        overflow-y: auto;
+        flex: 1 1 auto;
+        min-height: 0;
       }
       .modal-message a {
         color: var(--primary);
@@ -320,6 +332,7 @@
       .modal-buttons {
         display: flex;
         gap: 8px;
+        flex-shrink: 0;
       }
       .modal-buttons button {
         margin: 0;
@@ -348,6 +361,7 @@
 
       <div class="subtle">
         <strong>PhoneBurner:</strong> <span id="pb-status">Checking...</span>
+        <span id="env-badge" class="pill hidden" title="You are using a non-default backend environment."></span>
         <span id="ext-version" class="version-tag"></span>
       </div>
     </div>
@@ -379,6 +393,45 @@
           </div>
           <button id="get-pb-btn" class="primary mt-10">
             Get PhoneBurner
+          </button>
+        </div>
+
+        <!-- Inline Connect prompts — shown on the Dial tab when the user is
+             on a matching L3 CRM page AND that CRM isn't connected yet, so
+             they can act without having to go hunting in Settings. Each card
+             is gated by (isX && !X_STATE.connected) in popup.js. -->
+        <div id="hs-connect-inline-card" class="card hidden">
+          <div class="card-title">Connect HubSpot to get started</div>
+          <div class="help-text">
+            You're on a HubSpot page but haven't connected HubSpot yet.
+            Connect once to launch dial sessions from HubSpot records, lists,
+            and task queues.
+          </div>
+          <button id="hs-connect-inline-btn" class="primary mt-10">
+            Connect HubSpot
+          </button>
+        </div>
+
+        <div id="close-connect-inline-card" class="card hidden">
+          <div class="card-title">Connect Close to get started</div>
+          <div class="help-text">
+            You're on a Close page but haven't connected Close yet. Connect
+            once to launch dial sessions from Close leads and contacts.
+          </div>
+          <button id="close-connect-inline-btn" class="primary mt-10">
+            Connect Close
+          </button>
+        </div>
+
+        <div id="apollo-connect-inline-card" class="card hidden">
+          <div class="card-title">Connect Apollo to get started</div>
+          <div class="help-text">
+            You're on an Apollo page but haven't connected Apollo yet.
+            Connect once to launch dial sessions from Apollo contacts and
+            sequences.
+          </div>
+          <button id="apollo-connect-inline-btn" class="primary mt-10">
+            Connect Apollo
           </button>
         </div>
 
@@ -500,6 +553,44 @@
             Launch Dial Session from List
           </button>
         </div>
+
+        <!-- HubSpot Task Queue (only on HubSpot tasks pages) -->
+        <div id="hubspot-tasks-card" class="card hidden">
+          <div class="card-title">
+            HubSpot Task Queue <span class="pill">Level 3</span>
+          </div>
+          <div class="help-text mt-4">
+            Launch a dial session for all contacts associated with the tasks
+            visible on this page. As each call lands, the matching task is
+            marked complete in HubSpot. Filter or sort your tasks in HubSpot
+            first, then come back here.
+          </div>
+
+          <!-- Default state: launch button -->
+          <div id="hs-tasks-launch-section" class="mt-8 hidden">
+            <button id="hs-tasks-launch" class="primary">
+              Dial Tasks on This Page
+            </button>
+            <div class="help-text mt-6">
+              Tip: check the boxes on specific task rows in HubSpot to dial
+              only those. Otherwise all tasks visible on the page are dialed.
+            </div>
+          </div>
+
+          <!-- Reconnect-required state (customer's HubSpot tokens don't have contacts.write) -->
+          <div id="hs-tasks-reconnect-section" class="mt-8 hidden">
+            <div class="help-text" style="color: rgba(255, 200, 100, 0.95);">
+              Your HubSpot connection needs to be refreshed to enable Task
+              Queue dialing. Click below to reconnect — takes ~10 seconds and
+              your other HubSpot features keep working.
+            </div>
+            <button id="hs-tasks-reconnect" class="primary mt-8">
+              Reconnect HubSpot
+            </button>
+          </div>
+
+          <div id="hs-tasks-status" class="status mt-4"></div>
+        </div>
       </div>
     </div>
 
@@ -581,7 +672,11 @@
           <button id="apollo-disconnect" class="danger">Disconnect Apollo</button>
         </div>
 
-        <!-- Apollo Connect (when not connected) -->
+        <!-- Apollo Connect — only surfaces when the user is on an Apollo page
+             AND hasn't yet connected. Off-Apollo pages don't show this so
+             users landing on Settings for other CRMs don't see a stray
+             "Connect Apollo" card without context. Matches the HubSpot/Close
+             pattern (connect prompt lives in the CRM's own page context). -->
         <div id="apollo-apikey-card" class="card hidden">
           <div class="card-title">Apollo Connection</div>
           <div class="help-text">
@@ -624,6 +719,55 @@
             Default: On. The widget will briefly expand, then collapse to a
             small view.
           </div>
+        </div>
+
+        <div id="ctc-settings-card" class="card hidden">
+          <div class="card-title">Click-to-Call</div>
+          <div class="help-text mt-4">
+            Show a small PhoneBurner flame icon next to phone numbers on CRM
+            record pages and lists, so you can launch a single call from any
+            number without leaving the page.
+          </div>
+
+          <label class="label-inline" for="ctc-pills-enabled">
+            <input type="checkbox" id="ctc-pills-enabled" />
+            Show click-to-call buttons on CRM phone fields
+          </label>
+
+          <div class="help-text mt-6">
+            Default: On. Turn off if you're already using another dialer's
+            click-to-call extension and don't want two buttons showing on
+            every record.
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Advanced</div>
+          <label class="label-inline" for="show-dev-options">
+            <input type="checkbox" id="show-dev-options" />
+            Show developer options
+          </label>
+        </div>
+
+        <div id="dev-options-card" class="card hidden">
+          <div class="card-title">Developer Options</div>
+          <div class="help-text">
+            Switch between the dev and production backend environments. For
+            internal testing only — most users should leave this on the default.
+          </div>
+
+          <label class="label-inline" for="env-dev">
+            <input type="radio" name="pb-env" id="env-dev" value="dev" />
+            <span>Dev <span class="muted" style="color: rgba(255,255,255,0.55);">— extension-dev.phoneburner.biz</span></span>
+            <span id="env-dev-default" class="muted hidden" style="font-size:11px;color:rgba(255,255,255,0.55);margin-left:4px;">(default)</span>
+          </label>
+          <label class="label-inline" for="env-prod">
+            <input type="radio" name="pb-env" id="env-prod" value="prod" />
+            <span>Prod <span class="muted" style="color: rgba(255,255,255,0.55);">— extension.phoneburner.biz</span></span>
+            <span id="env-prod-default" class="muted hidden" style="font-size:11px;color:rgba(255,255,255,0.55);margin-left:4px;">(default)</span>
+          </label>
+
+          <div id="env-status" class="status mt-4"></div>
         </div>
       </div>
     </div>

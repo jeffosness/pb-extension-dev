@@ -44,4 +44,10 @@ const CRM_REGISTRY = [
     level: 3,
     hostMatch: "apollo.io",
   },
+  {
+    id: "agencyzoom",
+    displayName: "AgencyZoom",
+    level: 2,
+    hostMatch: "app.agencyzoom.com",
+  },
 ];

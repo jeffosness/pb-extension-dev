@@ -21,14 +21,23 @@ The PhoneBurner Dial Session Companion bridges your CRM workflow with PhoneBurne
 🚀 Key Features
 
 🔹 Launch Dial Sessions from Your CRM
-Two ways to start dialing:
+Three ways to start dialing:
 
 • Select & Launch: Choose records from any CRM list view and launch instantly
 • List-Based Launch (HubSpot): Pick a saved HubSpot list from a dropdown and dial up to 500 contacts or companies
+• Task-Based Launch: Dial straight from your HubSpot Task Queue or your AgencyZoom task list — turn your task queue into a power-dialing session
 
 ✅ Automatically sends contacts to PhoneBurner
 ✅ Eliminates manual CSV exports and imports
 ✅ Works with contacts, companies, and deals
+
+🔹 Click-to-Call — Single Calls Without a Full Dial Session (HubSpot)
+A small PhoneBurner flame icon appears next to phone numbers on HubSpot contact records, company records, list views, and your tasks list. Click it to place a single call in seconds — perfect for one-off follow-ups when you don't need a whole dial session.
+
+• Every phone field is dialable — Phone Number, Mobile, Home Phone, and any custom phone properties
+• Task rows auto-complete — click the flame on a task, disposition the call, and HubSpot marks the task done automatically
+• Icon-only design stays out of your way; hover for context
+• Toggle it off in Settings if you already use another dialer's click-to-call
 
 🔹 Real-Time "Follow" Widget
 Stay in sync with your dialer:
@@ -43,6 +52,7 @@ Full API integration with HubSpot:
 
 • Launch from selected records (contacts, companies, or deals)
 • Launch from saved HubSpot lists (up to 500 records per session)
+• Launch from the HubSpot Task Queue — dial through the contacts associated with your visible tasks, and have those tasks auto-complete in HubSpot as you finish each call
 • Automatically discovers all phone properties (mobile, work, custom fields)
 • Set a preferred primary phone field in Settings
 • OAuth authentication — secure, no scraping required
@@ -70,9 +80,10 @@ Full API integration with Apollo:
 • HubSpot — Advanced Level 3 integration (API-based)
 • Close — Advanced Level 3 integration (API-based)
 • Apollo.io — Advanced Level 3 integration (API-based)
+• AgencyZoom — Optimized Level 2 support (task-list dialing)
 • Pipedrive — Optimized Level 2 support
 • Salesforce — Optimized Level 2 support
-• Zoho, monday.com, and others — Generic Level 1 support
+• Zoho CRM, monday.com, and others — Generic Level 1 support
 
 ⚙️ How It Works
 
@@ -84,10 +95,10 @@ Full API integration with Apollo:
 
 🔐 Security & Privacy
 
-✅ Your PhoneBurner Personal Access Token is stored locally in your browser
+✅ Your PhoneBurner Personal Access Token is stored server-side with strict owner-only file permissions — your browser keeps only an anonymous lookup key, never the token itself
 ✅ HubSpot, Close, and Apollo authentication uses industry-standard OAuth
 ✅ No data is sold or shared with third parties
-✅ The extension only runs on pages you visit
+✅ The extension only reads CRM data when you initiate an action (clicking Launch)
 ✅ All communication is encrypted over HTTPS
 
 🧾 Requirements
@@ -113,9 +124,13 @@ This extension is ideal for:
 • PhoneBurner dial sessions support up to 500 contacts
 • Features may vary slightly by CRM platform
 
-🆕 What's New in v0.6.0
+🆕 What's New in v0.8.2
 
-✨ Apollo.io Integration: Connect your Apollo account via OAuth and launch dial sessions from your People page or sequence call tasks. Pick a sequence, filter by due tasks, and power-dial contacts directly through PhoneBurner. The Follow widget auto-navigates to Apollo contact profiles during calls.
+📋 Click-to-Call on your HubSpot tasks — the flame icon now appears next to phone numbers on your tasks list (both the classic Task Queue and the newer All Tasks table). Click to call a task's contact in one step.
+
+✅ Tasks auto-complete after task-row calls — click the flame on a task, disposition the call, and HubSpot marks the task complete automatically. Same behavior the Task-Based Dial Session flow already had, now on the single-click side too.
+
+🐛 Fixed a HubSpot console-error that some users saw on page load.
 
 ---
 
@@ -125,13 +140,13 @@ This extension is ideal for:
 >
 > Re-review whenever a store changes its form or whenever the extension adds, removes, or changes a permission.
 >
-> Last verified against: Microsoft Edge Add-ons Privacy form (2026-05).
+> Last verified against: Microsoft Edge Add-ons Privacy form (2026-07).
 
 ---
 
 ## Single purpose description
 
-> PhoneBurner Dial Session Companion enables PhoneBurner subscribers to start a PhoneBurner power-dialer session directly from supported CRM web pages (HubSpot, Close, Apollo, Salesforce, Pipedrive). When the user explicitly clicks "Launch Dial Session," the extension reads the user's selected contacts from the active CRM page and sends them to PhoneBurner's backend. While a dial session is active, the extension displays a real-time "Follow" overlay on the CRM page showing the current call, live session statistics, and auto-navigating the CRM tab to the contact being dialed. Every action is user-initiated — the extension does not run silently or collect data passively. This is the extension's only function.
+> PhoneBurner Dial Session Companion enables PhoneBurner subscribers to start a PhoneBurner power-dialer session directly from supported CRM web pages (HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and generic-level support for Zoho CRM, monday.com, and other Chromium-compatible CRM sites). When the user explicitly clicks "Launch Dial Session," the extension reads the user's selected contacts from the active CRM page and sends them to PhoneBurner's backend. While a dial session is active, the extension displays a real-time "Follow" overlay on the CRM page showing the current call, live session statistics, and auto-navigating the CRM tab to the contact being dialed. Every action is user-initiated — the extension does not run silently or collect data passively. This is the extension's only function.
 
 ---
 
@@ -145,7 +160,7 @@ These match the `permissions` and `host_permissions` arrays in `manifest.json`.
 
 ### `activeTab`
 
-> The `activeTab` permission lets the extension read the URL of the currently focused tab so it can detect whether the user is on a supported CRM (HubSpot, Close, Apollo, Salesforce, Pipedrive) when they open the popup. This determines which "Launch Dial Session" controls appear. Combined with `scripting`, it allows the extension to inject content scripts on the active tab only when the user explicitly invokes the extension — never silently in the background.
+> The `activeTab` permission lets the extension read the URL of the currently focused tab so it can detect whether the user is on a supported CRM (HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and other supported CRM sites) when they open the popup. This determines which "Launch Dial Session" controls appear. Combined with `scripting`, it allows the extension to inject content scripts on the active tab only when the user explicitly invokes the extension — never silently in the background.
 
 ### `scripting`
 
@@ -199,9 +214,9 @@ What user data does the extension collect, now or in the future? Check the boxes
 
 ## Privacy Policy URL
 
-**Production target:** `https://extension.phoneburner.biz/privacy.html`
+**Production URL (current submission):** `https://extension.phoneburner.biz/privacy.html`
 
-**Current submission (as of 2026-05):** `https://extension-dev.phoneburner.biz/privacy.html` — because the prod host isn't yet serving (auto-deploy lands on the `-dev` subdomain). Switch to the production URL as soon as prod hosting is wired up.
+**Dev URL (staging only):** `https://extension-dev.phoneburner.biz/privacy.html` — used for internal testing of privacy-policy changes before they land on prod.
 
 ---
 
