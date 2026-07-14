@@ -788,7 +788,7 @@ When creating a PR that includes **user-facing changes** (new features, UI chang
 - [ ] Only add changelog entries for features users interact with — skip for bug fixes, refactors, or internal changes
 - [ ] `PB_WELCOME` in `changelog.js` only needs updating if the onboarding flow or value proposition changes
 - [ ] Review `manifest.json` description (max 132 chars) — update if supported CRMs or headline features changed
-- [ ] Review `chrome-extension/STORE_LISTING.md` — update if the new feature warrants a listing change (new CRM, major capability, security model change). Not every release needs a listing update, but always consider it.
+- [ ] Review `chrome-extension/STORE_LISTING.md` — update if the new feature warrants a listing change (new CRM, major capability, security model change). The file covers both the Chrome Web Store and Microsoft Edge Add-ons listings AND the compliance/review form responses (single purpose description, permission justifications, data usage disclosure, privacy policy URL). If you add a new permission or host, or change what data the extension collects, update the relevant section here BEFORE submitting to either store. Not every release needs a listing update, but always consider it.
 
 **How it works:** On popup open, `checkChangelog()` compares the current manifest version against `pb_last_seen_version` in `chrome.storage.local`. First install shows the welcome modal. Version upgrades show the latest changelog entry. Same version = no modal.
 
