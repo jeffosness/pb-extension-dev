@@ -451,229 +451,26 @@ api_log('crm_usage_dashboard.view', [
     <!-- Section 1: Executive Summary -->
     <div class="grid-5" id="exec-grid"></div>
 
-    <!-- Section 1b: Token Security (server-rendered from token-audit.log) -->
+    <!-- Section 1b: Token Security (server-rendered for first paint;
+                                    JS auto-refresh updates in-place via
+                                    /api/core/token_summary_stats.php) -->
     <?php
     // Read the audit log and compute summary + anomalies for the last 24h.
-    // This is server-rendered (no JS) because the audit log is small and
-    // we want it visible immediately on page load.
+    // Shared computation with the JSON endpoint used by JS auto-refresh —
+    // see api/core/token_summary_lib.php and api/core/token_summary_stats.php.
     require_once __DIR__ . '/../utils.php';
+    require_once __DIR__ . '/../api/core/token_summary_lib.php';
 
-    $token_summary = [
-        'reads'    => 0,
-        'writes'   => 0,
-        'deletes'  => 0,
-        'errors'   => 0,
-        'by_prov'  => ['pb' => 0, 'hubspot' => 0, 'close' => 0, 'apollo' => 0],
-        'anomalies'=> [],
-        'log_missing' => false,
-    ];
-
-    // Per-provider whitelist of script names that are EXPECTED to read tokens.
-    // Anything outside this list gets flagged as an anomaly so we can spot a
-    // suspicious endpoint reading tokens we didn't intend to give it access.
-    $token_read_whitelist = [
-        'pb' => [
-            'state', 'oauth_pb_save', 'oauth_pb_clear', 'session_stop',
-            'dialsession_from_scan', 'pb_dialsession_selection',
-            'pb_dialsession_from_list', 'pb_dialsession_from_tasks',
-            'hs_call_logger', 'close_call_logger', 'apollo_call_logger',
-            'call_done', 'contact_displayed', 'refresh_sse_code',
-            'user_settings_get', 'user_settings_save', 'track_crm_usage',
-            'apollo_sequences', 'apollo_sequence_tasks',
-            'hs_lists', 'hs_phone_properties',
-            // v0.8.0 click-to-call flow. Both endpoints call load_pb_token():
-            //   softphone_auth_code — mints a single-use code for the extension
-            //   softphone           — exchanges the code and embeds the PAT in
-            //                         the softphone iframe src
-            'softphone_auth_code', 'softphone',
-        ],
-        'hubspot' => [
-            'state', 'oauth_hs_finish', 'oauth_disconnect',
-            'pb_dialsession_selection', 'pb_dialsession_from_list',
-            'pb_dialsession_from_tasks', 'hs_lists', 'hs_phone_properties',
-            'hs_call_logger', 'call_done', 'contact_displayed',
-            // v0.8.2 CTC-completes-task flow (PR #172) added HubSpot token
-            // reads on both softphone endpoints:
-            //   softphone_auth_code — reads HS tokens to check "is HS
-            //                         connected?" before writing an intent
-            //   softphone_call_done — reads HS tokens to complete the task
-            //                         via hubspot_complete_task_for_client()
-            // Failing to whitelist these here fires a false-positive anomaly
-            // on the dashboard for every CTC-from-task-row click, exactly
-            // the class of drift LESSONS.md 2026-07-03 warns about.
-            'softphone_auth_code', 'softphone_call_done',
-        ],
-        'close' => [
-            'state', 'oauth_close_finish', 'oauth_disconnect',
-            'pb_dialsession_selection', 'close_call_logger',
-            'call_done', 'contact_displayed',
-        ],
-        'apollo' => [
-            'state', 'oauth_apollo_finish', 'oauth_disconnect', 'save_api_key',
-            'pb_dialsession_selection', 'pb_dialsession_from_tasks',
-            'apollo_sequences', 'apollo_sequence_tasks',
-            'apollo_call_logger', 'call_done', 'contact_displayed',
-        ],
-    ];
-
-    // Anomaly-detection tunables. Adjust these in one place if the dashboard
-    // starts crying wolf — or going quiet — about real-world traffic patterns.
-    //
-    // Why the carve-outs:
-    //   - `state.php` is the popup connection-probe. Every popup open reads
-    //     all 4 providers, and a non-connected user generates "misses" by
-    //     design. Including state in burst/miss thresholds buries real signal
-    //     under normal popup polling.
-    //   - The original miss rule fired on (1 IP × many misses on 1 provider),
-    //     but actual enumeration looks like (1 IP × many DISTINCT client_ids).
-    //     One client repeatedly missing one provider = user without that CRM
-    //     connected, opening popup a lot.
-    //   - The enumeration rule ALSO ignores IPs that had ANY successful token
-    //     reads in the window. A corporate NAT with N employees produces the
-    //     same distinct-cid signature as an enumeration attacker, but a NAT
-    //     will have some employees who successfully authenticate — an actual
-    //     spray-attacker won't. Adding this compensating check killed the
-    //     "6 employees behind an AWS VPN" false positive we hit 2026-07-06.
-    //     The trade-off: an attacker who successfully steals one token during
-    //     a spray campaign is no longer flagged by THIS rule, but they'd
-    //     already have escalated to a bigger concern (successful token theft),
-    //     which is a different alert to build.
-    $BURST_THRESHOLD             = 50;          // reads/5min from same client
-    $BURST_EXCLUDE_ENDPOINTS     = ['state'];   // endpoints exempt from burst
-    $ENUM_DISTINCT_CIDS_PER_IP   = 5;           // distinct cids/IP triggers enum
-    $DELETE_SPIKE_THRESHOLD      = 10;          // deletes/hour
-    $DELETE_SPIKE_BUCKET_SECONDS = 3600;
-
-    $audit_path = audit_token_log_path();
-    if (!is_file($audit_path)) {
-        $token_summary['log_missing'] = true;
-    } else {
-        $cutoff = time() - 86400;
-        // Burst detection: tally reads per (client_id_hash, 5-min bucket)
-        $burst_buckets = [];
-        // Miss tracking: per IP, count + the set of distinct client_ids that missed
-        $miss_by_ip = [];
-        // Delete spike tracking: per 1-hour bucket
-        $delete_buckets = [];
-
-        $fh = @fopen($audit_path, 'r');
-        if ($fh) {
-            while (($line = fgets($fh)) !== false) {
-                $r = json_decode(trim($line), true);
-                if (!is_array($r)) continue;
-                $t = strtotime($r['t'] ?? '') ?: 0;
-                if ($t < $cutoff) continue;
-
-                $evt = $r['evt'] ?? '';
-                $prov = $r['prov'] ?? '';
-                $ep = $r['ep'] ?? '';
-                $res = $r['res'] ?? '';
-                $cid = $r['cid'] ?? '';
-                $ip = $r['ip'] ?? '';
-
-                if ($evt === 'read')   $token_summary['reads']++;
-                if ($evt === 'write')  $token_summary['writes']++;
-                if ($evt === 'delete') $token_summary['deletes']++;
-                if ($res === 'error')  $token_summary['errors']++;
-
-                if (isset($token_summary['by_prov'][$prov])) {
-                    $token_summary['by_prov'][$prov]++;
-                }
-
-                // Anomaly check 1: endpoint not in whitelist for this provider
-                if ($evt === 'read' && isset($token_read_whitelist[$prov])
-                    && !in_array($ep, $token_read_whitelist[$prov], true)) {
-                    $token_summary['anomalies'][] = $r + ['why' => 'Endpoint "' . htmlspecialchars($ep) . '" is not in the whitelist for ' . htmlspecialchars($prov) . ' token reads'];
-                }
-
-                // Anomaly check 2: burst — many reads from same client in 5 min.
-                // Skip endpoints that are expected to be polled (e.g. state.php).
-                if ($evt === 'read' && $cid !== ''
-                    && !in_array($ep, $BURST_EXCLUDE_ENDPOINTS, true)) {
-                    $bucket = $cid . '|' . floor($t / 300);
-                    if (!isset($burst_buckets[$bucket])) $burst_buckets[$bucket] = ['count' => 0, 'sample' => $r];
-                    $burst_buckets[$bucket]['count']++;
-                }
-
-                // Anomaly check 3: enumeration. True enumeration = one IP
-                // probing MANY DISTINCT client_ids AND finding zero. Track
-                // both raw miss counts + distinct cids per IP, AND whether
-                // the IP produced ANY successful reads (a real spray hits
-                // nothing; a corporate NAT hits plenty for its connected
-                // employees).
-                if ($evt === 'read' && $ip !== '') {
-                    if (!isset($miss_by_ip[$ip])) {
-                        $miss_by_ip[$ip] = [
-                            'count' => 0,
-                            'sample' => $r,
-                            'cids' => [],
-                            'has_success' => false,
-                        ];
-                    }
-                    if ($res === 'missing') {
-                        $miss_by_ip[$ip]['count']++;
-                        if ($cid !== '') $miss_by_ip[$ip]['cids'][$cid] = true;
-                    } elseif ($res === 'ok') {
-                        $miss_by_ip[$ip]['has_success'] = true;
-                    }
-                }
-
-                // Anomaly check 4: delete spike — many tokens deleted in a
-                // short window. Could indicate mass-disconnect (legit, e.g. a
-                // bulk-cleanup script) or compromise-and-cleanup (concerning).
-                if ($evt === 'delete') {
-                    $bucket = (int) floor($t / $DELETE_SPIKE_BUCKET_SECONDS);
-                    if (!isset($delete_buckets[$bucket])) {
-                        $delete_buckets[$bucket] = ['count' => 0, 'sample' => $r];
-                    }
-                    $delete_buckets[$bucket]['count']++;
-                }
-            }
-            fclose($fh);
-        }
-
-        // Promote burst buckets over threshold into anomalies
-        foreach ($burst_buckets as $bucket => $info) {
-            if ($info['count'] > $BURST_THRESHOLD) {
-                $token_summary['anomalies'][] = $info['sample'] + [
-                    'why' => 'Read burst: ' . $info['count'] . ' reads from same client in a 5-minute window (excluding state.php polling)',
-                ];
-            }
-        }
-
-        // Promote IPs probing MANY DISTINCT client_ids — true enumeration shape.
-        // One client missing many times is normal (user without that CRM connected);
-        // one IP missing many DIFFERENT client_ids is the actual scan signature.
-        //
-        // Compensating filter: if this IP ALSO produced any successful reads
-        // in the window, it's a corporate NAT (or shared egress) with a mix
-        // of connected and unconnected users behind it — not enumeration.
-        // Real spray-attackers hit universally missing. See the tunables
-        // block above for the trade-off rationale.
-        foreach ($miss_by_ip as $ip => $info) {
-            if ($info['has_success']) continue;
-            $distinct = count($info['cids']);
-            if ($distinct >= $ENUM_DISTINCT_CIDS_PER_IP) {
-                $token_summary['anomalies'][] = $info['sample'] + [
-                    'why' => 'Possible enumeration: ' . $info['count'] . ' missing-token reads from IP ' . htmlspecialchars($ip) . ' across ' . $distinct . ' distinct client_ids in 24h (no successful reads from this IP in the window)',
-                ];
-            }
-        }
-
-        // Promote delete spikes — many tokens deleted within a 1-hour bucket
-        foreach ($delete_buckets as $bucket => $info) {
-            if ($info['count'] > $DELETE_SPIKE_THRESHOLD) {
-                $token_summary['anomalies'][] = $info['sample'] + [
-                    'why' => 'Delete spike: ' . $info['count'] . ' token deletions within a 1-hour window — possible mass-disconnect or compromise-and-cleanup',
-                ];
-            }
-        }
-    }
+    $token_summary = compute_token_summary();
     ?>
     <h2 class="section-title">Token Security (last 24h)</h2>
+    <!-- Container is always rendered so JS refresh has stable elements to
+         write into. Server render populates it on first paint; JS auto-
+         refresh updates the same nodes without a full reload. -->
+    <div id="token-security-section" data-log-missing="<?= $token_summary['log_missing'] ? '1' : '0' ?>">
     <?php if ($token_summary['log_missing']): ?>
-      <div class="alert alert-warning">
-        Token audit log not found at <code><?= htmlspecialchars(audit_token_log_path()) ?></code>.
+      <div id="token-security-log-missing" class="alert alert-warning">
+        Token audit log not found at <code id="token-security-audit-path"><?= htmlspecialchars($token_summary['audit_path']) ?></code>.
         This is expected if no token operations have happened since the audit log feature was deployed.
         The log will be created automatically on the next token read/write/delete.
       </div>
@@ -681,25 +478,25 @@ api_log('crm_usage_dashboard.view', [
       <div class="grid-5">
         <div class="stat">
           <div class="label">Reads</div>
-          <div class="value"><?= number_format($token_summary['reads']) ?></div>
+          <div class="value" id="token-security-reads"><?= number_format($token_summary['reads']) ?></div>
         </div>
         <div class="stat">
           <div class="label">Writes</div>
-          <div class="value"><?= number_format($token_summary['writes']) ?></div>
+          <div class="value" id="token-security-writes"><?= number_format($token_summary['writes']) ?></div>
         </div>
         <div class="stat">
           <div class="label">Deletes</div>
-          <div class="value"><?= number_format($token_summary['deletes']) ?></div>
+          <div class="value" id="token-security-deletes"><?= number_format($token_summary['deletes']) ?></div>
         </div>
         <div class="stat">
           <div class="label">Read errors</div>
-          <div class="value" style="color: <?= $token_summary['errors'] > 0 ? '#92400e' : 'inherit' ?>;">
+          <div class="value" id="token-security-errors" style="color: <?= $token_summary['errors'] > 0 ? '#92400e' : 'inherit' ?>;">
             <?= number_format($token_summary['errors']) ?>
           </div>
         </div>
         <div class="stat">
           <div class="label">Anomalies</div>
-          <div class="value" style="color: <?= count($token_summary['anomalies']) > 0 ? '#991b1b' : '#16a34a' ?>;">
+          <div class="value" id="token-security-anomaly-count" style="color: <?= count($token_summary['anomalies']) > 0 ? '#991b1b' : '#16a34a' ?>;">
             <?= count($token_summary['anomalies']) ?>
           </div>
         </div>
@@ -708,50 +505,47 @@ api_log('crm_usage_dashboard.view', [
         <?php foreach (['pb', 'hubspot', 'close', 'apollo'] as $prov): ?>
           <div class="stat">
             <div class="label"><?= strtoupper($prov) ?> events</div>
-            <div class="value"><?= number_format($token_summary['by_prov'][$prov]) ?></div>
+            <div class="value" id="token-security-by-<?= $prov ?>"><?= number_format($token_summary['by_prov'][$prov]) ?></div>
           </div>
         <?php endforeach; ?>
       </div>
-      <?php if (!empty($token_summary['anomalies'])): ?>
-        <details open style="margin-top: 16px;">
-          <summary class="section-title" style="margin-top: 0; cursor: pointer;">
-            🚨 Anomalies (<?= count($token_summary['anomalies']) ?>)
-          </summary>
-          <table style="width:100%; margin-top: 10px; border-collapse: collapse; font-size: 13px;">
-            <thead>
-              <tr style="background: #fef2f2;">
-                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">When</th>
-                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Event</th>
-                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Provider</th>
-                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Endpoint</th>
-                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">IP</th>
-                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">client_id (hash)</th>
-                <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Why flagged</th>
+      <details id="token-security-anomalies-container" style="margin-top: 16px; <?= empty($token_summary['anomalies']) ? 'display:none;' : '' ?>" <?= !empty($token_summary['anomalies']) ? 'open' : '' ?>>
+        <summary class="section-title" style="margin-top: 0; cursor: pointer;">
+          🚨 Anomalies (<span id="token-security-anomalies-summary-count"><?= count($token_summary['anomalies']) ?></span>)
+        </summary>
+        <table style="width:100%; margin-top: 10px; border-collapse: collapse; font-size: 13px;">
+          <thead>
+            <tr style="background: #fef2f2;">
+              <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">When</th>
+              <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Event</th>
+              <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Provider</th>
+              <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Endpoint</th>
+              <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">IP</th>
+              <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">client_id (hash)</th>
+              <th style="text-align:left; padding: 8px; border-bottom: 1px solid #fecaca;">Why flagged</th>
+            </tr>
+          </thead>
+          <tbody id="token-security-anomalies-body">
+            <?php foreach (array_slice($token_summary['anomalies'], 0, 50) as $a): ?>
+              <tr>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['t'] ?? '') ?></td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['evt'] ?? '') ?></td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['prov'] ?? '') ?></td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['ep'] ?? '') ?></code></td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['ip'] ?? '') ?></td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['cid'] ?? '') ?></code></td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['why'] ?? '') ?></td>
               </tr>
-            </thead>
-            <tbody>
-              <?php foreach (array_slice($token_summary['anomalies'], 0, 50) as $a): ?>
-                <tr>
-                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['t'] ?? '') ?></td>
-                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['evt'] ?? '') ?></td>
-                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['prov'] ?? '') ?></td>
-                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['ep'] ?? '') ?></code></td>
-                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['ip'] ?? '') ?></td>
-                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><code><?= htmlspecialchars($a['cid'] ?? '') ?></code></td>
-                  <td style="padding: 6px 8px; border-bottom: 1px solid #f3f4f6;"><?= htmlspecialchars($a['why'] ?? '') ?></td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-          <?php if (count($token_summary['anomalies']) > 50): ?>
-            <p style="font-size:12px; color: var(--text-muted); margin-top: 8px;">
-              Showing 50 of <?= count($token_summary['anomalies']) ?> anomalies. Check the audit log directly for the full list:
-              <code><?= htmlspecialchars(audit_token_log_path()) ?></code>
-            </p>
-          <?php endif; ?>
-        </details>
-      <?php endif; ?>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+        <p id="token-security-truncation-note" style="font-size:12px; color: var(--text-muted); margin-top: 8px; <?= count($token_summary['anomalies']) <= 50 ? 'display:none;' : '' ?>">
+          Showing 50 of <span id="token-security-truncation-total"><?= count($token_summary['anomalies']) ?></span> anomalies. Check the audit log directly for the full list:
+          <code><?= htmlspecialchars($token_summary['audit_path']) ?></code>
+        </p>
+      </details>
     <?php endif; ?>
+    </div>
 
     <!-- Tab Navigation -->
     <nav class="tab-nav" role="tablist" aria-label="Dashboard sections">
@@ -973,9 +767,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const msgEl        = document.getElementById("message");
   const contentEl    = document.getElementById("content");
 
-  const crmEndpoint   = "../api/core/crm_usage_stats.php";
-  const sseEndpoint   = "../api/core/sse_usage_stats.php";
-  const agentEndpoint = "../api/core/daily_agent_stats.php";
+  const crmEndpoint          = "../api/core/crm_usage_stats.php";
+  const sseEndpoint          = "../api/core/sse_usage_stats.php";
+  const agentEndpoint        = "../api/core/daily_agent_stats.php";
+  const tokenSummaryEndpoint = "../api/core/token_summary_stats.php";
 
   const hasChartJs = typeof Chart !== "undefined";
 
@@ -1055,6 +850,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // Load dashboard
   // ========================================================================
   function loadDashboard() {
+    // Fire the token-security refresh alongside the main dashboard load so
+    // "Anomalies (2)" numbers update on the auto-refresh interval without
+    // needing a full page reload. Independent of the main Promise.all so a
+    // slow / failing token-summary endpoint doesn't block anything else.
+    loadTokenSummary();
+
     const dr  = getDateRange(currentRange);
     const t   = Date.now();
     const sseUrl       = sseEndpoint   + "?start=" + dr.start + "&end=" + dr.end + "&t=" + t;
@@ -1345,6 +1146,129 @@ document.addEventListener("DOMContentLoaded", () => {
     const d = document.createElement("div");
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  // Token Security section refresh — see api/core/token_summary_stats.php
+  // for the JSON shape and token_summary_lib.php for the underlying
+  // computation. Fires on every loadDashboard tick so auto-refresh picks
+  // up new anomalies without a full page reload.
+  function loadTokenSummary() {
+    const url = tokenSummaryEndpoint + "?t=" + Date.now();
+    fetch(url)
+      .then(r => r.ok ? r.json() : null)
+      .then(resp => {
+        const s = normalize(resp);
+        if (!s) return; // best-effort; leave last-rendered state in place
+        renderTokenSummary(s);
+      })
+      .catch(() => {
+        // Silent — the section keeps whatever was last rendered. Same
+        // "graceful degrade" pattern the other JSON fetches use.
+      });
+  }
+
+  function renderTokenSummary(s) {
+    const section = document.getElementById("token-security-section");
+    if (!section) return;
+
+    // If the log went from present → missing (unlikely but possible),
+    // or missing → present, our DOM shape needs different elements.
+    // We only support live-updating counts inside the "present" shape.
+    // If the log-missing state changes, punt to a page reload for that
+    // rare transition rather than swapping the whole subtree client-side.
+    const wasMissing = section.dataset.logMissing === "1";
+    if (s.log_missing !== wasMissing) return;
+    if (s.log_missing) return; // nothing to update inside the empty-state
+
+    // Counts (top row)
+    setText("token-security-reads",   fmt(s.reads));
+    setText("token-security-writes",  fmt(s.writes));
+    setText("token-security-deletes", fmt(s.deletes));
+
+    const errorsEl = document.getElementById("token-security-errors");
+    if (errorsEl) {
+      errorsEl.textContent = fmt(s.errors);
+      errorsEl.style.color = s.errors > 0 ? "#92400e" : "inherit";
+    }
+
+    const anomalyCount = (s.anomalies || []).length;
+    const anomalyTotal = typeof s.anomalies_total === "number" ? s.anomalies_total : anomalyCount;
+
+    const anomCountEl = document.getElementById("token-security-anomaly-count");
+    if (anomCountEl) {
+      anomCountEl.textContent = fmt(anomalyTotal);
+      anomCountEl.style.color = anomalyTotal > 0 ? "#991b1b" : "#16a34a";
+    }
+
+    // Per-provider events
+    ["pb", "hubspot", "close", "apollo"].forEach(prov => {
+      const el = document.getElementById("token-security-by-" + prov);
+      if (el && s.by_prov && typeof s.by_prov[prov] === "number") {
+        el.textContent = fmt(s.by_prov[prov]);
+      }
+    });
+
+    // Anomalies list — show/hide container based on count, rebuild rows
+    const container = document.getElementById("token-security-anomalies-container");
+    const body = document.getElementById("token-security-anomalies-body");
+    const summaryCount = document.getElementById("token-security-anomalies-summary-count");
+    const truncNote = document.getElementById("token-security-truncation-note");
+    const truncTotal = document.getElementById("token-security-truncation-total");
+
+    if (container) {
+      if (anomalyTotal === 0) {
+        container.style.display = "none";
+        if (body) body.innerHTML = "";
+      } else {
+        container.style.display = "";
+        if (summaryCount) summaryCount.textContent = String(anomalyTotal);
+        if (body) {
+          body.innerHTML = "";
+          (s.anomalies || []).forEach(a => {
+            const tr = document.createElement("tr");
+            tr.appendChild(cellText(a.t));
+            tr.appendChild(cellText(a.evt));
+            tr.appendChild(cellText(a.prov));
+            tr.appendChild(cellCode(a.ep));
+            tr.appendChild(cellText(a.ip));
+            tr.appendChild(cellCode(a.cid));
+            tr.appendChild(cellText(a.why));
+            body.appendChild(tr);
+          });
+        }
+        if (truncNote && truncTotal) {
+          if (anomalyTotal > 50) {
+            truncTotal.textContent = String(anomalyTotal);
+            truncNote.style.display = "";
+          } else {
+            truncNote.style.display = "none";
+          }
+        }
+      }
+    }
+  }
+
+  // Helpers used by renderTokenSummary — assigning to DOM elements.
+  function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+  function fmt(n) {
+    return typeof n === "number" ? n.toLocaleString() : String(n || 0);
+  }
+  function cellText(value) {
+    const td = document.createElement("td");
+    td.style.cssText = "padding: 6px 8px; border-bottom: 1px solid #f3f4f6;";
+    td.textContent = value || "";
+    return td;
+  }
+  function cellCode(value) {
+    const td = document.createElement("td");
+    td.style.cssText = "padding: 6px 8px; border-bottom: 1px solid #f3f4f6;";
+    const code = document.createElement("code");
+    code.textContent = value || "";
+    td.appendChild(code);
+    return td;
   }
 
   function statCard(label, value) {
