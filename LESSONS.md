@@ -6,6 +6,24 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-07-17 — PHP close-tag in a comment broke a fresh prod deploy; deploy-verification only checked the version endpoint
+
+**What happened:** Shipped a small dashboard feature (auto-refresh the Token Security section — PR #183) that added `api/core/token_summary_lib.php` and `api/core/token_summary_stats.php`. Deployed to prod as `prod-v0.8.2-dashboard-refresh`. Sanity-checked with `curl version.json.php` — returned `0.8.2-dashboard-refresh`, called it done. Two minutes later, curl'd the actual new endpoint out of curiosity and it was returning PHP source code, not JSON. Root cause: I'd written the literal string `<?= htmlspecialchars(...) ?>` inside a `//` comment as an example of what NOT to do in strings. **PHP treats a literal `?>` inside a `//` comment as an actual close-tag** — it terminates PHP mode mid-file. Everything after that line stopped being PHP and became raw text output. `token_summary_stats.php` served source code; the dashboard's Token Security section server-render broke silently because `compute_token_summary()` was never defined. Hotfixed in ~10 minutes as `prod-v0.8.2-dashboard-hotfix`. Total exposure on prod: ~2 minutes.
+
+**Why we didn't catch it:** Two layers of miss.
+
+1. **PHP-syntax gotcha**: `?>` inside a `//` comment is well-documented in PHP's manual but not intuitive — you'd expect the comment to consume the rest of the line. This class of trap only bites when writing about PHP syntax inside PHP files. Rare enough that developers don't reflexively watch for it.
+2. **Deploy verification checklist was too loose**: `curl version.json.php` confirms the deploy ran but tells you nothing about whether the code in it actually works. New endpoints have to be curl'd specifically — but PR #183's Post-Deploy Verification section listed "load the dashboard, turn Auto on, wait for two refresh cycles" without a `curl <new-endpoint>` step for a fast, isolated check.
+
+**Process change:** Two small guardrails.
+
+1. **When writing about PHP syntax in comments, use plain English or escape the close-tag**. Added an inline warning comment in `token_summary_lib.php` at the site of the bug so the next contributor tempted to reference PHP syntax there sees the trap named.
+2. **Deploy verification for a PR that adds a NEW endpoint MUST include a `curl` against that specific URL** as the first check — before UI-level tests. `curl` fails fast, deterministic, and exposes source-code-instead-of-JSON in a way that a UI test wouldn't for at least seconds. The pull request template's Post-Deploy Verification section already asks for specific checks; the discipline is remembering that "new endpoint" means "curl the endpoint's URL explicitly, not just an unrelated health check."
+
+**Broader lesson — small internal-only surfaces are the perfect place to make these mistakes and learn from them**. The dashboard is admin-only; blast radius was one internal user (Jeff). If the same pattern hits a customer-facing endpoint next time, blast radius could be all customers. The verification-checklist upgrade above applies to every deploy of a new endpoint, not just internal ones.
+
+---
+
 ## 2026-07-09 — Anomaly-whitelist drift after CTC-completes-task (repeat of 2026-07-03 pattern)
 
 **What happened:** The morning after PR #172 shipped to prod, the CRM Usage Dashboard flagged two "Endpoint not in the whitelist for hubspot token reads" anomalies for `softphone_auth_code` and `softphone_call_done`. Both are legitimate: my new code in PR #172 added HubSpot-token reads to those endpoints (checking "is HS connected?" before writing an intent, and loading tokens to PATCH the task on webhook fire). Same class of drift as 2026-07-03 (PR #163), where the softphone endpoints needed to be whitelisted for PB token reads. Fixed by adding the two endpoints to the `hubspot` whitelist in `crm_usage_dashboard.php`.
