@@ -14,7 +14,13 @@
 // 2026-07-17 so the auto-refresh path could reuse the same logic without
 // drift. Do NOT put HTML-encoding inside strings here — return raw text
 // and let each caller escape as appropriate for its output surface
-// (server-side <?= htmlspecialchars(...) ?>, or JS textContent).
+// (server-side htmlspecialchars call, or JS textContent).
+//
+// IMPORTANT: do not write literal PHP close tags inside these comments.
+// PHP treats "close tag inside // comment" as an actual close, which
+// terminates PHP mode mid-file and turns everything below into raw
+// output. That bug caused the initial deploy of this file to serve
+// source code from api/core/token_summary_stats.php instead of JSON.
 
 require_once __DIR__ . '/../../utils.php';
 
