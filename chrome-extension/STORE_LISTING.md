@@ -230,6 +230,16 @@ All three of the standard store certifications are true for this extension and s
 
 ---
 
+## Notes for Certification (Edge Add-ons — REQUIRED EVERY SUBMISSION)
+
+Microsoft Edge's submission form has a **"Notes for certification (less than 2,000 characters)"** field under Properties. It's asking how a reviewer can validate the extension without valid PhoneBurner credentials (paid product, no test creds we can hand out).
+
+**The canonical text lives at [`/EDGE_TESTING_INSTRUCTIONS.txt`](../EDGE_TESTING_INSTRUCTIONS.txt) at the repo root.** Open that file, copy the entire contents, paste into the "Notes for certification" field on every Edge submission. Chrome Web Store does not have an equivalent field — skip for CWS.
+
+Why this note lives here: forgetting it triggers an Edge cert failure and adds 24-48h of back-and-forth. Twice-bitten. If the reviewer response criteria drift, update `EDGE_TESTING_INSTRUCTIONS.txt` — not this section — since the file is the canonical version.
+
+---
+
 ## Submission Workflow
 
 When publishing a new version to either store:
@@ -242,3 +252,4 @@ When publishing a new version to either store:
 6. Confirm the **Data Usage Disclosure** checkboxes match the table above.
 7. Confirm the **Privacy Policy URL** field still points at the right host.
 8. Check all three **Compliance Certifications** boxes.
+9. **Edge only** — paste the full contents of [`/EDGE_TESTING_INSTRUCTIONS.txt`](../EDGE_TESTING_INSTRUCTIONS.txt) into the "Notes for certification" field on the Properties tab. See the section above.

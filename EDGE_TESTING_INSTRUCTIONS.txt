@@ -1,3 +1,10 @@
+[Repo note — do not paste this bracketed section into the store form.
+ This file's contents (excluding this note) must be pasted into the
+ "Notes for certification" field on EVERY Microsoft Edge Add-ons
+ submission. See chrome-extension/STORE_LISTING.md → "Notes for
+ Certification (Edge Add-ons)" for the full workflow. Chrome Web
+ Store has no equivalent field — Edge only.]
+
 This extension requires a PhoneBurner account (phoneburner.com), a paid power-dialing platform. Users authenticate with their own Personal Access Token (PAT) from their PhoneBurner subscription. Test credentials cannot be provided as they are tied to paid accounts with live telephony services.
 
 STEPS TO VERIFY BEHAVIOR WITHOUT CREDENTIALS:
