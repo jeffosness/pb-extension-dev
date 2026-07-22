@@ -19,10 +19,10 @@ const PB_CHANGELOG = {
   "0.8.3": {
     title: "What's New in v0.8.3",
     items: [
-      "HubSpot Task Queue now dials every task in the view — no more missing rows on large task lists. If HubSpot only rendered the first 30 of 91 tasks in your browser, we now scroll and gather the rest automatically before launching.",
-      "Live status while we work — the popup now shows what's happening (\"Scanning HubSpot for your selected tasks… Found 15 of 22\") instead of a silent spinner, so you can tell the dial session is actually being built.",
-      "Same improvement applies to the Selection flow on Contacts, Companies, and Deals — larger selections launch reliably too.",
-      "Big thanks to Gil and Patrick for the field reports and troubleshooting that helped us track this one down."
+      "HubSpot Task Queue now dials every task in the list — no more missing rows on big queues",
+      "Same fix applies to Selection on Contacts, Companies, and Deals — larger selections launch reliably",
+      "New live status in the popup so you can watch it happen (\"Scanning HubSpot… Found 15 of 22\") instead of a silent spinner",
+      "Thanks to Gil and Patrick for the field reports that helped us track this down"
     ]
   },
   "0.8.2": {
