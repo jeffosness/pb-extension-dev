@@ -1839,19 +1839,41 @@ function hs_getPageContext() {
 }
 
 function hs_readSelectedCountFromUI() {
-  const candidates = [
+  // 1) "N selected" in the bulk-actions bar (contact / company / deal list
+  //    selection flow). Same behavior we've always had.
+  const bulkCandidates = [
     '[data-selenium-test*="bulk-actions"]',
     '[data-test-id*="bulk-actions"]',
     'div[role="region"]',
     "header",
   ];
-  for (const sel of candidates) {
+  for (const sel of bulkCandidates) {
     const el = document.querySelector(sel);
     if (!el) continue;
     const text = el.textContent || "";
     const m = text.match(/(\d+)\s+selected/i);
     if (m) return parseInt(m[1], 10);
   }
+
+  // 2) "Start N tasks" in the task-queue toolbar. This is HubSpot's own
+  //    total-tasks-in-view count and it's the truth source for the task
+  //    scroll-harvest. Verified via captured DOM 2026-07-22 (Jeff test).
+  const startBtn = document.querySelector(
+    '[data-test-id="start-task-queue-button"], [data-selenium-test="start-task-queue-button"]'
+  );
+  if (startBtn) {
+    const m = (startBtn.textContent || "").match(/(\d+)\s+task/i);
+    if (m) return parseInt(m[1], 10);
+  }
+
+  // 3) "N records" heading near the top of a HubSpot table view — some
+  //    layouts show this instead of a Start button. Fallback only.
+  const headings = document.querySelectorAll("h1, h2, h3, [role='heading']");
+  for (const h of headings) {
+    const m = (h.textContent || "").match(/(\d+)\s+records?\b/i);
+    if (m) return parseInt(m[1], 10);
+  }
+
   return null;
 }
 
@@ -1947,64 +1969,197 @@ function hs_nextFrame() {
   return new Promise((r) => requestAnimationFrame(() => r()));
 }
 
-async function hs_collectSelectedIdsDeep({
+// Object-type → noun helper. Drives the "Scanning HubSpot for your selected
+// tasks/contacts/companies…" phrasing surfaced to the user during the harvest.
+// Fallback "record/records" is intentionally generic so we can never be wrong.
+function hs_nounForObject(objectType) {
+  switch (objectType) {
+    case "task":    return { singular: "task",    plural: "tasks" };
+    case "contact": return { singular: "contact", plural: "contacts" };
+    case "company": return { singular: "company", plural: "companies" };
+    case "deal":    return { singular: "deal",    plural: "deals" };
+    default:        return { singular: "record",  plural: "records" };
+  }
+}
+
+// Shared scroll-harvest core. Used by both the Selection flow
+// (hs_collectSelectedIdsDeep) and the Task Queue flow (hs_collectTaskIdsDeep).
+// HubSpot renders its lists with an IntersectionObserver — rows past the
+// viewport are literally not in the DOM until we scroll them into view. A
+// one-shot querySelectorAll misses everything below the fold (that's the
+// "30 of 91" report from Patrick 2026-07-21). This function scrolls the
+// container in viewport-sized pages, harvesting after each frame + short
+// sleep to let HubSpot rehydrate, and dedups via a Map keyed by keyOf(item).
+//
+// Blocks the user's wheel/touch during the harvest so their scroll input
+// doesn't fight the automated scroll. Emits throttled progress via
+// onProgress so the popup can show a live counter.
+async function hs_deepHarvest({
+  harvestFn,           // () => Array<any>
+  keyOf,               // (item) => string
   maxMs = 8000,
   targetCount = null,
+  onProgress = null,   // ({found, target, done}) => void
 } = {}) {
   const scroller = hs_findTableScroller();
   const start = Date.now();
-  const seen = new Set();
+  const seen = new Map();
+  let maxScrollTopReached = 0;
+  let lastProgressAt = 0;
 
-  const harvest = () => {
-    hs_collectIdsFromDom().forEach((id) => seen.add(id));
+  const emit = (done = false) => {
+    if (!onProgress) return;
+    const now = Date.now();
+    // Throttle to ~300ms except for the final "done" event, which always fires.
+    if (!done && now - lastProgressAt < 300) return;
+    lastProgressAt = now;
+    try {
+      onProgress({ found: seen.size, target: targetCount, done: !!done });
+    } catch (_) {}
   };
 
-  harvest();
+  const harvest = () => {
+    const items = harvestFn() || [];
+    for (const it of items) {
+      const k = keyOf(it);
+      if (k && !seen.has(k)) seen.set(k, it);
+    }
+    emit(false);
+  };
 
-  if (seen.size === 0 && scroller) {
-    scroller.scrollTop = 0;
-    await hs_nextFrame();
+  // Block user scroll input while we drive the container. Prevents the
+  // customer's wheel from fighting our programmatic scrollTop assignments
+  // mid-harvest and turning a 3-second scan into a stuck-at-30% mystery.
+  const block = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const blockOpts = { passive: false, capture: true };
+  window.addEventListener("wheel", block, blockOpts);
+  window.addEventListener("touchmove", block, blockOpts);
+
+  try {
     harvest();
-  }
 
-  let stablePasses = 0;
-
-  while (Date.now() - start < maxMs && stablePasses < 3) {
-    const before = seen.size;
-
-    if (scroller) {
-      for (let i = 0; i < 4; i++) {
-        scroller.scrollTop = Math.min(
-          scroller.scrollTop + scroller.clientHeight,
-          scroller.scrollHeight,
-        );
-        await hs_nextFrame();
-        await hs_sleep(120);
-        harvest();
-        if (targetCount && seen.size >= targetCount) break;
-      }
-    } else {
-      // no scroller found; just wait/rehydrate a couple passes
-      await hs_sleep(150);
-      harvest();
-    }
-
-    stablePasses = seen.size === before ? stablePasses + 1 : 0;
-    if (targetCount && seen.size >= targetCount) break;
-  }
-
-  // sweep up (optional)
-  if (scroller && targetCount && seen.size < targetCount) {
-    for (let y = scroller.scrollTop; y > 0; y -= scroller.clientHeight) {
-      scroller.scrollTop = Math.max(0, y - scroller.clientHeight);
+    if (seen.size === 0 && scroller) {
+      scroller.scrollTop = 0;
       await hs_nextFrame();
-      await hs_sleep(80);
       harvest();
-      if (seen.size >= targetCount) break;
     }
-  }
 
-  return Array.from(seen);
+    let stablePasses = 0;
+
+    while (Date.now() - start < maxMs && stablePasses < 3) {
+      const before = seen.size;
+
+      if (scroller) {
+        for (let i = 0; i < 4; i++) {
+          scroller.scrollTop = Math.min(
+            scroller.scrollTop + scroller.clientHeight,
+            scroller.scrollHeight,
+          );
+          if (scroller.scrollTop > maxScrollTopReached) {
+            maxScrollTopReached = scroller.scrollTop;
+          }
+          await hs_nextFrame();
+          await hs_sleep(120);
+          harvest();
+          if (targetCount && seen.size >= targetCount) break;
+        }
+      } else {
+        // no scroller found; just wait/rehydrate a couple passes
+        await hs_sleep(150);
+        harvest();
+      }
+
+      stablePasses = seen.size === before ? stablePasses + 1 : 0;
+      if (targetCount && seen.size >= targetCount) break;
+    }
+
+    // Sweep back up in case some rows unmounted from the top during scroll-down.
+    if (scroller && targetCount && seen.size < targetCount) {
+      for (let y = scroller.scrollTop; y > 0; y -= scroller.clientHeight) {
+        scroller.scrollTop = Math.max(0, y - scroller.clientHeight);
+        await hs_nextFrame();
+        await hs_sleep(80);
+        harvest();
+        if (seen.size >= targetCount) break;
+      }
+    }
+
+    // Diagnostic: log if we came up short of the UI-reported total. Helps us
+    // catch regressions (HubSpot changes the scroller container, new list view
+    // uses a different row selector, etc.) without having to reproduce.
+    if (targetCount && seen.size < targetCount) {
+      const total = scroller && scroller.scrollHeight ? scroller.scrollHeight : "?";
+      console.warn(
+        "[PB-UNIFIED] hs_deepHarvest short: expected ~" + targetCount +
+        ", got " + seen.size +
+        ". Scrolled to " + maxScrollTopReached + "px of " + total + "px. " +
+        "Elapsed " + (Date.now() - start) + "ms."
+      );
+    }
+
+    emit(true);
+    return Array.from(seen.values());
+  } finally {
+    window.removeEventListener("wheel", block, blockOpts);
+    window.removeEventListener("touchmove", block, blockOpts);
+  }
+}
+
+async function hs_collectSelectedIdsDeep({
+  maxMs = 8000,
+  targetCount = null,
+  onProgress = null,
+} = {}) {
+  const items = await hs_deepHarvest({
+    harvestFn: () => hs_collectIdsFromDom().map((id) => ({ id })),
+    keyOf: (it) => it.id,
+    maxMs,
+    targetCount,
+    onProgress,
+  });
+  return items.map((it) => it.id);
+}
+
+// Task-queue row harvester. Returns {taskId, checked} per row so the caller
+// can distinguish "user selected specific tasks" from "user wants all visible
+// tasks". Matches the same row selector the classic and newer HubSpot task
+// views both use: <tr data-test-id="row-{taskId}">.
+function hs_collectTaskRowsFromDom() {
+  const out = [];
+  const rows = document.querySelectorAll('tr[data-test-id^="row-"]');
+  rows.forEach((row) => {
+    const testId = row.getAttribute("data-test-id") || "";
+    const m = testId.match(/^row-(\d+)$/);
+    if (!m) return;
+    const taskId = m[1];
+    const cb = row.querySelector('input[type="checkbox"]');
+    const checked = !!(cb && cb.checked);
+    out.push({ taskId, checked });
+  });
+  return out;
+}
+
+async function hs_collectTaskIdsDeep({
+  maxMs = 8000,
+  targetCount = null,
+  onProgress = null,
+} = {}) {
+  const items = await hs_deepHarvest({
+    harvestFn: hs_collectTaskRowsFromDom,
+    keyOf: (it) => it.taskId,
+    maxMs,
+    targetCount,
+    onProgress,
+  });
+  const allIds = items.map((it) => it.taskId);
+  const selectedIds = items.filter((it) => it.checked).map((it) => it.taskId);
+  const usedSelection = selectedIds.length > 0;
+  return {
+    taskIds: usedSelection ? selectedIds : allIds,
+    totalVisible: allIds.length,
+    selectedCount: selectedIds.length,
+    usedSelection,
+  };
 }
 
 // ============================================================================
@@ -2527,12 +2682,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
 
-        const targetCount = hs_readSelectedCountFromUI();
-        const ids = await hs_collectSelectedIdsDeep({
-          maxMs: 8000,
-          targetCount,
-        });
         const pageCtx = hs_getPageContext();
+        const nouns = hs_nounForObject(pageCtx.objectType);
+        const targetCount = hs_readSelectedCountFromUI();
+        // Scale timeout with expected volume — big selections legitimately
+        // need more time to scroll and rehydrate. Clamp 6-30s so we never
+        // give up too early on a big list or hang forever on a stuck one.
+        const maxMs = targetCount
+          ? Math.max(6000, Math.min(30000, targetCount * 60))
+          : 8000;
+
+        const ids = await hs_collectSelectedIdsDeep({
+          maxMs,
+          targetCount,
+          onProgress: ({ found, target, done }) => {
+            try {
+              chrome.runtime.sendMessage({
+                type: "HS_HARVEST_PROGRESS",
+                found,
+                target,
+                done: !!done,
+                noun: nouns.singular,
+                noun_plural: nouns.plural,
+              });
+            } catch (_) {}
+          },
+        });
 
         sendResponse({
           ids: [...new Set(ids)],
@@ -2560,44 +2735,54 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // (/tasks/{portalId}/view/) rows. Cell-id namespaces differ between the
   // two views (cell-0-27-* vs cell-DEFAULT_NAMESPACE-*), which matters for
   // the CTC pill finder above, but the row-level test id is identical.
+  //
+  // v0.8.3 (2026-07-22): moved off one-shot querySelectorAll to the same
+  // scroll-harvest core the Selection flow uses. HubSpot renders task rows
+  // via IntersectionObserver — a plain querySelectorAll only sees what's in
+  // the viewport, which is why Patrick's "91 tasks" launch was only picking
+  // up 30 rows. See LESSONS.md entry for the full incident.
   if (msg && msg.type === "HS_GET_TASK_IDS") {
-    try {
-      const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
-      if (ctx.crmId !== "hubspot") {
-        sendResponse({ error: "Not on a HubSpot page." });
-        return true;
-      }
-
-      const rows = document.querySelectorAll('tr[data-test-id^="row-"]');
-      const allIds = [];
-      const selectedIds = [];
-
-      rows.forEach((row) => {
-        const testId = row.getAttribute("data-test-id") || "";
-        const m = testId.match(/^row-(\d+)$/);
-        if (!m) return;
-        const taskId = m[1];
-        allIds.push(taskId);
-
-        // Per-row checkbox state — if checked, this task is in the user's explicit selection.
-        const cb = row.querySelector('input[type="checkbox"]');
-        if (cb && cb.checked) {
-          selectedIds.push(taskId);
+    (async () => {
+      try {
+        const ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+        if (ctx.crmId !== "hubspot") {
+          sendResponse({ error: "Not on a HubSpot page." });
+          return;
         }
-      });
 
-      // If anything is checked, dial only those; otherwise dial all visible tasks.
-      const taskIds = selectedIds.length > 0 ? selectedIds : allIds;
+        const nouns = hs_nounForObject("task");
+        const targetCount = hs_readSelectedCountFromUI();
+        const maxMs = targetCount
+          ? Math.max(6000, Math.min(30000, targetCount * 60))
+          : 8000;
 
-      sendResponse({
-        taskIds: [...new Set(taskIds)],
-        totalVisible: allIds.length,
-        selectedCount: selectedIds.length,
-        usedSelection: selectedIds.length > 0,
-      });
-    } catch (e) {
-      sendResponse({ error: e?.message || String(e) });
-    }
+        const result = await hs_collectTaskIdsDeep({
+          maxMs,
+          targetCount,
+          onProgress: ({ found, target, done }) => {
+            try {
+              chrome.runtime.sendMessage({
+                type: "HS_HARVEST_PROGRESS",
+                found,
+                target,
+                done: !!done,
+                noun: nouns.singular,
+                noun_plural: nouns.plural,
+              });
+            } catch (_) {}
+          },
+        });
+
+        sendResponse({
+          taskIds: [...new Set(result.taskIds)],
+          totalVisible: result.totalVisible,
+          selectedCount: result.selectedCount,
+          usedSelection: result.usedSelection,
+        });
+      } catch (e) {
+        sendResponse({ error: e?.message || String(e) });
+      }
+    })();
     return true;
   }
 

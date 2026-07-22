@@ -168,6 +168,92 @@ function sendToBackground(msg) {
   });
 }
 
+// Narrate a HubSpot launch that involves a scroll-harvest + backend enrichment.
+// Splits the wait into two visible phases:
+//
+//   Phase 1 — content script emits HS_HARVEST_PROGRESS as it scrolls the
+//   virtualized list. We render a live counter: "Scanning HubSpot for your
+//   selected tasks… Found 15 of 22". Noun ("task"/"contact"/"company"/"deal"/
+//   "record") comes from the message so the phrasing matches the entry point.
+//
+//   Phase 2 — after harvestFn signals done, backend picks up (HubSpot Search
+//   API + PB dialsession call). No per-step progress from PB, so we cycle a
+//   few canned messages every ~2.5s so the UI feels alive during the wait.
+//
+// Returns the value taskPromise resolves to. Always removes its onMessage
+// listener + stops the ticker, even on error paths.
+async function withHarvestProgress(statusEl, taskPromise, opts = {}) {
+  const defaultNoun = opts.defaultNoun || "record";
+  const defaultNounPlural = opts.defaultNounPlural || "records";
+
+  let currentNounPlural = defaultNounPlural;
+  let harvestDone = false;
+  let tickerTimer = null;
+
+  const setStatus = (text) => {
+    if (statusEl) statusEl.textContent = text;
+  };
+
+  const backendMessages = [
+    "Pulling contact details from HubSpot…",
+    "Fetching phone numbers and emails…",
+    "Building your dial session in PhoneBurner…",
+    "Almost there — get ready to dial…",
+  ];
+
+  const startTicker = () => {
+    let i = 0;
+    setStatus(backendMessages[0]);
+    tickerTimer = setInterval(() => {
+      i = (i + 1) % backendMessages.length;
+      setStatus(backendMessages[i]);
+    }, 2500);
+  };
+
+  const stopTicker = () => {
+    if (tickerTimer) { clearInterval(tickerTimer); tickerTimer = null; }
+  };
+
+  const onMsg = (msg) => {
+    if (!msg || msg.type !== "HS_HARVEST_PROGRESS") return;
+    if (msg.noun_plural) currentNounPlural = msg.noun_plural;
+
+    if (msg.done) {
+      if (harvestDone) return;
+      harvestDone = true;
+      startTicker();
+      return;
+    }
+
+    const found = msg.found ?? 0;
+    const target = msg.target;
+    let text = "Scanning HubSpot for your selected " + currentNounPlural + "…";
+    if (typeof target === "number" && target > 0) {
+      text += " Found " + found + " of " + target;
+    } else if (found > 0) {
+      text += " Found " + found;
+    }
+    setStatus(text);
+  };
+
+  try {
+    chrome.runtime.onMessage.addListener(onMsg);
+  } catch (_) {}
+
+  // Seed the initial message so the user sees feedback even before the first
+  // HS_HARVEST_PROGRESS event lands (~50-200ms in).
+  setStatus("Scanning HubSpot for your selected " + defaultNounPlural + "…");
+
+  try {
+    return await taskPromise;
+  } finally {
+    stopTicker();
+    try {
+      chrome.runtime.onMessage.removeListener(onMsg);
+    } catch (_) {}
+  }
+}
+
 function getClientIdFromBackground() {
   return new Promise((resolve) => {
     try {
@@ -914,7 +1000,6 @@ async function launchHubSpotDialSession(callTarget = null) {
   // Disable all buttons during request
   allButtons.forEach(btn => { if (btn) btn.disabled = true; });
   if (dialStatus) {
-    dialStatus.textContent = "Building dial session from selected records…";
     dialStatus.classList.add("loading");
   }
 
@@ -922,7 +1007,21 @@ async function launchHubSpotDialSession(callTarget = null) {
   const message = { type: "HS_LAUNCH_FROM_SELECTED" };
   if (callTarget) message.call_target = callTarget;
 
-  const resp = await sendToBackground(message);
+  // Object-aware default nouns for the initial status message. The content
+  // script emits the authoritative noun via HS_HARVEST_PROGRESS as soon as
+  // it inspects the page — these are only used for the first ~100ms.
+  const defaultPlural =
+    callTarget === "companies" ? "companies" :
+    callTarget === "contacts"  ? "contacts"  :
+    (ACTIVE_CTX?.objectType === "company" ? "companies" :
+     ACTIVE_CTX?.objectType === "deal"    ? "deals"     :
+     ACTIVE_CTX?.objectType === "contact" ? "contacts"  : "records");
+
+  const resp = await withHarvestProgress(
+    dialStatus,
+    sendToBackground(message),
+    { defaultNounPlural: defaultPlural }
+  );
 
   if (dialStatus) dialStatus.classList.remove("loading");
 
@@ -1305,11 +1404,14 @@ async function launchHubSpotTaskQueue() {
 
   allButtons.forEach((b) => { if (b) b.disabled = true; });
   if (status) {
-    status.textContent = "Building dial session from tasks on this page…";
     status.classList.add("loading");
   }
 
-  const resp = await sendToBackground({ type: "HS_LAUNCH_FROM_TASKS" });
+  const resp = await withHarvestProgress(
+    status,
+    sendToBackground({ type: "HS_LAUNCH_FROM_TASKS" }),
+    { defaultNounPlural: "tasks" }
+  );
 
   if (status) status.classList.remove("loading");
 
