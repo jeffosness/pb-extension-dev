@@ -241,12 +241,12 @@
       }
 
       /* Loading animation for status text.
-         Bumping size + weight + brand-blue color during .loading so the
-         message is the visual focus while the launch is in-flight (per
-         Jeff 2026-07-22 feedback that the pulse alone was too subtle).
-         Color ties to the Launch button so the eye stays on the flow. */
+         Warm amber tint + weight bump makes the message the visual focus
+         while the launch is in-flight. Distinct from the primary blue used
+         by buttons (which would just blend), and reads universally as
+         "working" without implying completion (which green would). */
       .status.loading {
-        color: var(--primary);
+        color: #ffb547;
         font-size: 13px;
         font-weight: 600;
         animation: pulse 1.5s ease-in-out infinite;
