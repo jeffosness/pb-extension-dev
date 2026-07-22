@@ -2036,13 +2036,21 @@ async function hs_deepHarvest({
   window.addEventListener("touchmove", block, blockOpts);
 
   try {
-    harvest();
-
-    if (seen.size === 0 && scroller) {
+    // Always start from the top. The user may have already scrolled through
+    // the list to review who they're about to call — if they clicked Launch
+    // while scrolled to the bottom, the down-only scroll loop below couldn't
+    // reach the rows above them (Jeff report 2026-07-22, 100 selected but
+    // scrolled to bottom → only tail rows harvested). Resetting scrollTop
+    // guarantees the loop covers the full range no matter where the user
+    // was pointed. The wheel/touch block installed above is what keeps this
+    // from looking chaotic to the user.
+    if (scroller) {
       scroller.scrollTop = 0;
       await hs_nextFrame();
-      harvest();
+      await hs_sleep(120);
     }
+
+    harvest();
 
     let stablePasses = 0;
 

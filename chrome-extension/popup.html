@@ -240,13 +240,19 @@
         color: var(--text);
       }
 
-      /* Loading animation for status text */
+      /* Loading animation for status text.
+         Bumping size + weight + contrast during .loading so the message is
+         the visual focus while the launch is in-flight (per Jeff 2026-07-22
+         feedback that the pulse alone was too subtle). */
       .status.loading {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 500;
         animation: pulse 1.5s ease-in-out infinite;
       }
       @keyframes pulse {
         0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
+        50% { opacity: 0.55; }
       }
 
       /* Spacing utilities */
