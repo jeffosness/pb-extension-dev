@@ -241,13 +241,14 @@
       }
 
       /* Loading animation for status text.
-         Bumping size + weight + contrast during .loading so the message is
-         the visual focus while the launch is in-flight (per Jeff 2026-07-22
-         feedback that the pulse alone was too subtle). */
+         Bumping size + weight + brand-blue color during .loading so the
+         message is the visual focus while the launch is in-flight (per
+         Jeff 2026-07-22 feedback that the pulse alone was too subtle).
+         Color ties to the Launch button so the eye stays on the flow. */
       .status.loading {
-        color: var(--text);
+        color: var(--primary);
         font-size: 13px;
-        font-weight: 500;
+        font-weight: 600;
         animation: pulse 1.5s ease-in-out infinite;
       }
       @keyframes pulse {
