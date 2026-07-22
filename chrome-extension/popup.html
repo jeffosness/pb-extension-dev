@@ -240,13 +240,20 @@
         color: var(--text);
       }
 
-      /* Loading animation for status text */
+      /* Loading animation for status text.
+         Warm amber tint + weight bump makes the message the visual focus
+         while the launch is in-flight. Distinct from the primary blue used
+         by buttons (which would just blend), and reads universally as
+         "working" without implying completion (which green would). */
       .status.loading {
+        color: #ffb547;
+        font-size: 13px;
+        font-weight: 600;
         animation: pulse 1.5s ease-in-out infinite;
       }
       @keyframes pulse {
         0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
+        50% { opacity: 0.55; }
       }
 
       /* Spacing utilities */
