@@ -423,6 +423,7 @@ api_log('crm_usage_dashboard.view', [
       <button class="filter-btn" data-range="7days">Last 7 Days</button>
       <button class="filter-btn" data-range="week">This Week</button>
       <button class="filter-btn" data-range="month">This Month</button>
+      <button class="filter-btn" data-range="last_month">Last Month</button>
       <button class="filter-btn" data-range="custom">Custom</button>
 
       <div class="custom-range" id="custom-range">
@@ -826,6 +827,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (range === "month") {
       const d = new Date(today.getFullYear(), today.getMonth(), 1);
       return { start: fmtDate(d), end: todayStr, label: "This Month" };
+    }
+
+    if (range === "last_month") {
+      // First day of previous month through last day of previous month.
+      // JS Date handles the year rollover for January automatically:
+      // new Date(2026, -1, 1) === new Date(2025, 11, 1). Day 0 of the
+      // current month is the last day of the previous month.
+      const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const end   = new Date(today.getFullYear(), today.getMonth(), 0);
+      return { start: fmtDate(start), end: fmtDate(end), label: "Last Month" };
     }
 
     if (range === "custom" && customStart && customEnd) {
