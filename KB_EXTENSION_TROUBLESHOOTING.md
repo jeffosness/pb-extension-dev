@@ -596,6 +596,12 @@ This is a one-time reconnect. The customer's existing dial flows (Selection, Sav
 
 **Resolution:** Confirm in HubSpot that the missing tasks have a contact associated. Adding a contact association to a task in HubSpot won't retroactively add them to an in-progress dial session — start a new session after associating the contact.
 
+### Symptom: "Only the first 30 (or so) tasks got dialed on a big task queue" (fixed in v0.8.3)
+
+**Cause:** Pre-v0.8.3 the extension only saw the task rows currently rendered on screen. HubSpot's task table uses lazy rendering — rows below the fold aren't in the page until you scroll to them. So on a queue of 91 tasks, only ~30 (a viewport's worth) would be picked up. A workaround some customers found: zoom the HubSpot page out to 25% so all tasks rendered at once, then click Launch.
+
+**Resolution:** Update the extension to v0.8.3 or later. The extension now scrolls the task list itself to gather every task before launching, and shows a live counter in the popup ("Scanning HubSpot for your selected tasks… Found 15 of 22") so you can see it happening. No zoom trick needed.
+
 ### Edge cases worth knowing
 
 - **500-contact cap:** Same as other HubSpot launch methods. If the visible task queue points to more than 500 unique contacts, the session is truncated at 500.
