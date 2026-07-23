@@ -95,6 +95,22 @@ function aggregate_log_file(
         $eventType = $entry['event_type'] ?? 'dial_session';
         $byEventType[$eventType] = ($byEventType[$eventType] ?? 0) + 1;
 
+        // click_to_call_done is a server-to-server webhook fired by PhoneBurner
+        // after a CTC call dispositions — NOT a user launch. It writes with
+        // host='', level=0, and no launch_source (see softphone_call_done.php).
+        // Including it in the user-behavior aggregations pollutes them: it
+        // produces phantom "level 0" and empty-host rows in the Detail tab
+        // that don't answer the dashboard's actual question ("what are users
+        // doing so we know where to focus energy?" — Jeff 2026-07-23).
+        //
+        // Skip webhook entries UNLESS the caller explicitly asked for them
+        // (the CTC panel fetches with ?event_type=click_to_call_done to
+        // populate its own disposition counts). Kept AFTER the byEventType
+        // bump above so the split still shows the true webhook total.
+        if ($eventType === 'click_to_call_done' && $filterEventType !== 'click_to_call_done') {
+            continue;
+        }
+
         // Apply the event_type filter — skips entries that don't match.
         if ($filterEventType !== '' && $eventType !== $filterEventType) {
             continue;
