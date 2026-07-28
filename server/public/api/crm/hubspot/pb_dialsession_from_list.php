@@ -328,17 +328,10 @@ $payload = [
   ],
 ];
 
-$t0 = microtime(true);
-list($info, $resp) = pb_call_dialsession($pat, $payload);
-$pb_ms = (int) round((microtime(true) - $t0) * 1000);
-
-$httpCode = (int)($info['http_code'] ?? 0);
-if ($httpCode >= 400 || !is_array($resp)) {
-  api_error('PhoneBurner dialsession failed', 'pb_error', 502, [
-    'pb_http' => $httpCode,
-    'pb_ms'   => $pb_ms,
-  ]);
-}
+$resp = pb_dialsession_or_fail($pat, $payload, 'hs_list', [
+  'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+  'contact_count'  => count($pbContacts),
+]);
 
 // -----------------------------------------------------------------------------
 // Extract launch URL

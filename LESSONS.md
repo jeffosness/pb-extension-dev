@@ -24,6 +24,23 @@ Then Jeff asked the real question: "did we use the untracked playbook, or did we
 
 ---
 
+## 2026-07-27 — "PhoneBurner dialsession failed" was un-triageable because we discarded PB's error body
+
+**What happened:** A customer (Kimberly, Supervest) reported the generic "PhoneBurner dialsession failed" alert while launching from a HubSpot contacts list. She'd had successful sessions the same day, so the top suspects (expired PAT, missing HS connection, empty selection) were ruled out immediately — the failure had to be PhoneBurner's `/dialsession` API returning 4xx/5xx. But we couldn't diagnose beyond that: the six inline copies of the failure handler across the L3 dialsession endpoints logged nothing at all (only the generic scan endpoint had an api_log call, and it too stripped the response body), and `pb_api_call` discarded PB's raw response after JSON-decoding. So even with the request timestamp we couldn't tell whether PB returned "You have an active dial session," "PAT is expired," "internal error," or something else. Support triage reduced to guessing.
+
+**Why we didn't catch it:** Six endpoints, six copy-pasted failure handlers that all bubbled up `pb_http` + `pb_ms` and nothing else. Not a bad choice for the first cut when the class of failure was rare, but as call volume grew, the diagnostic gap became load-bearing on customer patience — and this was the first report where the customer explicitly couldn't self-diagnose. The 2026-07-08 dashboard-drift lesson ("adjacent aggregations copy-pasted the same shape and drifted") applies here too: **N copies of a pattern is N chances for the pattern to be wrong; centralize the pattern the first time you catch a smell.**
+
+**Process change:** PR moved all seven dialsession callsites (six L3 + generic scan) onto a shared `pb_dialsession_or_fail($pat, $payload, $endpointLabel, $extraLog)` helper in `utils.php`. The helper:
+
+1. **Preserves PB's raw response body** in `$info['raw_body']` (via a small change to `pb_api_call`) so the failure path can log it.
+2. **Extracts PB's own error message** from common shapes (`error.message` / `message` / `error` string) and surfaces it via `api_error` extras as `pb_message`.
+3. **Logs a structured breadcrumb** via `api_log('pb_dialsession.error', ...)` including endpoint slug, HTTP code, elapsed ms, PB message, redacted decoded body, raw snippet (only when JSON decode failed), and any per-endpoint context the caller wants to add (client_id_hash, contact_count, etc.).
+4. **Extension side** now surfaces `pb_message` in the popup alert (falling back to the generic wrapper message) and appends the first 8 chars of `request_id` as a "Support ID" so a customer report can be traced to the exact server-side log line.
+
+**Broader lesson — "shallow" error handling is fine at the first callsite, and a debt trap by the sixth.** The threshold for centralizing isn't "does the pattern repeat" — it's "when the pattern next fails, will N copies be N times harder to fix?" For error handlers specifically, the answer is almost always yes: the fix is always "add more context," and adding it to one shared helper is trivially cheaper than to six.
+
+---
+
 ## 2026-07-22 — HubSpot Task Queue launched only the first 30 of 91 tasks because rows are IntersectionObserver-virtualized
 
 **What happened:** Patrick reported the Task-Based Dial Session was only picking up "30 of 91 tasks" — the customer discovered that if they zoomed the HubSpot page out to 25%, all 91 rendered and the dial session got everything. Gil also flagged a related shortfall on his Selection launches earlier in the week; both reports pointed at the same virtualization root cause once we lined them up. Root cause: HubSpot's task list uses IntersectionObserver-based virtualization (`data-observer-type="ROW"` attributes on the containers). Rows past the viewport aren't in the DOM at all until scrolled into view. Our `HS_GET_TASK_IDS` handler was a one-shot `querySelectorAll('tr[data-test-id^="row-"]')`, which only sees what's currently rendered. Zoom-out made more rows fit on-screen, so more rendered, so more got dialed — that's the "trick" the customer stumbled onto. Fixed in v0.8.3 by moving Task Queue onto the same scroll-harvest core the Selection flow already used (`hs_deepHarvest`), and adding narrated progress ("Scanning HubSpot for your selected tasks… Found 15 of 22") so the extra scan time is visible instead of a silent spinner.

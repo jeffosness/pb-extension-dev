@@ -490,6 +490,93 @@ function pb_call_dialsession($pat, array $payload) {
   api_error('PhoneBurner API helper not found (pb_api_call/pb_api)', 'server_error', 500);
 }
 
+/**
+ * Call PhoneBurner /dialsession and, on failure, log + api_error with enough
+ * detail to actually diagnose. Returns the decoded response array on success;
+ * on failure calls api_error (which exits), so callers don't need to handle
+ * the failure return.
+ *
+ * $endpointLabel: short slug identifying the calling endpoint (e.g.
+ * "hs_selection", "close_selection", "generic_scan"). Surfaced in the log
+ * line so a customer report can be correlated to the exact code path.
+ *
+ * $extraLog: additional per-endpoint context (client_id_hash, contact count,
+ * etc.) merged into the api_log entry. Runs through PII redaction — safe to
+ * include names/emails/phones if the caller wants them for triage.
+ *
+ * Why this exists: on 2026-07-27 a customer (Kimberly, Supervest) reported
+ * "PhoneBurner dialsession failed" with no way to diagnose — we'd stripped
+ * PB's error body before logging anything, and 6 endpoints had inlined the
+ * same shallow failure handler independently. Centralizing that handler
+ * fixes both the diagnostic gap and the drift-across-copies risk.
+ */
+function pb_dialsession_or_fail(string $pat, array $payload, string $endpointLabel, array $extraLog = []): array {
+    $t0 = microtime(true);
+    list($info, $resp) = pb_call_dialsession($pat, $payload);
+    $pb_ms = (int) round((microtime(true) - $t0) * 1000);
+
+    $httpCode = (int)($info['http_code'] ?? 0);
+    if ($httpCode >= 200 && $httpCode < 400 && is_array($resp)) {
+        return $resp;
+    }
+
+    // Failure path — capture PB's own error text so we're not triaging blind.
+    $rawBody     = (string)($info['raw_body'] ?? '');
+    $curlError   = (string)($info['curl_error'] ?? '');
+    $bodySnippet = $rawBody !== '' ? substr($rawBody, 0, 500) : '';
+
+    // Try to lift PB's own message field if the body parsed as JSON. Common
+    // PB shapes: {"error":{"message":"..."}} or {"message":"..."} or a bare
+    // {"error":"..."} string. Surfaced to the extension via api_error extras
+    // so the popup can show something specific instead of a generic "failed".
+    $pbMessage = '';
+    if (is_array($resp)) {
+        $pbMessage = (string)(
+            $resp['error']['message']
+            ?? $resp['message']
+            ?? (is_string($resp['error'] ?? null) ? $resp['error'] : '')
+        );
+    }
+
+    // pb_response gets the DECODED body (PII-redacted). pb_body_snippet only
+    // populates if decode failed — that's when the raw text is our only clue.
+    // redact_pii_recursive lives in api/core/bootstrap.php which every endpoint
+    // loads; guarded here so unit tests (which don't load bootstrap.php) still
+    // resolve the symbol.
+    $pbResponseRedacted = null;
+    if (is_array($resp) && function_exists('redact_pii_recursive')) {
+        $pbResponseRedacted = redact_pii_recursive($resp);
+    } elseif (is_array($resp)) {
+        $pbResponseRedacted = $resp;
+    }
+
+    $logFields = array_merge([
+        'endpoint'        => $endpointLabel,
+        'pb_http'         => $httpCode,
+        'pb_ms'           => $pb_ms,
+        'pb_message'      => $pbMessage,
+        'pb_response'     => $pbResponseRedacted,
+        'pb_body_snippet' => is_array($resp) ? '' : $bodySnippet,
+        'curl_error'      => $curlError,
+    ], $extraLog);
+
+    if (function_exists('api_log')) {
+        api_log('pb_dialsession.error', $logFields);
+    }
+
+    if (function_exists('api_error')) {
+        api_error('PhoneBurner dialsession failed', 'pb_error', 502, [
+            'pb_http'    => $httpCode,
+            'pb_ms'      => $pb_ms,
+            'pb_message' => $pbMessage ?: null,
+        ]);
+    }
+
+    // Only reachable if api_error is missing (test context). Return an empty
+    // array so a strict-mode caller doesn't hit a type error.
+    return [];
+}
+
 function get_user_settings_dir()
 {
     $cfg = cfg();
@@ -843,8 +930,17 @@ function pb_api_call($pat, $method, $path, $body = null)
 
     if ($err) {
         log_msg("pb_api_call error: $err");
-        return [null, ['error' => $err]];
+        // Return an $info array (not null) so callers can uniformly read
+        // ['curl_error'] / ['http_code'] without null-guarding the tuple.
+        return [['curl_error' => $err, 'http_code' => 0], ['error' => $err]];
     }
+
+    // Preserve the raw response body in $info so callers on the failure path
+    // can log/surface PB's own error text. Existing callers ignore this key
+    // and see no behavior change; new callers (pb_dialsession_or_fail) rely
+    // on it for diagnostic breadcrumbs. See LESSONS.md 2026-07-27 for the
+    // customer report (Kimberly / Supervest) that motivated the capture.
+    $info['raw_body'] = is_string($resp) ? $resp : '';
 
     $data = json_decode($resp, true);
     return [$info, $data];

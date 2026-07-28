@@ -35,25 +35,44 @@ function setVisible(el, isVisible) {
 
 /**
  * Extract error message from API response
- * Handles both string errors and structured error objects
+ * Handles both string errors and structured error objects.
+ *
+ * Preferred order for user-visible text:
+ *   1. resp.error.pb_message — PhoneBurner's own explanation of the failure
+ *      (e.g. "You already have an active dial session"), populated by the
+ *      server's pb_dialsession_or_fail helper. Way more actionable than
+ *      the generic wrapper message.
+ *   2. resp.error.message — the wrapper message we set on the server.
+ *   3. fallback string.
+ *
+ * When the response carries a top-level request_id, a short support ID is
+ * appended so a customer report can be traced to the exact server-side log
+ * line. See LESSONS.md 2026-07-27 for the incident that drove this.
  */
 function getErrorMessage(resp, fallback = "An error occurred") {
   if (!resp?.error) return fallback;
 
   if (typeof resp.error === 'string') {
-    return resp.error;
+    return withSupportId(resp.error, resp);
   }
 
   if (typeof resp.error === 'object') {
-    let msg = resp.error.message || fallback;
+    let msg = resp.error.pb_message || resp.error.message || fallback;
     // Add skip details if present (for dial session errors)
     if (resp.error.skipped > 0) {
       msg += ` (${resp.error.skipped} records without phone numbers were skipped)`;
     }
-    return msg;
+    return withSupportId(msg, resp);
   }
 
   return fallback;
+}
+
+function withSupportId(msg, resp) {
+  const rid = resp && typeof resp.request_id === "string" ? resp.request_id : "";
+  if (!rid) return msg;
+  // First 8 chars is enough to grep server logs without cluttering the alert.
+  return msg + " (Support ID: " + rid.slice(0, 8) + ")";
 }
 
 // ---------------------------
