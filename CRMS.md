@@ -128,6 +128,32 @@ function scanMyNewCrmContacts(maxContacts) {
 
 ---
 
+### Error handling requirements for every external API call (applies to L3 and any future integration)
+
+**Every server-side call to a third-party API — provider API, OAuth token endpoint, refresh, webhook side-channel — MUST capture the provider's own error text on failure.** Not just the HTTP code. If a customer reports "the extension said [something] failed" and we can only see `status=400` in the logs, we can't diagnose. This was the exact gap that caused the 2026-07-27 incident (LESSONS.md).
+
+**The two required helpers, both in [`server/public/utils.php`](server/public/utils.php):**
+
+1. **`describe_api_failure($info, $rawBody, $decoded)`** — pure function that extracts `status`, provider `message` (from common shapes: `error.message`, `error_description`, `message`, string `error`), PII-redacted decoded `response`, raw `body_snippet` (when JSON decode failed), and `curl_error`. Use its output in your `api_log` payload so every provider failure logs the same structured shape.
+
+2. **`pb_dialsession_or_fail($pat, $payload, $endpointLabel, $extraLog)`** — the specific shortcut for the PB `/dialsession` call path. It composes `describe_api_failure` + `api_log` + `api_error` and surfaces the provider's message to the extension as `pb_message`, which the popup renders in place of the generic wrapper message. Use this for any new dial-session launch endpoint you add.
+
+**When you're calling something other than PB `/dialsession`:**
+
+- If you're using `pb_api_call` — it already stores the raw body at `$info['raw_body']`. Pass `$info`, `$info['raw_body']`, and the decoded response into `describe_api_failure`.
+- If you're using OAuth token exchange — use `http_post_form_info` (not `http_post_form`) so `$info['raw_body']` is populated. See [`oauth_hs_finish.php`](server/public/api/crm/hubspot/oauth_hs_finish.php) / [`oauth_close_finish.php`](server/public/api/crm/close/oauth_close_finish.php) / [`oauth_apollo_finish.php`](server/public/api/crm/apollo/oauth_apollo_finish.php) for the canonical pattern.
+- If you're rolling your own `curl_exec` (e.g. token refresh inside a call logger — see [`close_call_logger.php`](server/public/api/crm/close/close_call_logger.php) and [`apollo_call_logger.php`](server/public/api/crm/apollo/apollo_call_logger.php)) — capture `curl_getinfo`, `curl_error`, and the raw response, put them into `$info` under `http_code` / `curl_error` / `raw_body`, then hand to `describe_api_failure`.
+
+**The api_log call minimally includes:** `status`, `provider_msg`, `response` (or `body_snippet` on decode fail), `curl_error`. Add per-endpoint context (client_id_hash, contact count, refresh vs initial-exchange, etc.) as extra keys — never in place of the four required ones.
+
+**The api_error call minimally includes:** `pb_message` (or a provider-specific message key) in the `extra` array, so the extension's `getErrorMessage` can surface it. Falling back to a generic wrapper is fine; showing the provider's own message where possible is preferred.
+
+**Extension side:** The popup's `getErrorMessage` in [`popup.js`](chrome-extension/popup.js) already prefers `resp.error.pb_message` and appends the first 8 chars of `resp.request_id` as a "Support ID." That path is already wired — you don't need to change it — but if you add a NEW error surface (a different modal, a new status text location), route it through `getErrorMessage` too so the same Support ID trail applies.
+
+**Why this is a rule and not a suggestion:** the failure mode is 6+ months of shallow error handlers copy-pasted across integrations, each one making the eventual customer report untriageable. The 2026-07-27 audit surfaced 6 more sites of the same class before we deployed the first fix. Centralizing on `describe_api_failure` is the guardrail against the next drift.
+
+---
+
 ### Adding L3 Provider (Full API Integration)
 
 **Reference implementations:** HubSpot (`/api/crm/hubspot/`), Close (`/api/crm/close/`), Apollo (`/api/crm/apollo/`).

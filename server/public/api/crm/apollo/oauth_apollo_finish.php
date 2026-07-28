@@ -75,9 +75,11 @@ if (!$apolloClientId || !$apolloClientSecret || !$baseUrl) {
 // Must match oauth_apollo_start.php redirect_uri exactly
 $redirect = rtrim($baseUrl, '/') . '/api/crm/apollo/oauth_apollo_finish.php';
 
-// Exchange code -> tokens (timed)
+// Exchange code -> tokens (timed). http_post_form_info + describe_api_failure
+// captures Apollo's own error text so we can distinguish invalid_code /
+// invalid_client / network timeouts on the failure path.
 $t0 = microtime(true);
-list($status, $resp) = http_post_form(
+list($info, $resp) = http_post_form_info(
     'https://api.apollo.io/api/v1/oauth/token',
     [
         'grant_type'    => 'authorization_code',
@@ -88,12 +90,18 @@ list($status, $resp) = http_post_form(
     ]
 );
 $ms = (int) round((microtime(true) - $t0) * 1000);
+$status = (int)($info['http_code'] ?? 0);
 
 if ($status < 200 || $status >= 300 || !is_array($resp)) {
+    $fail = describe_api_failure($info, $info['raw_body'] ?? '', $resp);
     api_log('apollo_oauth_finish.error.token_exchange_failed', [
         'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'status'         => (int)$status,
+        'status'         => $fail['status'],
         'ms'             => $ms,
+        'provider_msg'   => $fail['message'],
+        'response'       => $fail['response'],
+        'body_snippet'   => $fail['body_snippet'],
+        'curl_error'     => $fail['curl_error'],
     ]);
     apollo_error_page(
         'Apollo OAuth error',

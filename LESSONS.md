@@ -39,6 +39,17 @@ Then Jeff asked the real question: "did we use the untracked playbook, or did we
 
 **Broader lesson — "shallow" error handling is fine at the first callsite, and a debt trap by the sixth.** The threshold for centralizing isn't "does the pattern repeat" — it's "when the pattern next fails, will N copies be N times harder to fix?" For error handlers specifically, the answer is almost always yes: the fix is always "add more context," and adding it to one shared helper is trivially cheaper than to six.
 
+**Follow-through audit (same PR):** before deploying the first fix, Jeff asked "let's confirm this class of bug isn't somewhere else." Ran a codebase-wide sweep for external-API failure paths that discard response body — found 6 more sites in the same PR class:
+
+- Close token refresh in `close_call_logger.php` (HOT path — every long dial session)
+- Apollo token refresh in `apollo_call_logger.php` (HOT path)
+- HubSpot / Close / Apollo OAuth-finish endpoints (setup / reconnect blockers)
+- Apollo API key validation in `save_api_key.php` (already logged a 200-byte hint — deferred, marginal improvement)
+
+Bundled the top 5 into the same PR onto a new pure helper `describe_api_failure($info, $rawBody, $decoded)` in `utils.php`. The helper is now the required entry point for any provider-integration failure log — `pb_dialsession_or_fail` composes it, OAuth-finish endpoints call it, call-logger token-refresh sites call it. CRMS.md gained an "Error handling requirements" section that new CRM integrations must follow, and CLAUDE.md's Security Checklist grew a new mechanical item ("if you added an external API call site, log the provider's error text via describe_api_failure — never just the HTTP code").
+
+**Meta-lesson — when you find one shallow error handler and centralize the fix, sweep for siblings BEFORE deploying.** The audit surfaced 6 more instances in the same class. Deploying the first fix in isolation would have left the same triage cost buried in five other integration points, and each one would eventually cost another customer-report cycle. The audit + bundle turned six future incidents into one PR.
+
 ---
 
 ## 2026-07-22 — HubSpot Task Queue launched only the first 30 of 91 tasks because rows are IntersectionObserver-virtualized

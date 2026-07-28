@@ -491,6 +491,68 @@ function pb_call_dialsession($pat, array $payload) {
 }
 
 /**
+ * Build a structured description of a failed external API call so callers can
+ * log/surface it consistently. Pure function — no side effects.
+ *
+ * REQUIRED for every external API call site (PB, HubSpot, Close, Apollo, OAuth
+ * exchanges, token refreshes) — see CRMS.md "Error handling requirements" and
+ * CLAUDE.md Security Checklist. The point is that when an integration fails,
+ * "what did the provider actually say?" must always be captured — not just the
+ * HTTP code. See LESSONS.md 2026-07-27 for the customer report (Kimberly /
+ * Supervest) where the diagnostic gap cost us a triage cycle.
+ *
+ * $info: curl_getinfo output (optionally augmented with 'raw_body' + 'curl_error').
+ * $rawBody: the raw response string as fetched (or empty).
+ * $decoded: JSON-decoded body if it parsed, or null.
+ *
+ * Returns:
+ *   [
+ *     'status'       => int HTTP code,
+ *     'message'      => string provider's own error message (from common shapes),
+ *     'response'     => array PII-redacted decoded body, or null if unparseable,
+ *     'body_snippet' => string first 500 chars of raw body (only when decode failed),
+ *     'curl_error'   => string network-level error, if any,
+ *   ]
+ */
+function describe_api_failure(?array $info, $rawBody, $decoded): array {
+    $info = $info ?: [];
+    $rawStr = is_string($rawBody) ? $rawBody : '';
+    $bodySnippet = $rawStr !== '' ? substr($rawStr, 0, 500) : '';
+
+    // Provider error text — try common shapes in order of specificity.
+    //   {"error":{"message":"..."}}    — PhoneBurner, some HubSpot endpoints
+    //   {"error_description":"..."}    — OAuth 2.0 spec (HS/Close/Apollo OAuth)
+    //   {"message":"..."}              — HubSpot general
+    //   {"error":"..."}                — Close, some OAuth error responses
+    $message = '';
+    if (is_array($decoded)) {
+        $message = (string)(
+            $decoded['error']['message']
+            ?? $decoded['error_description']
+            ?? $decoded['message']
+            ?? (is_string($decoded['error'] ?? null) ? $decoded['error'] : '')
+        );
+    }
+
+    // redact_pii_recursive lives in api/core/bootstrap.php. Guarded so unit
+    // tests that only load utils.php still resolve the symbol.
+    $responseRedacted = null;
+    if (is_array($decoded) && function_exists('redact_pii_recursive')) {
+        $responseRedacted = redact_pii_recursive($decoded);
+    } elseif (is_array($decoded)) {
+        $responseRedacted = $decoded;
+    }
+
+    return [
+        'status'       => (int)($info['http_code'] ?? 0),
+        'message'      => $message,
+        'response'     => $responseRedacted,
+        'body_snippet' => is_array($decoded) ? '' : $bodySnippet,
+        'curl_error'   => (string)($info['curl_error'] ?? ''),
+    ];
+}
+
+/**
  * Call PhoneBurner /dialsession and, on failure, log + api_error with enough
  * detail to actually diagnose. Returns the decoded response array on success;
  * on failure calls api_error (which exits), so callers don't need to handle
@@ -520,44 +582,18 @@ function pb_dialsession_or_fail(string $pat, array $payload, string $endpointLab
         return $resp;
     }
 
-    // Failure path — capture PB's own error text so we're not triaging blind.
-    $rawBody     = (string)($info['raw_body'] ?? '');
-    $curlError   = (string)($info['curl_error'] ?? '');
-    $bodySnippet = $rawBody !== '' ? substr($rawBody, 0, 500) : '';
-
-    // Try to lift PB's own message field if the body parsed as JSON. Common
-    // PB shapes: {"error":{"message":"..."}} or {"message":"..."} or a bare
-    // {"error":"..."} string. Surfaced to the extension via api_error extras
-    // so the popup can show something specific instead of a generic "failed".
-    $pbMessage = '';
-    if (is_array($resp)) {
-        $pbMessage = (string)(
-            $resp['error']['message']
-            ?? $resp['message']
-            ?? (is_string($resp['error'] ?? null) ? $resp['error'] : '')
-        );
-    }
-
-    // pb_response gets the DECODED body (PII-redacted). pb_body_snippet only
-    // populates if decode failed — that's when the raw text is our only clue.
-    // redact_pii_recursive lives in api/core/bootstrap.php which every endpoint
-    // loads; guarded here so unit tests (which don't load bootstrap.php) still
-    // resolve the symbol.
-    $pbResponseRedacted = null;
-    if (is_array($resp) && function_exists('redact_pii_recursive')) {
-        $pbResponseRedacted = redact_pii_recursive($resp);
-    } elseif (is_array($resp)) {
-        $pbResponseRedacted = $resp;
-    }
+    // Failure path — use the shared descriptor so every provider-integration
+    // failure logs the same structured shape (see describe_api_failure).
+    $fail = describe_api_failure($info, $info['raw_body'] ?? '', $resp);
 
     $logFields = array_merge([
         'endpoint'        => $endpointLabel,
-        'pb_http'         => $httpCode,
+        'pb_http'         => $fail['status'],
         'pb_ms'           => $pb_ms,
-        'pb_message'      => $pbMessage,
-        'pb_response'     => $pbResponseRedacted,
-        'pb_body_snippet' => is_array($resp) ? '' : $bodySnippet,
-        'curl_error'      => $curlError,
+        'pb_message'      => $fail['message'],
+        'pb_response'     => $fail['response'],
+        'pb_body_snippet' => $fail['body_snippet'],
+        'curl_error'      => $fail['curl_error'],
     ], $extraLog);
 
     if (function_exists('api_log')) {
@@ -566,9 +602,9 @@ function pb_dialsession_or_fail(string $pat, array $payload, string $endpointLab
 
     if (function_exists('api_error')) {
         api_error('PhoneBurner dialsession failed', 'pb_error', 502, [
-            'pb_http'    => $httpCode,
+            'pb_http'    => $fail['status'],
             'pb_ms'      => $pb_ms,
-            'pb_message' => $pbMessage ?: null,
+            'pb_message' => $fail['message'] ?: null,
         ]);
     }
 
@@ -892,6 +928,44 @@ function http_post_form($url, array $fields)
     $data   = json_decode($resp, true);
 
     return [$status, $data];
+}
+
+/**
+ * form-urlencoded POST → JSON response, preserving curl $info + raw response
+ * body so callers can pass the tuple to describe_api_failure() on the failure
+ * path. Same URL/timeout/decode behavior as http_post_form; the only
+ * difference is the return shape:
+ *
+ *   [$info, $decoded]   where $info includes ['raw_body' => "..."] and,
+ *                       on network failure, ['curl_error' => "..."] + http_code=0
+ *
+ * Use this for any OAuth token exchange or refresh call — describe_api_failure
+ * pulls the provider's own error text out of the body so a bad_client_id vs
+ * expired_code vs network_timeout is diagnosable from one Loggly line.
+ */
+function http_post_form_info($url, array $fields): array
+{
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($fields));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+
+    $resp = curl_exec($ch);
+    $err  = curl_error($ch);
+    $info = curl_getinfo($ch);
+    curl_close($ch);
+
+    if ($err) {
+        log_msg("http_post_form_info error: $err");
+        return [['curl_error' => $err, 'http_code' => 0, 'raw_body' => ''], null];
+    }
+
+    $info['raw_body'] = is_string($resp) ? $resp : '';
+    $data = json_decode($resp, true);
+
+    return [$info, $data];
 }
 
 
