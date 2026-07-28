@@ -65,19 +65,32 @@ See [TESTING.md](../TESTING.md) for what's covered today, how to run locally, an
 <!--
   REQUIRED for Tier 1 and Tier 2 PRs. Delete this section for Tier 0.
 
-  Argue against your own change. Flip your frame from "help this succeed"
-  to "find the flaw." What's the most likely way this ships wrong?
+  For TIER 1 PRs (and trivial Tier 2s):
+    Argue against your own change. Flip your frame from "help this succeed"
+    to "find the flaw." What's the most likely way this ships wrong?
+    Fill in at least two lines of substantive content — placeholder HTML
+    comments don't count. CI enforces this for Tier 1+.
 
-  Fill in at least two lines of substantive content — placeholder HTML
-  comments don't count. CI enforces this for Tier 1+.
+    Good adversarial questions to answer:
+      - What assumption am I making about the environment that could be wrong?
+      - What edge case did I NOT test?
+      - What upstream code depends on this that I haven't traced?
+      - What happens if my change runs against unexpected input shape?
+      - What if the third-party API/DOM I'm coding against changes?
+      - Compensating factor — why we're proceeding anyway despite the above.
 
-  Examples of good adversarial questions to answer:
-    - What assumption am I making about the environment that could be wrong?
-    - What edge case did I NOT test?
-    - What upstream code depends on this that I haven't traced?
-    - What happens if my change runs against unexpected input shape?
-    - What if the third-party API/DOM I'm coding against changes?
-    - Compensating factor — why we're proceeding anyway despite the above.
+  For TIER 2 PRs (utils.php, bootstrap.php, webhooks, sse.php, OAuth endpoints,
+  *_call_logger.php, SECURITY.md, config.sample.php):
+    Self-review is NOT sufficient. Run the full playbook at
+    /ADVERSARIAL_REVIEW_PLAYBOOK.md — spawn multiple parallel hostile
+    reviewers with diverse lenses (security / data-integrity / silent-failure
+    / fix-quality), adjudicate every finding against the live branch,
+    resolve BLOCKERs and MAJORs before merge. Paste the adjudicated
+    findings table here (severity, reviewer, status, resolution).
+
+    Why: on 2026-07-27, self-review missed a BLOCKER on a Tier-2 PR that
+    two independent hostile lenses caught in 15 minutes. LESSONS.md has
+    the full incident.
 -->
 
 ## Post-Deploy Verification
