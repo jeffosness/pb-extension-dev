@@ -71,8 +71,10 @@ function getErrorMessage(resp, fallback = "An error occurred") {
 function withSupportId(msg, resp) {
   const rid = resp && typeof resp.request_id === "string" ? resp.request_id : "";
   if (!rid) return msg;
-  // First 8 chars is enough to grep server logs without cluttering the alert.
-  return msg + " (Support ID: " + rid.slice(0, 8) + ")";
+  // 12 chars is enough to grep server logs (48-bit space; birthday-safe at
+  // ~16M events) without cluttering the alert. 8 chars was too collision-prone
+  // (32-bit space; ~65k events).
+  return msg + " (Support ID: " + rid.slice(0, 12) + ")";
 }
 
 // ---------------------------

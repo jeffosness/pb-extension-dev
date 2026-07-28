@@ -50,6 +50,19 @@ Bundled the top 5 into the same PR onto a new pure helper `describe_api_failure(
 
 **Meta-lesson — when you find one shallow error handler and centralize the fix, sweep for siblings BEFORE deploying.** The audit surfaced 6 more instances in the same class. Deploying the first fix in isolation would have left the same triage cost buried in five other integration points, and each one would eventually cost another customer-report cycle. The audit + bundle turned six future incidents into one PR.
 
+**Meta-meta-lesson — the audit ITSELF missed three sites, which four hostile reviewers caught before deploy.** After Jeff asked for adversarial review on this Tier-2 PR, we ran four parallel hostile passes with diverse lenses (security / data-integrity / silent-failure / fix-quality) per [ADVERSARIAL_REVIEW_PLAYBOOK](ADVERSARIAL_REVIEW_PLAYBOOK%20\(1\).md). Two of them converged independently on a BLOCKER (dangling `$pb_ms` / `$httpCode` variables in every refactored endpoint — the refactor removed the assignments but left ~21 downstream references, silently breaking latency telemetry and emitting PHP-8 warnings on every success path). One reviewer escalated a MAJOR: three MORE token-refresh helpers in `hs_helpers.php` / `close_helpers.php` / `apollo_helpers.php` still used the old `http_post_form` and logged only HTTP codes on failure. These are HOT paths — fire on every dial-session launch when a token is stale — and my "sweep" had missed them because it grep'd for `curl_exec` in call loggers but not `http_post_form` in the shared helpers. A separate MAJOR: `body_snippet` was unredacted, so a hypothetical 200-OK + JSON-parse-failure path could land raw access tokens in Loggly.
+
+What the hostile pass added, that solo review missed:
+- **BLOCKER:** 21 dangling variable references across 7 endpoints (two reviewers converged).
+- **MAJOR:** 3 sibling refresh helpers still un-instrumented (fix-quality lens).
+- **MAJOR:** `body_snippet` OAuth token scrub (security lens).
+- **MINOR:** 8-char Support ID collision-prone at scale.
+- **MINOR:** `describe_api_failure` signature had redundant `$rawBody` param.
+
+The deeper lesson: **documentation-as-guardrail is aspirational without a mechanical enforcement counterpart.** CLAUDE.md's checklist now says "if you added an external API call site, log via describe_api_failure" — and yet the PR that established that rule violated it in three places. Same failure mode as LESSONS 2026-07-09 (whitelist checklist item hit a repeat). Next time we hit a class-of-failure repeat like this, the fix isn't another checklist item; it's a CI grep check that fails PRs introducing `curl_exec` / `http_post_form` / etc. without a same-PR reference to `describe_api_failure`. Tracked as follow-up.
+
+Concretely for future adversarial reviews: this session followed the playbook end-to-end (four diverse lenses, evidence-required, adjudicate-before-report). The BLOCKER was caught because the "data-integrity" and "silent-failure" reviewers both grep'd for undefined-variable references — a mechanical check my solo review never ran. **When the stakes are Tier 2+, always run the playbook. It caught more real bugs in 15 minutes of parallel work than my self-review could have caught in an hour.**
+
 ---
 
 ## 2026-07-22 — HubSpot Task Queue launched only the first 30 of 91 tasks because rows are IntersectionObserver-virtualized

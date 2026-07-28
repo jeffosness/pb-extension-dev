@@ -31,8 +31,13 @@ function close_refresh_access_token_or_fail(string $client_id, array $tokens): a
     api_error('Close token expired and no refresh_token is available. Please reconnect Close.', 'unauthorized', 401);
   }
 
+  // http_post_form_info + describe_api_failure so a failed refresh captures
+  // Close's own error text (e.g. "invalid_grant"), not just an HTTP code.
+  // This helper fires on every dial-session launch when the access token is
+  // stale — hot path for un-triageable customer reports. See LESSONS.md
+  // 2026-07-27 for the class of gap this closes.
   $t0 = microtime(true);
-  list($status, $resp) = http_post_form(
+  list($info, $resp) = http_post_form_info(
     'https://api.close.com/oauth2/token/',
     [
       'grant_type'    => 'refresh_token',
@@ -42,12 +47,18 @@ function close_refresh_access_token_or_fail(string $client_id, array $tokens): a
     ]
   );
   $ms = (int) round((microtime(true) - $t0) * 1000);
+  $status = (int)($info['http_code'] ?? 0);
 
   if ($status < 200 || $status >= 300 || !is_array($resp)) {
+    $fail = describe_api_failure($info, $resp);
     api_log('close_refresh.error', [
       'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-      'status' => (int)$status,
-      'ms' => $ms,
+      'status'         => $fail['status'],
+      'ms'             => $ms,
+      'provider_msg'   => $fail['message'],
+      'response'       => $fail['response'],
+      'body_snippet'   => $fail['body_snippet'],
+      'curl_error'     => $fail['curl_error'],
     ]);
     api_error('Close token refresh failed. Please reconnect Close.', 'unauthorized', 401);
   }

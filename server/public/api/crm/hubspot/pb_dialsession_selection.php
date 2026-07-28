@@ -314,10 +314,15 @@ $payload = [
 
 // Call PhoneBurner. Shared helper handles logging + api_error on failure,
 // including capturing PB's response body so support can triage the failure.
-$resp = pb_dialsession_or_fail($pat, $payload, 'hs_selection', [
+// Returns {response, pb_ms, pb_http} on success — pb_ms + pb_http feed the
+// downstream api_log/api_ok_flat breadcrumbs.
+$pbResult = pb_dialsession_or_fail($pat, $payload, 'hs_selection', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'contact_count'  => count($pbContacts),
 ]);
+$resp    = $pbResult['response'];
+$pb_ms   = $pbResult['pb_ms'];
+$pb_http = $pbResult['pb_http'];
 
 // -------------------------
 // Extract launch URL (match dialsession_from_scan.php)
@@ -345,7 +350,7 @@ if (!$launch_url) {
   api_log('hubspot_selection.error.no_launch_url', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'pb_ms'          => $pb_ms,
-    'pb_http'        => $httpCode,
+    'pb_http'        => $pb_http,
     'resp_keys'      => is_array($resp) ? array_slice(array_keys($resp), 0, 30) : null,
     'has_dialsessions' => isset($resp['dialsessions']),
   ]);

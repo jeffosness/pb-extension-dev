@@ -165,11 +165,14 @@ $payload = [
 // -------------------------
 // Call PhoneBurner via shared helper (captures response body + logs details)
 // -------------------------
-$resp = pb_dialsession_or_fail($pat, $payload, 'generic_scan', [
+$pbResult = pb_dialsession_or_fail($pat, $payload, 'generic_scan', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'crm_name'       => $crmName,
     'contact_count'  => count($pbContacts),
 ]);
+$resp    = $pbResult['response'];
+$pb_ms   = $pbResult['pb_ms'];
+$pb_http = $pbResult['pb_http'];
 
 $launch_url = $resp['dialsessions']['redirect_url'] ?? null;
 $dial_id    = $resp['dialsessions']['id'] ?? null;

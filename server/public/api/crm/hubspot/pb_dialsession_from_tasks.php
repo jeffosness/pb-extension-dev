@@ -298,10 +298,13 @@ $payload = [
   ],
 ];
 
-$resp = pb_dialsession_or_fail($pat, $payload, 'hs_tasks', [
+$pbResult = pb_dialsession_or_fail($pat, $payload, 'hs_tasks', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'contact_count'  => count($pbContacts),
 ]);
+$resp    = $pbResult['response'];
+$pb_ms   = $pbResult['pb_ms'];
+$pb_http = $pbResult['pb_http'];
 
 // -----------------------------------------------------------------------------
 // Extract launch URL (mirrors the resilient pattern used by other endpoints)
@@ -324,7 +327,7 @@ if (!$launch_url) {
   api_log('hubspot_tasks_dial.error.no_launch_url', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'pb_ms'          => $pb_ms,
-    'pb_http'        => $httpCode,
+    'pb_http'        => $pb_http,
     'resp_keys'      => is_array($resp) ? array_slice(array_keys($resp), 0, 30) : null,
   ]);
   api_error('PhoneBurner response missing launch URL', 'pb_error', 502, [

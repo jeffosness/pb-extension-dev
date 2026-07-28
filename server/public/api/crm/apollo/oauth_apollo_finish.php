@@ -93,7 +93,7 @@ $ms = (int) round((microtime(true) - $t0) * 1000);
 $status = (int)($info['http_code'] ?? 0);
 
 if ($status < 200 || $status >= 300 || !is_array($resp)) {
-    $fail = describe_api_failure($info, $info['raw_body'] ?? '', $resp);
+    $fail = describe_api_failure($info, $resp);
     api_log('apollo_oauth_finish.error.token_exchange_failed', [
         'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
         'status'         => $fail['status'],
