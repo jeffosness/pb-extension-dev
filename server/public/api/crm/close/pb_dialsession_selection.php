@@ -61,20 +61,24 @@ if (empty($contactIds) && empty($leadIds)) {
 // -----------------------------------------------------------------------------
 // If we have lead IDs (from /leads/ page), resolve to contact IDs via Close API
 // -----------------------------------------------------------------------------
+$leadResolveFail = 0;
+$leadResolveLastHttp = null;
 if (!empty($leadIds) && empty($contactIds)) {
   $resolvedContactIds = [];
   foreach ($leadIds as $lid) {
     if (count($resolvedContactIds) >= 500) break;
 
     $url = 'https://api.close.com/api/v1/contact/?lead_id=' . rawurlencode($lid);
-    list($code, $json, $_raw) = close_api_get_json($accessToken, $url);
+    list($code, $json, $raw) = close_api_get_json($accessToken, $url);
 
     // Retry once on 401
     if ($code === 401) {
       $closeTokens = close_refresh_access_token_or_fail($client_id, $closeTokens);
       $accessToken = (string)($closeTokens['access_token'] ?? '');
-      list($code, $json, $_raw) = close_api_get_json($accessToken, $url);
+      list($code, $json, $raw) = close_api_get_json($accessToken, $url);
     }
+
+    $leadResolveLastHttp = $code;
 
     if ($code === 200 && is_array($json) && isset($json['data'])) {
       foreach ($json['data'] as $contact) {
@@ -83,14 +87,36 @@ if (!empty($leadIds) && empty($contactIds)) {
           $resolvedContactIds[] = $cid;
         }
       }
+    } else {
+      // Log the first per-batch failure to capture Close's own error text;
+      // an end-of-loop summary below captures total scope. Prior audits
+      // missed this site — sweep-N-missed-sites pattern.
+      if ($leadResolveFail === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'close_lead_to_contact.per_lead_failed', [
+          'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+          'lead_id_sample' => (string)$lid,
+        ]);
+      }
+      $leadResolveFail++;
     }
   }
   $contactIds = $resolvedContactIds;
+
+  if ($leadResolveFail > 0) {
+    _pb_write_api_log('close_lead_to_contact.batch_summary', [
+      'ok'        => count($resolvedContactIds),
+      'fail'      => $leadResolveFail,
+      'last_http' => $leadResolveLastHttp,
+      'total'     => count($leadIds),
+    ]);
+  }
 }
 
 if (empty($contactIds)) {
   api_error('No contacts found for the selected leads', 'bad_request', 400, [
     'lead_ids_provided' => count($leadIds),
+    'lead_resolve_fail' => $leadResolveFail,
+    'last_http'         => $leadResolveLastHttp,
   ]);
 }
 

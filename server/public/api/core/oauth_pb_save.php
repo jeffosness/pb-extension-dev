@@ -27,20 +27,27 @@ $validateMs    = (int) round((microtime(true) - $startValidate) * 1000);
 
 // If curl failed or we didn't get a 200, treat this as a PAT error
 if (!$info || ($info['http_code'] ?? 0) !== 200 || !isset($body['members']['members'])) {
-    $details = 'Unable to validate PAT with PhoneBurner.';
-    if (is_array($body) && isset($body['error'])) {
-        $details = (string)$body['error'];
-    }
+    // describe_api_failure captures PB's own error text (e.g. "Invalid PAT",
+    // "Account disabled", "Rate limit exceeded") — not just an HTTP code.
+    // This endpoint fires on every customer's PAT setup; without capture the
+    // customer's Support ID in a report is un-triageable. See LESSONS.md
+    // 2026-08-02 for the incident that surfaced this gap.
+    $fail = describe_api_failure($info, $body);
 
     api_log('oauth_pb_save.reject.pat_validation_failed', [
         'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'http_code'      => $info['http_code'] ?? null,
+        'status'         => $fail['status'],
         'validate_ms'    => $validateMs,
+        'provider_msg'   => $fail['message'],
+        'response'       => $fail['response'],
+        'body_snippet'   => $fail['body_snippet'],
+        'curl_error'     => $fail['curl_error'],
         // never log $pat
     ]);
 
     api_error('PAT validation failed', 'pat_invalid', 400, [
-        'details' => $details,
+        'details'    => $fail['message'] ?: 'Unable to validate PAT with PhoneBurner.',
+        'pb_message' => $fail['message'] ?: null,
     ]);
 }
 

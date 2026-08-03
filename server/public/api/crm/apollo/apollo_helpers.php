@@ -250,6 +250,13 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
       $diag['contacts_fetch']['last_http'] = $code;
 
       if ($code !== 200 || !is_array($json)) {
+        // Log the FIRST per-batch failure only (avoid log spam on outage).
+        if (($diag['contacts_fetch']['fail'] ?? 0) === 0) {
+          log_api_failure_from_tuple($code, $json, $raw, 'apollo_fetch_contacts.per_record_failed', [
+            'auth_type'         => $authType,
+            'contact_id_sample' => (string)$cid,
+          ]);
+        }
         $diag['contacts_fetch']['fail']++;
         $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 500) : null;
         continue;
@@ -274,6 +281,12 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
       $diag['contacts_fetch']['last_http'] = $code;
 
       if ($code !== 200 || !is_array($json)) {
+        if (($diag['contacts_fetch']['fail'] ?? 0) === 0) {
+          log_api_failure_from_tuple($code, $json, $raw, 'apollo_fetch_contacts.batch_failed', [
+            'auth_type'  => $authType,
+            'batch_size' => count($batch),
+          ]);
+        }
         $diag['contacts_fetch']['fail'] += count($batch);
         $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 500) : null;
         continue;
@@ -286,6 +299,16 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
         $diag['contacts_fetch']['ok']++;
       }
     }
+  }
+
+  if (($diag['contacts_fetch']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('apollo_fetch_contacts.batch_summary', [
+      'ok'        => $diag['contacts_fetch']['ok'],
+      'fail'      => $diag['contacts_fetch']['fail'],
+      'last_http' => $diag['contacts_fetch']['last_http'],
+      'total'     => count($contactIds),
+      'auth_type' => $authType,
+    ]);
   }
 
   return $contacts;

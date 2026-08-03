@@ -53,24 +53,31 @@ while ($page <= $maxPages) {
     'page'          => $page,
   ];
 
-  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+  list($code, $json, $raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
 
   // Retry once on 401 (first page only)
   if ($code === 401 && $page === 1) {
     $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
     $accessToken = (string)($tokens['access_token'] ?? '');
-    list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+    list($code, $json, $raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
   }
 
   if ($code !== 200 || !is_array($json)) {
     // If first page fails, error out. Otherwise use what we have.
     if ($page === 1) {
-      api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
-        'http_code'      => $code,
+      $fail = log_api_failure_from_tuple($code, $json, $raw, 'apollo_sequence_tasks.fetch_failed', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
         'sequence_id'    => $sequenceId,
         'filter'         => $filter,
         'auth_type'      => $authType,
-        'raw_preview'    => is_string($_raw) ? substr($_raw, 0, 500) : null,
+        'page'           => $page,
+      ]);
+      api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
+        'http_code'   => $code,
+        'sequence_id' => $sequenceId,
+        'filter'      => $filter,
+        'auth_type'   => $authType,
+        'pb_message'  => $fail['message'] ?: null,
       ]);
     }
     break;

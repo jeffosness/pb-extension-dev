@@ -162,10 +162,16 @@ function close_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [
   foreach ($contactIds as $cid) {
     $url = 'https://api.close.com/api/v1/contact/' . rawurlencode($cid) . '/';
 
-    list($code, $json, $_raw) = close_api_get_json($accessToken, $url);
+    list($code, $json, $raw) = close_api_get_json($accessToken, $url);
     $diag['contacts_fetch']['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
+      // Log the FIRST per-batch failure only (avoid log spam on outage).
+      if (($diag['contacts_fetch']['fail'] ?? 0) === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'close_fetch_contacts.per_record_failed', [
+          'contact_id_sample' => (string)$cid,
+        ]);
+      }
       $diag['contacts_fetch']['fail']++;
       continue;
     }
@@ -218,6 +224,15 @@ function close_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [
       'additional_phones' => $additionalPhones,
     ];
     $diag['contacts_fetch']['ok']++;
+  }
+
+  if (($diag['contacts_fetch']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('close_fetch_contacts.batch_summary', [
+      'ok'        => $diag['contacts_fetch']['ok'],
+      'fail'      => $diag['contacts_fetch']['fail'],
+      'last_http' => $diag['contacts_fetch']['last_http'],
+      'total'     => count($contactIds),
+    ]);
   }
 
   return $contacts;

@@ -56,20 +56,19 @@ foreach ($objectTypes as $objectTypeId => $objectTypeName) {
     $searchBody['query'] = $query;
   }
 
-  list($code, $json, $_raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', $searchBody);
+  list($code, $json, $raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', $searchBody);
 
   // Retry once on 401
   if ($code === 401) {
     $hs = hs_refresh_access_token_or_fail($client_id, $hs);
     $hsAccess = (string)($hs['access_token'] ?? '');
-    list($code, $json, $_raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', $searchBody);
+    list($code, $json, $raw) = hs_api_post_json($hsAccess, 'https://api.hubapi.com/crm/v3/lists/search', $searchBody);
   }
 
   if ($code !== 200 || !is_array($json) || !isset($json['lists'])) {
-    api_log('hs_lists.search_fail', [
+    log_api_failure_from_tuple($code, $json, $raw, 'hs_lists.search_fail', [
       'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
       'object_type'    => $objectTypeName,
-      'http_code'      => $code,
     ]);
     continue; // Skip this object type but don't fail entirely
   }

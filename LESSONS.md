@@ -6,6 +6,34 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-08-02 — Diagnostic instrumentation took FOUR sweeps to close; the pattern is now formally named
+
+**What happened:** Jeff local-tested v0.8.4 on dev after PR #190 merged, hit an OAuth `PAT validation failed` error, screenshot showed the new Support ID (`6893d68645a5`), SSHed into the dev VPS, grepped `/opt/pb-extension-dev/var/log/api.log`, found the entry — and it was **still shallow**. The `oauth_pb_save.php` endpoint had never been in any of the three prior audit sweeps for shallow error handlers (the initial PR #190 sweep, the audit-sweep follow-up, and the adversarial review of that follow-up). Fourth sweep started with a proper full audit (an Explore agent enumerating every callsite of `pb_api_call` / `http_post_form_info` / `curl_exec` / all provider-specific helpers). Found 15 more sites. Instrumented all of them. Ran the adversarial-review playbook. Two hostile reviewers converged on THREE more sites the fourth sweep still missed:
+
+1. `apollo/pb_dialsession_from_tasks.php` (BLOCKER — mirror of `apollo_sequence_tasks.php` which the fourth sweep DID fix)
+2. `hubspot/pb_dialsession_from_list.php` (MAJOR — HubSpot list-membership fetch)
+3. `hs_helpers.php` — `hs_fetch_tasks_by_ids` batches, `hs_discover_phone_properties`, `hs_resolve_contact_ids_map_from_objects` (MAJOR × 3)
+
+**Plus a NEW BLOCKER the reviewers surfaced:** direct `api_log(...)` calls in `close_call_logger.php:92` and `apollo_call_logger.php:89` (introduced in PR #190) would fatal-error in the webhook context because webhooks intentionally don't load `bootstrap.php` (they avoid its HTTP-response setup). The bug lay dormant only because no Close/Apollo token had needed refresh during a webhook fire in the dev soak window. My new `log_api_failure_from_tuple` had a `function_exists('api_log')` guard — but that made the log entries silently no-op in webhook context, meaning the entire hs_call_logger diagnostic capture was dead code.
+
+Then a fix-verification (playbook step 7) hostile review surfaced ANOTHER three MAJORs: missing batch-summary for `hs_fetch_tasks_by_ids`, missing instrumentation on `close/pb_dialsession_selection.php` lead→contact resolution, and no PII redaction in the webhook-context fallback of `_pb_write_api_log` (a latent leak vector for future callers).
+
+**Total sites instrumented by the time the class was closed: 24. Sites the initial audit found: 15. Sites the four sweeps collectively missed (later caught by adversarial review): 9. Ratio of hostile-review catches to solo-audit catches: 9:15.**
+
+**Why we kept missing:** Every solo audit had the same failure mode — grep-based enumeration missed patterns that don't match the grep. The initial audit grepped for `pb_api_call` and missed `http_post_form_info`. The follow-up audit added `http_post_form_info` and missed the `list($code, $json, $_raw)` throw-away idiom used by the provider-specific helpers (`hs_api_get_json`, etc.). The fourth-sweep Explore-agent audit covered all those and STILL missed the two customer-facing dial-session launch paths (`apollo/pb_dialsession_from_tasks.php`, `hubspot/pb_dialsession_from_list.php`) — because those files USE `pb_dialsession_or_fail` for the PB call and the audit noted them as "already covered" — while their preceding provider-fetch calls (before the PB call) were shallow.
+
+**Process change — this class of failure needs a CI check, not another audit:**
+
+1. **New CI workflow (follow-up PR):** grep-based lint that fails any PR introducing `list(\$code,\s*\$json,\s*\$_?raw)` or `curl_exec\(` without a same-PR reference to `describe_api_failure` / `log_api_failure_from_tuple` in the diff. Every prior sweep would have caught its own misses with this check. Tracked as the immediate follow-up.
+
+2. **CRMS.md** already documents the required helpers with the exact patterns to copy. The pattern doc is only useful when contributors USE it, but with the CI check enforcing "if you touched an external-API failure branch, you must have touched the helper" it becomes mechanical.
+
+**Meta-lesson: after N sweeps, if the class keeps producing new instances, stop sweeping and add a mechanical check.** The 2026-07-09 LESSONS entry made the same argument for the token-whitelist class. Same argument applies here. Documentation guardrails on their own aren't enough; the four-sweep evidence is now on the record.
+
+**Broader lesson — the fix-verification review (playbook step 7) caught a NEW BLOCKER the initial adversarial pass had introduced.** The fix for the original BLOCKER (dangling `$pb_ms` refs) landed cleanly. But the fix's fix — adding a webhook-safe `_pb_write_api_log` — introduced its own PII-leak vector that only a re-review caught. Step 7 of the playbook exists for exactly this. Don't skip it, even when the primary review already reported findings.
+
+---
+
 ## 2026-07-28 — Our "adversarial review" gate was a documentation prompt, not a hostile-review process
 
 **What happened:** During the 2026-07-27 diagnostic-capture PR (Tier 2, touches `utils.php`), Jeff asked me to "take another couple of passes on this to ensure we are doing this right and secure" before deploying. I ran the process from the untracked `ADVERSARIAL_REVIEW_PLAYBOOK (1).md` file — four parallel hostile reviewers with diverse lenses (security / data-integrity / silent-failure / fix-quality), evidence-required, adjudicate against live code. Two reviewers converged independently on a BLOCKER (dangling `$pb_ms` / `$httpCode` refs across all 7 refactored endpoints, silently breaking latency telemetry and emitting PHP-8 warnings on every success path). A third escalated a MAJOR: three additional sibling refresh helpers were still unfixed. All confirmed by adjudication. Fixed pre-merge.

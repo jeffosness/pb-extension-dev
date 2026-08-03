@@ -580,6 +580,140 @@ function describe_api_failure(?array $info, $decoded): array {
 }
 
 /**
+ * PII-redaction fallback for the webhook context. bootstrap.php defines the
+ * canonical redact_pii_recursive; when webhooks (which don't load bootstrap)
+ * need to scrub before logging, they use this. Kept in sync with bootstrap's
+ * version — if you extend the deny lists, extend BOTH. See LESSONS.md
+ * 2026-08-02 for the incident: adversarial re-review caught that the webhook
+ * fallback of `_pb_write_api_log` was writing unredacted data to Loggly.
+ *
+ * Guarded by `function_exists` so endpoints that already loaded bootstrap
+ * (endpoint context) keep their canonical version. Webhook-only loads get
+ * this fallback defined instead.
+ */
+if (!function_exists('redact_pii_recursive')) {
+    function redact_pii_recursive(array $data): array {
+        $denyPatterns = [
+            '/^.*email.*$/i',
+            '/^.*phone.*$/i',
+            '/^.*token.*$/i',
+            '/^.*password.*$/i',
+            '/^.*secret.*$/i',
+            '/^.*auth.*$/i',
+            '/^.*(paypal|credit|card).*$/i',
+            '/^.*(first_name|last_name|full_name|contact_name)$/i',
+            '/^.*crm_identifier.*$/i',
+        ];
+        $denyKeys = ['payload', 'contacts', 'response_body', 'request_body'];
+
+        array_walk_recursive($data, function (&$value, $key) use ($denyPatterns, $denyKeys) {
+            if (in_array($key, $denyKeys, true)) {
+                $value = '[REDACTED]';
+                return;
+            }
+            foreach ($denyPatterns as $pattern) {
+                if (preg_match($pattern, (string)$key)) {
+                    $value = '[REDACTED]';
+                    return;
+                }
+            }
+        });
+        return $data;
+    }
+}
+
+/**
+ * Webhook-safe api_log fallback. Writes a JSON line to the same api.log file
+ * bootstrap.php's api_log writes to, so support can grep by Support ID from
+ * ANY context (endpoint or webhook). Callable when bootstrap.php isn't loaded
+ * — webhooks (call_done.php, softphone_call_done.php) intentionally avoid
+ * bootstrap.php's HTTP-response setup, so functions defined there (api_log,
+ * redact_pii_recursive) aren't available.
+ *
+ * See LESSONS.md 2026-08-02 for the incident that surfaced this — direct
+ * api_log() calls in the call-logger token-refresh path (PR #190) would have
+ * fatal-errored the moment a webhook fired during token expiry. The bug lay
+ * dormant because no Close/Apollo token happened to need refresh during a
+ * webhook fire in the dev soak window. Caught by adversarial review before
+ * prod, but the class needs the fallback below to actually close.
+ */
+function _pb_write_api_log(string $event, array $fields): void {
+    // Prefer bootstrap.php's api_log if loaded (endpoint context) — same
+    // shape, same file, plus the request_id/duration wired via bootstrap's
+    // globals. bootstrap.php's api_log redacts internally.
+    if (function_exists('api_log')) {
+        api_log($event, $fields);
+        return;
+    }
+
+    // Fallback path — no bootstrap loaded. Mirror bootstrap.php's file
+    // destination, JSON shape, AND redaction so entries land uniformly for
+    // Support-ID grep. redact_pii_recursive is conditionally defined above
+    // for exactly this case. Path calc: utils.php is at server/public/,
+    // dirname(__DIR__, 2) = repo root, matches bootstrap.php's dirname(__DIR__, 4).
+    $fields = redact_pii_recursive($fields);
+
+    $logDir = defined('PB_LOG_DIR')
+        ? PB_LOG_DIR
+        : (dirname(__DIR__, 2) . '/var/log');
+    $logFile = rtrim($logDir, '/\\') . '/api.log';
+    if (!is_dir($logDir)) @mkdir($logDir, 0770, true);
+
+    global $REQUEST_ID, $START_TS;
+    $base = [
+        'ts'          => date('c'),
+        'request_id'  => $REQUEST_ID ?? null,
+        'event'       => $event,
+        'duration_ms' => isset($START_TS) ? (int) round((microtime(true) - $START_TS) * 1000) : null,
+        'ip'          => $_SERVER['REMOTE_ADDR'] ?? null,
+        'method'      => $_SERVER['REQUEST_METHOD'] ?? null,
+        'path'        => $_SERVER['REQUEST_URI'] ?? null,
+    ];
+    $line = json_encode($base + $fields, JSON_UNESCAPED_SLASHES) . PHP_EOL;
+    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+}
+
+/**
+ * Log a structured api_log entry for a failed external-API call, given the
+ * [$code, $json, $raw] tuple shape that provider helpers like hs_api_get_json,
+ * close_api_get_json, and apollo_api_post_json return. Thin wrapper around
+ * describe_api_failure that constructs the $info shape it expects.
+ *
+ * Use at any callsite that receives a [$code, $json, $raw] tuple from a
+ * provider helper — e.g.:
+ *
+ *   list($code, $json, $raw) = hs_api_get_json($access, $url);
+ *   if ($code !== 200) {
+ *     log_api_failure_from_tuple($code, $json, $raw, 'hs_lists.fetch_failed', [
+ *       'client_id_hash' => $hash,
+ *       'list_id'        => $listId,
+ *     ]);
+ *     api_error('Failed to load HubSpot list', 'hs_error', 502);
+ *   }
+ *
+ * The api_log entry always includes status + provider_msg + response +
+ * body_snippet + curl_error alongside any per-callsite context in $extra.
+ * See LESSONS.md 2026-07-27 and 2026-08-02 for the class of gap this closes.
+ */
+function log_api_failure_from_tuple(int $code, $json, $raw, string $event, array $extra = []): array {
+    $info = [
+        'http_code' => $code,
+        'raw_body'  => is_string($raw) ? $raw : '',
+    ];
+    $fail = describe_api_failure($info, $json);
+    _pb_write_api_log($event, array_merge([
+        'status'       => $fail['status'],
+        'provider_msg' => $fail['message'],
+        'response'     => $fail['response'],
+        'body_snippet' => $fail['body_snippet'],
+        'curl_error'   => $fail['curl_error'],
+    ], $extra));
+    // Return $fail so callers can reuse it for api_error extras
+    // (pb_message) without re-invoking describe_api_failure.
+    return $fail;
+}
+
+/**
  * Call PhoneBurner /dialsession and, on failure, log + api_error with enough
  * detail to actually diagnose. On success returns a tuple:
  *

@@ -85,8 +85,11 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
                 // Capture Apollo's own error text (e.g. "invalid_grant") so a
                 // failed session doesn't reduce to "http=400" in the log.
                 // This is a hot path — every long dial session refreshes here.
+                // Route through _pb_write_api_log so this works in the webhook
+                // context (which doesn't load bootstrap.php — api_log would
+                // fatal-error). See LESSONS.md 2026-08-02.
                 $fail = describe_api_failure($refreshInfo, $refreshResp);
-                api_log('apollo_call_log_token_refresh.error', [
+                _pb_write_api_log('apollo_call_log_token_refresh.error', [
                     'status'       => $fail['status'],
                     'provider_msg' => $fail['message'],
                     'response'     => $fail['response'],

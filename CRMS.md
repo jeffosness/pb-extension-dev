@@ -134,9 +134,22 @@ function scanMyNewCrmContacts(maxContacts) {
 
 **The two required helpers, both in [`server/public/utils.php`](server/public/utils.php):**
 
-1. **`describe_api_failure($info, $rawBody, $decoded)`** — pure function that extracts `status`, provider `message` (from common shapes: `error.message`, `error_description`, `message`, string `error`), PII-redacted decoded `response`, raw `body_snippet` (when JSON decode failed), and `curl_error`. Use its output in your `api_log` payload so every provider failure logs the same structured shape.
+1. **`describe_api_failure($info, $decoded)`** — pure function that extracts `status`, provider `message` (from common shapes: `error.message`, `error_description`, `message`, string `error`), PII-redacted decoded `response`, raw `body_snippet` (when JSON decode failed, with OAuth token patterns scrubbed), and `curl_error`. Use its output in your `api_log` payload so every provider failure logs the same structured shape.
 
-2. **`pb_dialsession_or_fail($pat, $payload, $endpointLabel, $extraLog)`** — the specific shortcut for the PB `/dialsession` call path. It composes `describe_api_failure` + `api_log` + `api_error` and surfaces the provider's message to the extension as `pb_message`, which the popup renders in place of the generic wrapper message. Use this for any new dial-session launch endpoint you add.
+2. **`log_api_failure_from_tuple($code, $json, $raw, $event, $extra)`** — one-line wrapper for the common `list($code, $json, $raw) = hs_api_get_json(...)` / `close_api_get_json(...)` / `apollo_api_post_json(...)` tuple return. Builds `$info` from the tuple, calls `describe_api_failure`, then logs via `_pb_write_api_log` (which works in both endpoint AND webhook contexts). **Returns the `$fail` array** so callers can reuse it for `api_error` extras without re-invoking `describe_api_failure`. Standard pattern at the failure branch:
+
+   ```php
+   $fail = log_api_failure_from_tuple($code, $json, $raw, 'my_endpoint.fetch_failed', [
+       'client_id_hash' => $hash,
+   ]);
+   api_error('Failed to fetch data', 'api_error', 502, [
+       'pb_message' => $fail['message'] ?: null,
+   ]);
+   ```
+
+3. **`pb_dialsession_or_fail($pat, $payload, $endpointLabel, $extraLog)`** — the specific shortcut for the PB `/dialsession` call path. It composes `describe_api_failure` + `api_log` + `api_error` and surfaces the provider's message to the extension as `pb_message`, which the popup renders in place of the generic wrapper message. Use this for any new dial-session launch endpoint you add.
+
+4. **`_pb_write_api_log($event, $fields)`** — logs to the same api.log destination bootstrap.php's `api_log` writes to, but works in **any** context (endpoint or webhook). Webhook handlers (`call_done.php`, `softphone_call_done.php`) intentionally avoid loading bootstrap.php to preserve their response-cycle behavior, so direct `api_log()` calls from webhook-invoked code (call loggers, etc.) fatal-error. Use `_pb_write_api_log` from anywhere that might run in a webhook context. `log_api_failure_from_tuple` already routes through it — you rarely need to call it directly.
 
 **When you're calling something other than PB `/dialsession`:**
 

@@ -113,13 +113,13 @@ while (count($memberIds) < PB_MAX_CONTACTS) {
     $url .= '&after=' . rawurlencode($after);
   }
 
-  list($code, $json, $_raw) = hs_api_get_json($hsAccess, $url);
+  list($code, $json, $raw) = hs_api_get_json($hsAccess, $url);
 
   // Retry once on 401
   if ($code === 401) {
     $hs = hs_refresh_access_token_or_fail($client_id, $hs);
     $hsAccess = (string)($hs['access_token'] ?? '');
-    list($code, $json, $_raw) = hs_api_get_json($hsAccess, $url);
+    list($code, $json, $raw) = hs_api_get_json($hsAccess, $url);
   }
 
   if ($code === 404) {
@@ -127,14 +127,14 @@ while (count($memberIds) < PB_MAX_CONTACTS) {
   }
 
   if ($code !== 200 || !is_array($json)) {
-    api_log('hs_list_members.fetch_fail', [
+    $fail = log_api_failure_from_tuple($code, $json, $raw, 'hs_list_members.fetch_fail', [
       'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
       'list_id'        => $listId,
-      'http_code'      => $code,
       'page'           => $totalFetched,
     ]);
     api_error('Failed to fetch list memberships from HubSpot', 'hs_error', 502, [
-      'http_code' => $code,
+      'http_code'  => $code,
+      'pb_message' => $fail['message'] ?: null,
     ]);
   }
 
