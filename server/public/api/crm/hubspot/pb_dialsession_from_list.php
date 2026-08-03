@@ -80,6 +80,11 @@ if ($hsAccess === '') {
   api_error('No HubSpot access token available', 'unauthorized', 401);
 }
 
+// Lazy backfill of owner_id + user_id — see pb_dialsession_selection.php
+// for the design rationale.
+$hs = hs_ensure_owner_cached($client_id, $hs, 'hs_list');
+$hsAccess = (string)($hs['access_token'] ?? '');
+
 $hubId = (string)($hs['hub_id'] ?? '');
 
 // Load user's preferred primary phone property (L3 setting)
@@ -315,10 +320,13 @@ $payload = [
   'contacts'    => $pbContacts,
   'preset_id'   => null,
   'custom_data' => [
-    'client_id' => $client_id,
-    'source'    => 'hubspot-list',
-    'crm_name'  => 'hubspot',
-    'list_id'   => $listId,
+    'client_id'   => $client_id,
+    'source'      => 'hubspot-list',
+    'crm_name'    => 'hubspot',
+    'list_id'     => $listId,
+    // Per-user attribution — see pb_dialsession_selection.php.
+    'hs_owner_id' => $hs['owner_id'] ?? null,
+    'hs_hub_id'   => $hs['hub_id']   ?? null,
   ],
   'callbacks'    => $callbacks,
   'webhook_meta' => [

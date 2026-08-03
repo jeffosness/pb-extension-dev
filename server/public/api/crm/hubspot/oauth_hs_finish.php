@@ -123,9 +123,19 @@ $tokenPayload['expires_at'] = $now + max(0, $expires_in - 60); // refresh slight
 // Save under TOKENS_DIR/hubspot/<client_id>.json
 save_hs_tokens($client_id, $tokenPayload);
 
+// Enrich the freshly-saved tokens with the HubSpot user_id + owner_id + email
+// so per-user call-activity attribution works via Salt/PB. See hs_helpers.php
+// hs_ensure_owner_cached() for the design and LESSONS.md 2026-08-03 for the
+// research. Best-effort: if the enrichment API calls fail (network, HubSpot
+// down, no matching owner record), the OAuth-completion page still renders
+// success and the enrichment is retried lazily on the next dial-session
+// launch. Never blocks the OAuth flow.
+$tokenPayload = hs_ensure_owner_cached($client_id, $tokenPayload, 'hs_oauth_finish');
+
 api_log('hubspot_oauth_finish.ok', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'hub_id'         => $tokenPayload['hub_id'] ?? null,
+    'has_owner_id'   => !empty($tokenPayload['owner_id']),
     'hs_ms'          => $hs_ms,
 ]);
 

@@ -49,6 +49,13 @@ if ($hsAccess === '') {
   api_error('No HubSpot access token saved for this client_id', 'unauthorized', 401);
 }
 
+// Lazy backfill: enrich token file with owner_id + user_id + email if we
+// haven't yet (existing customers whose tokens predate the enrichment).
+// No-op after the first successful call. Non-blocking — if enrichment
+// fails, dial-session still works, just without per-user attribution.
+$hs = hs_ensure_owner_cached($client_id, $hs, 'hs_selection');
+$hsAccess = (string)($hs['access_token'] ?? '');
+
 $hubId = (string)($hs['hub_id'] ?? '');
 
 // Load user's preferred primary phone property (L3 setting)
@@ -300,9 +307,18 @@ $payload = [
   'contacts'    => $pbContacts,
   'preset_id'   => null,
   'custom_data' => [
-    'client_id' => $client_id,
-    'source'    => 'hubspot-selection',
-    'crm_name'  => 'hubspot',
+    'client_id'   => $client_id,
+    'source'      => 'hubspot-selection',
+    'crm_name'    => 'hubspot',
+    // Per-user attribution for Salt/PB — see hs_helpers.php owner-id
+    // enrichment section. hs_owner_id is the HubSpot CRM Owner id (NOT
+    // the user_id) that Salt stamps as `hubspot_owner_id` on the call
+    // activity they write. hs_hub_id is included so Salt can verify the
+    // owner belongs to the connected portal before trusting it.
+    // Nulls are acceptable — Salt should fall back to a default attribution
+    // when either is missing (e.g. legacy token that hasn't been backfilled yet).
+    'hs_owner_id' => $hs['owner_id'] ?? null,
+    'hs_hub_id'   => $hs['hub_id']   ?? null,
   ],
   'callbacks'    => $callbacks,
   'webhook_meta' => [
