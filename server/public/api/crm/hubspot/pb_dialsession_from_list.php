@@ -336,6 +336,19 @@ $payload = [
   ],
 ];
 
+// DEV-ONLY: capture the exact payload sent to PB so Salt-side can build
+// their intake handler against a known-good fixture. Overwrites per call.
+// Contains PII (contact names + phones) — deliberately dev-only + /tmp only.
+if (strpos((string)(cfg()['BASE_URL'] ?? ''), 'extension-dev') !== false) {
+  @file_put_contents(
+    '/tmp/pb_dialsession_last.json',
+    json_encode(
+      ['source' => 'hs_list', 'payload' => $payload],
+      JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+    )
+  );
+}
+
 $pbResult = pb_dialsession_or_fail($pat, $payload, 'hs_list', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'contact_count'  => count($pbContacts),
