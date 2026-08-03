@@ -104,6 +104,7 @@ Before committing, verify:
 - [ ] CORS origins still whitelisted (no origin reflection)
 - [ ] Input validation on all user-controlled data
 - [ ] **If you added a new call site that reads tokens** (`load_pb_token()`, `load_hs_tokens()`, `load_close_tokens()`, `load_apollo_tokens()`), add the endpoint's basename to the matching `$token_read_whitelist` array in `server/public/metrics/crm_usage_dashboard.php`. Missing this fires a false-positive dashboard anomaly the morning after prod deploy — see LESSONS.md 2026-07-09 for the repeat we don't want to hit a third time.
+- [ ] **If you added a new external API call site** (any `curl_exec`, `pb_api_call`, `http_post_form_info`, or call to a third-party token/refresh endpoint), the failure path MUST log the provider's own error text via `describe_api_failure()` in `utils.php` — never just the HTTP code. See [CRMS.md → Error handling requirements](CRMS.md#error-handling-requirements-for-every-external-api-call-applies-to-l3-and-any-future-integration) for the canonical pattern, and LESSONS.md 2026-07-27 for the customer-report gap that drove this rule.
 - [ ] **If you touched `utils.php` (or any function tested in `tests/`), PHPUnit is green.** Run `composer test` locally. CI blocks red PRs and requires a `## Test Impact` declaration for changes to security-critical files — see [TESTING.md](TESTING.md).
 
 ### Critical Security Utilities (ALWAYS USE)

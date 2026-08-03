@@ -252,17 +252,13 @@ $payload = [
   ],
 ];
 
-$t0 = microtime(true);
-list($info, $resp) = pb_call_dialsession($pat, $payload);
-$pb_ms = (int) round((microtime(true) - $t0) * 1000);
-
-$httpCode = (int)($info['http_code'] ?? 0);
-if ($httpCode >= 400 || !is_array($resp)) {
-  api_error('PhoneBurner dialsession failed', 'pb_error', 502, [
-    'pb_http' => $httpCode,
-    'pb_ms'   => $pb_ms,
-  ]);
-}
+$pbResult = pb_dialsession_or_fail($pat, $payload, 'apollo_sequence_tasks', [
+  'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+  'contact_count'  => count($pbContacts),
+]);
+$resp    = $pbResult['response'];
+$pb_ms   = $pbResult['pb_ms'];
+$pb_http = $pbResult['pb_http'];
 
 // Extract launch URL
 $launch_url = $resp['dialsessions']['redirect_url'] ?? null;
@@ -280,7 +276,7 @@ if (!$launch_url) {
   api_log('apollo_tasks.error.no_launch_url', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
     'pb_ms'          => $pb_ms,
-    'pb_http'        => $httpCode,
+    'pb_http'        => $pb_http,
   ]);
   api_error('PhoneBurner response missing launch URL', 'pb_error', 502);
 }

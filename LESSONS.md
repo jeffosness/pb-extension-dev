@@ -24,6 +24,47 @@ Then Jeff asked the real question: "did we use the untracked playbook, or did we
 
 ---
 
+## 2026-07-27 — "PhoneBurner dialsession failed" was un-triageable because we discarded PB's error body
+
+**What happened:** A customer (Kimberly, Supervest) reported the generic "PhoneBurner dialsession failed" alert while launching from a HubSpot contacts list. She'd had successful sessions the same day, so the top suspects (expired PAT, missing HS connection, empty selection) were ruled out immediately — the failure had to be PhoneBurner's `/dialsession` API returning 4xx/5xx. But we couldn't diagnose beyond that: the six inline copies of the failure handler across the L3 dialsession endpoints logged nothing at all (only the generic scan endpoint had an api_log call, and it too stripped the response body), and `pb_api_call` discarded PB's raw response after JSON-decoding. So even with the request timestamp we couldn't tell whether PB returned "You have an active dial session," "PAT is expired," "internal error," or something else. Support triage reduced to guessing.
+
+**Why we didn't catch it:** Six endpoints, six copy-pasted failure handlers that all bubbled up `pb_http` + `pb_ms` and nothing else. Not a bad choice for the first cut when the class of failure was rare, but as call volume grew, the diagnostic gap became load-bearing on customer patience — and this was the first report where the customer explicitly couldn't self-diagnose. The 2026-07-08 dashboard-drift lesson ("adjacent aggregations copy-pasted the same shape and drifted") applies here too: **N copies of a pattern is N chances for the pattern to be wrong; centralize the pattern the first time you catch a smell.**
+
+**Process change:** PR moved all seven dialsession callsites (six L3 + generic scan) onto a shared `pb_dialsession_or_fail($pat, $payload, $endpointLabel, $extraLog)` helper in `utils.php`. The helper:
+
+1. **Preserves PB's raw response body** in `$info['raw_body']` (via a small change to `pb_api_call`) so the failure path can log it.
+2. **Extracts PB's own error message** from common shapes (`error.message` / `message` / `error` string) and surfaces it via `api_error` extras as `pb_message`.
+3. **Logs a structured breadcrumb** via `api_log('pb_dialsession.error', ...)` including endpoint slug, HTTP code, elapsed ms, PB message, redacted decoded body, raw snippet (only when JSON decode failed), and any per-endpoint context the caller wants to add (client_id_hash, contact_count, etc.).
+4. **Extension side** now surfaces `pb_message` in the popup alert (falling back to the generic wrapper message) and appends the first 8 chars of `request_id` as a "Support ID" so a customer report can be traced to the exact server-side log line.
+
+**Broader lesson — "shallow" error handling is fine at the first callsite, and a debt trap by the sixth.** The threshold for centralizing isn't "does the pattern repeat" — it's "when the pattern next fails, will N copies be N times harder to fix?" For error handlers specifically, the answer is almost always yes: the fix is always "add more context," and adding it to one shared helper is trivially cheaper than to six.
+
+**Follow-through audit (same PR):** before deploying the first fix, Jeff asked "let's confirm this class of bug isn't somewhere else." Ran a codebase-wide sweep for external-API failure paths that discard response body — found 6 more sites in the same PR class:
+
+- Close token refresh in `close_call_logger.php` (HOT path — every long dial session)
+- Apollo token refresh in `apollo_call_logger.php` (HOT path)
+- HubSpot / Close / Apollo OAuth-finish endpoints (setup / reconnect blockers)
+- Apollo API key validation in `save_api_key.php` (already logged a 200-byte hint — deferred, marginal improvement)
+
+Bundled the top 5 into the same PR onto a new pure helper `describe_api_failure($info, $rawBody, $decoded)` in `utils.php`. The helper is now the required entry point for any provider-integration failure log — `pb_dialsession_or_fail` composes it, OAuth-finish endpoints call it, call-logger token-refresh sites call it. CRMS.md gained an "Error handling requirements" section that new CRM integrations must follow, and CLAUDE.md's Security Checklist grew a new mechanical item ("if you added an external API call site, log the provider's error text via describe_api_failure — never just the HTTP code").
+
+**Meta-lesson — when you find one shallow error handler and centralize the fix, sweep for siblings BEFORE deploying.** The audit surfaced 6 more instances in the same class. Deploying the first fix in isolation would have left the same triage cost buried in five other integration points, and each one would eventually cost another customer-report cycle. The audit + bundle turned six future incidents into one PR.
+
+**Meta-meta-lesson — the audit ITSELF missed three sites, which four hostile reviewers caught before deploy.** After Jeff asked for adversarial review on this Tier-2 PR, we ran four parallel hostile passes with diverse lenses (security / data-integrity / silent-failure / fix-quality) per [ADVERSARIAL_REVIEW_PLAYBOOK](ADVERSARIAL_REVIEW_PLAYBOOK%20\(1\).md). Two of them converged independently on a BLOCKER (dangling `$pb_ms` / `$httpCode` variables in every refactored endpoint — the refactor removed the assignments but left ~21 downstream references, silently breaking latency telemetry and emitting PHP-8 warnings on every success path). One reviewer escalated a MAJOR: three MORE token-refresh helpers in `hs_helpers.php` / `close_helpers.php` / `apollo_helpers.php` still used the old `http_post_form` and logged only HTTP codes on failure. These are HOT paths — fire on every dial-session launch when a token is stale — and my "sweep" had missed them because it grep'd for `curl_exec` in call loggers but not `http_post_form` in the shared helpers. A separate MAJOR: `body_snippet` was unredacted, so a hypothetical 200-OK + JSON-parse-failure path could land raw access tokens in Loggly.
+
+What the hostile pass added, that solo review missed:
+- **BLOCKER:** 21 dangling variable references across 7 endpoints (two reviewers converged).
+- **MAJOR:** 3 sibling refresh helpers still un-instrumented (fix-quality lens).
+- **MAJOR:** `body_snippet` OAuth token scrub (security lens).
+- **MINOR:** 8-char Support ID collision-prone at scale.
+- **MINOR:** `describe_api_failure` signature had redundant `$rawBody` param.
+
+The deeper lesson: **documentation-as-guardrail is aspirational without a mechanical enforcement counterpart.** CLAUDE.md's checklist now says "if you added an external API call site, log via describe_api_failure" — and yet the PR that established that rule violated it in three places. Same failure mode as LESSONS 2026-07-09 (whitelist checklist item hit a repeat). Next time we hit a class-of-failure repeat like this, the fix isn't another checklist item; it's a CI grep check that fails PRs introducing `curl_exec` / `http_post_form` / etc. without a same-PR reference to `describe_api_failure`. Tracked as follow-up.
+
+Concretely for future adversarial reviews: this session followed the playbook end-to-end (four diverse lenses, evidence-required, adjudicate-before-report). The BLOCKER was caught because the "data-integrity" and "silent-failure" reviewers both grep'd for undefined-variable references — a mechanical check my solo review never ran. **When the stakes are Tier 2+, always run the playbook. It caught more real bugs in 15 minutes of parallel work than my self-review could have caught in an hour.**
+
+---
+
 ## 2026-07-22 — HubSpot Task Queue launched only the first 30 of 91 tasks because rows are IntersectionObserver-virtualized
 
 **What happened:** Patrick reported the Task-Based Dial Session was only picking up "30 of 91 tasks" — the customer discovered that if they zoomed the HubSpot page out to 25%, all 91 rendered and the dial session got everything. Gil also flagged a related shortfall on his Selection launches earlier in the week; both reports pointed at the same virtualization root cause once we lined them up. Root cause: HubSpot's task list uses IntersectionObserver-based virtualization (`data-observer-type="ROW"` attributes on the containers). Rows past the viewport aren't in the DOM at all until scrolled into view. Our `HS_GET_TASK_IDS` handler was a one-shot `querySelectorAll('tr[data-test-id^="row-"]')`, which only sees what's currently rendered. Zoom-out made more rows fit on-screen, so more rendered, so more got dialed — that's the "trick" the customer stumbled onto. Fixed in v0.8.3 by moving Task Queue onto the same scroll-harvest core the Selection flow already used (`hs_deepHarvest`), and adding narrated progress ("Scanning HubSpot for your selected tasks… Found 15 of 22") so the extra scan time is visible instead of a silent spinner.

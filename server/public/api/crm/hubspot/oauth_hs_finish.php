@@ -75,9 +75,12 @@ if (!$hsClientId || !$hsClientSecret || !$baseUrl) {
 // Must match oauth_hs_start.php redirect_uri exactly
 $redirect = rtrim($baseUrl, '/') . '/api/crm/hubspot/oauth_hs_finish.php';
 
-// Exchange code → tokens (timed)
+// Exchange code → tokens (timed). Use http_post_form_info + describe_api_failure
+// so a failure captures HubSpot's own error text (e.g. "invalid_code",
+// "invalid_client") — otherwise we only see the HTTP code and can't diagnose
+// a customer report of "OAuth failed" without asking them to try again.
 $t0 = microtime(true);
-list($status, $resp) = http_post_form(
+list($info, $resp) = http_post_form_info(
     'https://api.hubapi.com/oauth/v1/token',
     [
         'grant_type'    => 'authorization_code',
@@ -88,13 +91,18 @@ list($status, $resp) = http_post_form(
     ]
 );
 $hs_ms = (int) round((microtime(true) - $t0) * 1000);
+$status = (int)($info['http_code'] ?? 0);
 
 if ($status < 200 || $status >= 300 || !is_array($resp)) {
+    $fail = describe_api_failure($info, $resp);
     api_log('hubspot_oauth_finish.error.token_exchange_failed', [
         'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'status'         => (int)$status,
+        'status'         => $fail['status'],
         'hs_ms'          => $hs_ms,
-        // Do NOT log $resp (could contain sensitive info)
+        'provider_msg'   => $fail['message'],
+        'response'       => $fail['response'],  // PII-redacted; OAuth errors don't carry PAT/refresh_token
+        'body_snippet'   => $fail['body_snippet'],
+        'curl_error'     => $fail['curl_error'],
     ]);
     hs_error_page(
         'HubSpot OAuth error',

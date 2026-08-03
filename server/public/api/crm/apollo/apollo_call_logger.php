@@ -54,10 +54,19 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
                 CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
                 CURLOPT_TIMEOUT => 10,
             ]);
-            $refreshRaw = curl_exec($ch);
-            $refreshCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $refreshRaw  = curl_exec($ch);
+            $refreshInfo = curl_getinfo($ch);
+            $refreshErr  = curl_error($ch);
             curl_close($ch);
 
+            // Preserve raw body + curl error so describe_api_failure can
+            // extract Apollo's own error text on the failure path.
+            $refreshInfo['raw_body'] = is_string($refreshRaw) ? $refreshRaw : '';
+            if ($refreshErr !== '') {
+                $refreshInfo['curl_error'] = $refreshErr;
+            }
+
+            $refreshCode = (int)($refreshInfo['http_code'] ?? 0);
             $refreshResp = ($refreshCode >= 200 && $refreshCode < 300 && $refreshRaw)
                 ? json_decode($refreshRaw, true) : null;
 
@@ -73,6 +82,17 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
                 save_apollo_tokens($clientId, $refreshResp);
                 log_msg('apollo_call_log_token_refresh: success');
             } else {
+                // Capture Apollo's own error text (e.g. "invalid_grant") so a
+                // failed session doesn't reduce to "http=400" in the log.
+                // This is a hot path — every long dial session refreshes here.
+                $fail = describe_api_failure($refreshInfo, $refreshResp);
+                api_log('apollo_call_log_token_refresh.error', [
+                    'status'       => $fail['status'],
+                    'provider_msg' => $fail['message'],
+                    'response'     => $fail['response'],
+                    'body_snippet' => $fail['body_snippet'],
+                    'curl_error'   => $fail['curl_error'],
+                ]);
                 log_msg('apollo_call_log_token_refresh: failed (http=' . $refreshCode . ')');
             }
         }

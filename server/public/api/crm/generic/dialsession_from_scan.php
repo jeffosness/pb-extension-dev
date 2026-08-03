@@ -163,24 +163,16 @@ $payload = [
 ];
 
 // -------------------------
-// Call PhoneBurner (timed)
+// Call PhoneBurner via shared helper (captures response body + logs details)
 // -------------------------
-$t0 = microtime(true);
-list($info, $resp) = pb_api_call($pat, 'POST', '/dialsession', $payload);
-$pb_ms = (int) round((microtime(true) - $t0) * 1000);
-
-$httpCode = (int)($info['http_code'] ?? 0);
-if ($httpCode >= 400 || !is_array($resp)) {
-    api_log('dialsession_from_scan.error.pb_api', [
-        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-        'crm_name'       => $crmName,
-        'pb_ms'          => $pb_ms,
-        'status'         => $httpCode,
-    ]);
-    api_error('PhoneBurner API error', 'pb_api_error', $httpCode ?: 500, [
-        'status' => $httpCode,
-    ]);
-}
+$pbResult = pb_dialsession_or_fail($pat, $payload, 'generic_scan', [
+    'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+    'crm_name'       => $crmName,
+    'contact_count'  => count($pbContacts),
+]);
+$resp    = $pbResult['response'];
+$pb_ms   = $pbResult['pb_ms'];
+$pb_http = $pbResult['pb_http'];
 
 $launch_url = $resp['dialsessions']['redirect_url'] ?? null;
 $dial_id    = $resp['dialsessions']['id'] ?? null;

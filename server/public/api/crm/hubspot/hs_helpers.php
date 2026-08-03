@@ -44,13 +44,15 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
   $clientIdHash = substr(hash('sha256', (string)$client_id), 0, 12);
 
   // Attempt 1: primary credentials
-  list($status, $resp, $hs_ms) = hs_attempt_token_refresh($refresh, $hsClientId, $hsClientSecret);
+  list($status, $resp, $hs_ms, $lastInfo) = hs_attempt_token_refresh($refresh, $hsClientId, $hsClientSecret);
 
   // Attempt 2: legacy credentials (only if primary returned a 4xx AND legacy creds exist).
   // We don't fall back on 5xx because that's a HubSpot-side issue, not a credential mismatch.
+  // Preserving $lastInfo through both attempts so describe_api_failure below
+  // reflects whichever call actually errored (legacy overwrites primary iff we retried).
   $usedLegacy = false;
   if (($status >= 400 && $status < 500) && $hsLegacyId && $hsLegacySecret) {
-    list($status, $resp, $legacy_ms) = hs_attempt_token_refresh($refresh, $hsLegacyId, $hsLegacySecret);
+    list($status, $resp, $legacy_ms, $lastInfo) = hs_attempt_token_refresh($refresh, $hsLegacyId, $hsLegacySecret);
     $hs_ms += $legacy_ms;
     $usedLegacy = true;
     if ($status >= 200 && $status < 300 && is_array($resp)) {
@@ -63,11 +65,21 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
   }
 
   if ($status < 200 || $status >= 300 || !is_array($resp)) {
+    // describe_api_failure captures HubSpot's own error text (e.g.
+    // "invalid_grant", "BAD_AUTH_REFRESH_TOKEN"), not just an HTTP code.
+    // This helper fires on every dial-session launch when the access token
+    // is stale — hot path for un-triageable customer reports. $info here
+    // comes from hs_attempt_token_refresh(); see LESSONS.md 2026-07-27.
+    $fail = describe_api_failure($lastInfo, $resp);
     api_log('hubspot_refresh.error', [
       'client_id_hash' => $clientIdHash,
-      'status'         => (int)$status,
+      'status'         => $fail['status'],
       'hs_ms'          => $hs_ms,
       'tried_legacy'   => $usedLegacy,
+      'provider_msg'   => $fail['message'],
+      'response'       => $fail['response'],
+      'body_snippet'   => $fail['body_snippet'],
+      'curl_error'     => $fail['curl_error'],
     ]);
     api_error('HubSpot token refresh failed. Please reconnect HubSpot.', 'unauthorized', 401);
   }
@@ -96,12 +108,16 @@ function hs_refresh_access_token_or_fail(string $client_id, array $hsTokens): ar
 
 /**
  * Internal: POST to HubSpot's token endpoint with a specific client_id/secret pair.
- * Returns [http_status, decoded_response_array_or_null, elapsed_ms].
+ * Returns [http_status, decoded_response_array_or_null, elapsed_ms, curl_info].
+ *
+ * $curl_info carries raw_body + curl_error so the caller can hand it to
+ * describe_api_failure() on the failure path (see LESSONS.md 2026-07-27 for
+ * why every external API failure must capture the provider's own error text).
  * Separate from the main refresh function so we can call it twice (primary + legacy).
  */
 function hs_attempt_token_refresh(string $refreshToken, string $clientId, string $clientSecret): array {
   $t0 = microtime(true);
-  list($status, $resp) = http_post_form(
+  list($info, $resp) = http_post_form_info(
     'https://api.hubapi.com/oauth/v1/token',
     [
       'grant_type'    => 'refresh_token',
@@ -111,7 +127,8 @@ function hs_attempt_token_refresh(string $refreshToken, string $clientId, string
     ]
   );
   $hs_ms = (int) round((microtime(true) - $t0) * 1000);
-  return [(int)$status, is_array($resp) ? $resp : null, $hs_ms];
+  $status = (int)($info['http_code'] ?? 0);
+  return [$status, is_array($resp) ? $resp : null, $hs_ms, $info];
 }
 
 function hs_fetch_contacts_with_refresh_retry(string $client_id, array &$hs, string &$hsAccess, array $ids, array $phoneProperties = [], array &$diag = [], ?string $preferredPrimary = null) {
