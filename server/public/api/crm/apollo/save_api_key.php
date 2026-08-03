@@ -38,13 +38,15 @@ curl_close($ch);
 $json = $raw ? json_decode($raw, true) : null;
 
 if ($code !== 200 || !is_array($json) || empty($json['healthy'])) {
-  api_log('apollo_save_key.invalid', [
+  // Capture Apollo's own error text so support can distinguish "key invalid"
+  // from "account disabled" / "rate limit" / etc. See LESSONS.md 2026-08-02.
+  $fail = log_api_failure_from_tuple($code, $json, $raw, 'apollo_save_key.invalid', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    'http_code'      => $code,
   ]);
   api_error('Invalid Apollo API key (HTTP ' . $code . '). Check that you copied the full master key.', 'unauthorized', 401, [
-    'http_code' => $code,
-    'hint'      => is_string($raw) ? substr($raw, 0, 200) : null,
+    'http_code'  => $code,
+    'pb_message' => $fail['message'] ?: null,
+    'hint'       => $fail['message'] ?: (is_string($raw) ? substr($raw, 0, 200) : null),
   ]);
 }
 

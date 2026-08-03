@@ -69,19 +69,30 @@ while ($page <= $maxPages) {
     'page'          => $page,
   ];
 
-  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+  list($code, $json, $raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
 
   if ($code === 401 && $page === 1) {
     $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
     $accessToken = (string)($tokens['access_token'] ?? '');
-    list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
+    list($code, $json, $raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/tasks/search', $searchBody, $authType);
   }
 
   if ($code !== 200 || !is_array($json)) {
     if ($page === 1) {
+      // Note: this is apollo_pb_dialsession_from_tasks (dial-session launch);
+      // sibling apollo_sequence_tasks.php is the sequences-preview endpoint.
+      // Same-shape instrumentation. raw_preview replaced with pb_message so
+      // token-scrubbed provider text reaches the popup (raw_preview bypassed
+      // describe_api_failure's scrub — see LESSONS.md 2026-08-02).
+      $fail = log_api_failure_from_tuple($code, $json, $raw, 'apollo_pb_dialsession_from_tasks.fetch_failed', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+        'auth_type'      => $authType,
+        'page'           => $page,
+      ]);
       api_error('Failed to fetch Apollo tasks', 'api_error', 502, [
-        'http_code'   => $code,
-        'raw_preview' => is_string($_raw) ? substr($_raw, 0, 500) : null,
+        'http_code'  => $code,
+        'auth_type'  => $authType,
+        'pb_message' => $fail['message'] ?: null,
       ]);
     }
     break;

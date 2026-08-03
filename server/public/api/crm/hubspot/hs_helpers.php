@@ -193,7 +193,7 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
       'properties' => $properties,
     ];
 
-    list($code, $json, $_raw) = hs_api_post_json(
+    list($code, $json, $raw) = hs_api_post_json(
       $accessToken,
       'https://api.hubapi.com/crm/v3/objects/tasks/batch/read',
       $body
@@ -204,6 +204,11 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
     // (Multi-Status) for partial success. Both responses include a 'results'
     // array we should parse — only 4xx/5xx are total failures.
     if (($code !== 200 && $code !== 207) || !is_array($json)) {
+      if (($diag['tasks_fetch']['fail'] ?? 0) === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'hs_fetch_tasks.batch_failed', [
+          'batch_size' => count($batch),
+        ]);
+      }
       $diag['tasks_fetch']['fail'] += count($batch);
       continue;
     }
@@ -226,6 +231,17 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
     }
   }
 
+  // End-of-loop summary — first-batch-only log names one failing batch;
+  // this line captures the total scope (N batches failed out of M).
+  if (($diag['tasks_fetch']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('hs_fetch_tasks.batch_summary', [
+      'ok'        => $diag['tasks_fetch']['ok'],
+      'fail'      => $diag['tasks_fetch']['fail'],
+      'last_http' => $diag['tasks_fetch']['last_http'],
+      'total'     => count($taskIds),
+    ]);
+  }
+
   if (empty($tasks)) return $tasks;
 
   // -------------------------------------------------------------------------
@@ -242,7 +258,7 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
     $inputs = array_map(function ($id) { return ['id' => (string)$id]; }, $batch);
     $body = ['inputs' => $inputs];
 
-    list($code, $json, $_raw) = hs_api_post_json(
+    list($code, $json, $raw) = hs_api_post_json(
       $accessToken,
       'https://api.hubapi.com/crm/v4/associations/tasks/contacts/batch/read',
       $body
@@ -257,6 +273,11 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
     // ones that don't (or that the API couldn't resolve). We parse `results`
     // regardless; the "errors" are informational and expected.
     if (($code !== 200 && $code !== 207) || !is_array($json)) {
+      if (($diag['associations_fetch']['fail'] ?? 0) === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'hs_fetch_task_associations.batch_failed', [
+          'batch_size' => count($batch),
+        ]);
+      }
       $diag['associations_fetch']['fail'] += count($batch);
       continue;
     }
@@ -286,6 +307,15 @@ function hs_fetch_tasks_by_ids($accessToken, array $taskIds, array &$diag = []) 
         $diag['associations_fetch']['ok']++;
       }
     }
+  }
+
+  if (($diag['associations_fetch']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('hs_fetch_task_associations.batch_summary', [
+      'ok'        => $diag['associations_fetch']['ok'] ?? 0,
+      'fail'      => $diag['associations_fetch']['fail'],
+      'last_http' => $diag['associations_fetch']['last_http'],
+      'total'     => count($taskIds),
+    ]);
   }
 
   return $tasks;
@@ -413,12 +443,15 @@ function hs_discover_phone_properties(string $accessToken, string $objectType, s
 
   // Fetch from HubSpot Properties API
   $url = 'https://api.hubapi.com/crm/v3/properties/' . rawurlencode($objectType);
-  list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
+  list($code, $json, $raw) = hs_api_get_json($accessToken, $url);
 
   if ($code !== 200 || !is_array($json) || !isset($json['results'])) {
-    api_log('phone_props.api_fail', array_merge($logCtx, [
-      'http_code' => $code,
-      'has_results' => isset($json['results']),
+    // Silent fallback to hardcoded phone-field names when HS Properties API
+    // fails means customer-mapped custom phone fields (mobile_direct, etc.)
+    // silently disappear from dial sessions. Capture HS's error text so the
+    // subsequent "wrong number dialed" support ticket is triageable.
+    log_api_failure_from_tuple($code, $json, $raw, 'phone_props.api_fail', array_merge($logCtx, [
+      'has_results'    => isset($json['results']),
       'fallback_names' => array_column($fallback, 'name'),
     ]));
     return $fallback;
@@ -578,10 +611,17 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneP
     $url = 'https://api.hubapi.com/crm/v3/objects/contacts/' . rawurlencode($cid) .
            '?properties=' . rawurlencode(implode(',', $allProps));
 
-    list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
+    list($code, $json, $raw) = hs_api_get_json($accessToken, $url);
     $diag['contacts_fetch']['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
+      // Log the FIRST per-batch failure only (avoid log spam if HS is down and
+      // we're iterating hundreds of contacts). $diag already tracks counts.
+      if (($diag['contacts_fetch']['fail'] ?? 0) === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'hs_fetch_contacts.per_record_failed', [
+          'contact_id_sample' => (string)$cid,
+        ]);
+      }
       $diag['contacts_fetch']['fail']++;
       continue;
     }
@@ -616,6 +656,20 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneP
     $diag['contacts_fetch']['ok']++;
   }
 
+  // End-of-loop summary — first-per-batch log names one failing contact ID
+  // but not the total scope. This line completes the picture: N failures out
+  // of M total, last HTTP code seen. Without it, support sees "one contact
+  // failed" and misses that 496 more silently vanished. See LESSONS.md
+  // 2026-08-02 (adversarial review finding #5).
+  if (($diag['contacts_fetch']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('hs_fetch_contacts.batch_summary', [
+      'ok'        => $diag['contacts_fetch']['ok'],
+      'fail'      => $diag['contacts_fetch']['fail'],
+      'last_http' => $diag['contacts_fetch']['last_http'],
+      'total'     => count($contactIds),
+    ]);
+  }
+
   return $contacts;
 }
 
@@ -636,10 +690,15 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
     $url = 'https://api.hubapi.com/crm/v3/objects/companies/' . rawurlencode($cid) .
            '?properties=' . rawurlencode(implode(',', $allProps));
 
-    list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
+    list($code, $json, $raw) = hs_api_get_json($accessToken, $url);
     $diag['companies_fetch']['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
+      if (($diag['companies_fetch']['fail'] ?? 0) === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'hs_fetch_companies.per_record_failed', [
+          'company_id_sample' => (string)$cid,
+        ]);
+      }
       $diag['companies_fetch']['fail']++;
       continue;
     }
@@ -675,6 +734,15 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
     $diag['companies_fetch']['ok']++;
   }
 
+  if (($diag['companies_fetch']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('hs_fetch_companies.batch_summary', [
+      'ok'        => $diag['companies_fetch']['ok'],
+      'fail'      => $diag['companies_fetch']['fail'],
+      'last_http' => $diag['companies_fetch']['last_http'],
+      'total'     => count($companyIds),
+    ]);
+  }
+
   return $companies;
 }
 
@@ -707,10 +775,16 @@ function hs_resolve_contact_ids_map_from_objects($accessToken, $objectType, arra
     $url = 'https://api.hubapi.com/crm/v3/objects/' . rawurlencode($objectType) . '/' . rawurlencode($oid) .
            '?associations=contacts&archived=false';
 
-    list($code, $json, $_raw) = hs_api_get_json($accessToken, $url);
+    list($code, $json, $raw) = hs_api_get_json($accessToken, $url);
     $diag['assoc_resolve']['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
+      if (($diag['assoc_resolve']['fail'] ?? 0) === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'hs_resolve_contact_ids.per_record_failed', [
+          'object_type'      => $objectType,
+          'object_id_sample' => (string)$oid,
+        ]);
+      }
       $diag['assoc_resolve']['fail']++;
       continue;
     }

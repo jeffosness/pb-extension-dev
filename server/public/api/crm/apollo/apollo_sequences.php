@@ -36,21 +36,22 @@ $searchBody = [
 ];
 
 $authType = apollo_auth_type($tokens);
-list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/emailer_campaigns/search', $searchBody, $authType);
+list($code, $json, $raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/emailer_campaigns/search', $searchBody, $authType);
 
 // Retry once on 401
 if ($code === 401) {
   $tokens = apollo_refresh_access_token_or_fail($client_id, $tokens);
   $accessToken = (string)($tokens['access_token'] ?? '');
-  list($code, $json, $_raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/emailer_campaigns/search', $searchBody, $authType);
+  list($code, $json, $raw) = apollo_api_post_json($accessToken, 'https://api.apollo.io/api/v1/emailer_campaigns/search', $searchBody, $authType);
 }
 
 if ($code !== 200 || !is_array($json)) {
-  api_log('apollo_sequences.search_fail', [
+  $fail = log_api_failure_from_tuple($code, $json, $raw, 'apollo_sequences.search_fail', [
     'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
-    'http_code'      => $code,
   ]);
-  api_error('Failed to fetch Apollo sequences', 'api_error', 502);
+  api_error('Failed to fetch Apollo sequences', 'api_error', 502, [
+    'pb_message' => $fail['message'] ?: null,
+  ]);
 }
 
 // Normalize results

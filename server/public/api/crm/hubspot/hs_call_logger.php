@@ -12,9 +12,16 @@
 // Self-contained: uses direct curl (no bootstrap.php dependency, matching
 // the close_call_logger.php and apollo_call_logger.php pattern). The
 // existing hs_helpers.php refresh function can't be reused here because it
-// calls api_error()/api_log() which require bootstrap.php — loading
+// calls api_error() to terminate the HTTP response on failure — loading
 // bootstrap.php from a webhook handler would change the request lifecycle
 // (CORS headers, JSON content-type, etc.).
+//
+// Diagnostic logging on failure paths goes through utils.php's
+// _pb_write_api_log(), which writes to the same api.log destination
+// bootstrap.php's api_log() targets — safe to call in the webhook context.
+// See LESSONS.md 2026-08-02 for the adversarial-review finding that
+// motivated the fallback: direct api_log() calls from webhooks fatal because
+// bootstrap.php isn't loaded.
 //
 // Requires the crm.objects.contacts.write OAuth scope (HubSpot's tasks
 // endpoint is gated by the contacts scope). Customers on legacy demo-org
@@ -321,9 +328,15 @@ function hs_call_logger_complete_task(string $accessToken, string $taskId): bool
 /**
  * Refresh access token with dual-credential fallback.
  *
- * Mirrors hs_refresh_access_token_or_fail() in hs_helpers.php but is
- * self-contained (no bootstrap dependency, no api_error()/api_log() calls).
- * Returns the refreshed tokens array on success, null on any failure.
+ * Mirrors hs_refresh_access_token_or_fail() in hs_helpers.php but returns
+ * null on failure instead of api_error()-exiting (we're inside a webhook
+ * handler; exiting would break the response to PhoneBurner). Callers must
+ * gracefully handle a null return (typically: log the customer-visible
+ * call activity as un-loggable, skip the task-complete PATCH).
+ *
+ * On failure, still logs a structured api_log breadcrumb via
+ * log_api_failure_from_tuple so support can diagnose which side of the
+ * refresh failed. See LESSONS.md 2026-08-02 for the class of gap this closes.
  */
 function hs_call_logger_refresh(string $clientId, array $hsTokens): ?array {
     $cfg = cfg();
@@ -337,18 +350,30 @@ function hs_call_logger_refresh(string $clientId, array $hsTokens): ?array {
     $refreshToken = $hsTokens['refresh_token'] ?? '';
     if ($refreshToken === '') return null;
 
+    $clientIdHash = substr(hash('sha256', (string)$clientId), 0, 12);
+
     // Attempt 1: primary credentials
-    list($code, $resp) = hs_call_logger_post_refresh($refreshToken, $primaryId, $primarySecret);
+    list($code, $resp, $raw) = hs_call_logger_post_refresh($refreshToken, $primaryId, $primarySecret);
+    $usedLegacy = false;
 
     // Attempt 2: legacy fallback if primary returned 4xx AND legacy creds exist
     if (($code >= 400 && $code < 500) && $legacyId && $legacySecret) {
-        list($code, $resp) = hs_call_logger_post_refresh($refreshToken, $legacyId, $legacySecret);
+        list($code, $resp, $raw) = hs_call_logger_post_refresh($refreshToken, $legacyId, $legacySecret);
+        $usedLegacy = true;
         if ($code >= 200 && $code < 300 && is_array($resp)) {
             log_msg('hs_call_log: refreshed via legacy creds');
         }
     }
 
     if ($code < 200 || $code >= 300 || !is_array($resp)) {
+        // Capture HubSpot's own error text so support can distinguish
+        // invalid_grant / expired refresh_token / network timeout /
+        // account-suspended without shell access to the box.
+        log_api_failure_from_tuple($code, $resp, $raw, 'hs_call_log.refresh_failed', [
+            'client_id_hash' => $clientIdHash,
+            'tried_legacy'   => $usedLegacy,
+        ]);
+        log_msg('hs_call_log_token_refresh: failed (http=' . $code . ')');
         return null;
     }
 
@@ -368,7 +393,9 @@ function hs_call_logger_refresh(string $clientId, array $hsTokens): ?array {
 
 /**
  * Internal: POST to HubSpot's token endpoint with a specific client_id/secret.
- * Returns [http_status, decoded_response_array_or_null].
+ * Returns [http_status, decoded_response_array_or_null, raw_body_string].
+ * $raw is preserved so hs_call_logger_refresh's failure path can hand it
+ * to log_api_failure_from_tuple for diagnostic capture.
  */
 function hs_call_logger_post_refresh(string $refreshToken, string $clientId, string $clientSecret): array {
     $ch = curl_init('https://api.hubapi.com/oauth/v1/token');
@@ -388,6 +415,7 @@ function hs_call_logger_post_refresh(string $refreshToken, string $clientId, str
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
-    $resp = ($raw && $code >= 200 && $code < 500) ? json_decode($raw, true) : null;
-    return [$code, is_array($resp) ? $resp : null];
+    $rawStr = is_string($raw) ? $raw : '';
+    $resp = ($rawStr !== '' && $code >= 200 && $code < 500) ? json_decode($rawStr, true) : null;
+    return [$code, is_array($resp) ? $resp : null, $rawStr];
 }
