@@ -849,3 +849,198 @@ function hs_resolve_contact_ids_map_from_objects($accessToken, $objectType, arra
 
 // pb_call_dialsession() has been moved to utils.php (shared by all L3 providers).
 // The function_exists guard ensures backward compatibility if utils.php is loaded first.
+
+
+// ============================================================================
+// Owner-id enrichment (for per-user call-activity attribution via Salt/PB)
+// ============================================================================
+//
+// Why this exists: HubSpot's `hubspot_owner_id` field on a call/task/note
+// activity requires the CRM Owner object's `id`, NOT the auth-directory
+// `user_id` from an OAuth token. They're different numbers. Sending user_id
+// where owner_id is expected returns HTTP 400 with `INVALID_OWNER_ID`.
+//
+// For customers whose teammates share ONE PhoneBurner account but each have
+// their own HubSpot user, we send `hs_owner_id` in the dial-session
+// custom_data so Salt can stamp per-user attribution on the call activity
+// they write. See LESSONS.md 2026-08-03 for the empirical research + the
+// gotcha we caught (HubSpot's `?userId=` filter on the Owners API is broken;
+// must fetch all owners and filter client-side).
+//
+// Design:
+//   - At OAuth completion, fetch user_id via token introspection + owner_id
+//     via Owners API + cache both alongside existing token fields.
+//   - Lazy backfill for existing customers: when a dial-session builder
+//     loads an HS token that lacks owner_id, enrich on the same request.
+//     One-time cost per legacy customer, no forced reconnect.
+//   - If enrichment fails (network, HubSpot down, no matching owner record),
+//     log via log_api_failure_from_tuple and continue — dial-session still
+//     works, just without per-user attribution. Next load retries.
+//
+// Related refs:
+//   - memory/reference_hubspot_owner_lookup.md (empirical findings)
+//   - Salt-Claude's warning about user_id vs owner_id (see PR #198 description)
+
+/**
+ * Pure parser for HubSpot's /oauth/v1/access-tokens/{token} response body.
+ * Extracted so it can be unit-tested without hitting the network.
+ * Returns [user_id, hub_id, email] or null when the shape is invalid.
+ */
+function hs_parse_introspect_response($data): ?array {
+    if (!is_array($data)) return null;
+    $userId = isset($data['user_id']) ? (int)$data['user_id'] : 0;
+    $hubId  = isset($data['hub_id'])  ? (int)$data['hub_id']  : 0;
+    if ($userId <= 0 || $hubId <= 0) return null;
+    return [
+        'user_id' => $userId,
+        'hub_id'  => $hubId,
+        'email'   => (string)($data['user'] ?? ''),
+    ];
+}
+
+/**
+ * Introspect an HS access token — returns [user_id, hub_id, user_email] or
+ * null on failure. Wraps the /oauth/v1/access-tokens/{token} endpoint.
+ * Pure fetch; caller decides what to persist.
+ */
+function hs_introspect_access_token(string $accessToken): ?array {
+    $url = 'https://api.hubapi.com/oauth/v1/access-tokens/' . rawurlencode($accessToken);
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 10,
+        CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+    ]);
+    $raw = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code !== 200 || !is_string($raw)) return null;
+    return hs_parse_introspect_response(json_decode($raw, true));
+}
+
+/**
+ * Look up the HubSpot Owner record whose `userId` matches the given user_id.
+ * Returns the owner_id (as string) or null if no matching owner exists.
+ *
+ * IMPORTANT: HubSpot's `?userId=` filter on this endpoint is BROKEN as of
+ * 2026-08-03 — it silently returns the unfiltered list. We must fetch all
+ * owners and client-side filter. Paginates via ?after= cursor. Capped at
+ * 10 pages (5000 owners) for safety — no real portal should exceed that,
+ * and if one does we log and give up cleanly.
+ */
+/**
+ * Pure client-side filter — given one page of the Owners API results, find
+ * the owner whose userId matches. Returns the owner_id (as string) or null.
+ * Extracted so it can be unit-tested; the wrapping paginator handles I/O.
+ */
+function hs_find_owner_id_in_page(array $ownersPage, int $userId): ?string {
+    foreach ($ownersPage as $owner) {
+        if (!is_array($owner)) continue;
+        $ownerUserId = isset($owner['userId']) ? (int)$owner['userId'] : 0;
+        if ($ownerUserId === $userId) {
+            $ownerId = (string)($owner['id'] ?? '');
+            if ($ownerId !== '') return $ownerId;
+        }
+    }
+    return null;
+}
+
+function hs_lookup_owner_id(string $accessToken, int $userId, ?string $endpointLabel = 'hs_owner_lookup'): ?string {
+    $after   = null;
+    $pageCount = 0;
+    $maxPages  = 10; // safety cap
+
+    while ($pageCount < $maxPages) {
+        $url = 'https://api.hubapi.com/crm/v3/owners/?limit=500';
+        if ($after !== null && $after !== '') {
+            $url .= '&after=' . rawurlencode($after);
+        }
+
+        list($code, $json, $raw) = hs_api_get_json($accessToken, $url);
+
+        if ($code !== 200 || !is_array($json)) {
+            // First-page failure is the only one worth logging with full
+            // context; subsequent pagination failures are edge cases.
+            if ($pageCount === 0) {
+                log_api_failure_from_tuple($code, $json, $raw, $endpointLabel . '.owners_fetch_failed', [
+                    'user_id_sample' => $userId,
+                ]);
+            }
+            return null;
+        }
+
+        $results = is_array($json['results'] ?? null) ? $json['results'] : [];
+        $found = hs_find_owner_id_in_page($results, $userId);
+        if ($found !== null) return $found;
+
+        // Next-page cursor. If absent, we've read the whole list.
+        $after = $json['paging']['next']['after'] ?? null;
+        if ($after === null || $after === '') break;
+        $pageCount++;
+    }
+
+    // Owner not found across all pages (or hit the safety cap).
+    _pb_write_api_log($endpointLabel . '.owner_not_found', [
+        'user_id'    => $userId,
+        'pages_read' => $pageCount + 1,
+        'hit_cap'    => $pageCount >= $maxPages,
+    ]);
+    return null;
+}
+
+/**
+ * Ensure the given HS tokens array has `user_id`, `owner_id`, `owner_email`
+ * cached. Idempotent: if already present, no-op. If missing, fetches via
+ * introspection + owners lookup, merges, saves back to disk, and returns
+ * the enriched array (which the caller should use for the rest of the
+ * current request).
+ *
+ * Safe on failure: if enrichment fails (network, no matching owner, etc.),
+ * returns the tokens unchanged so the caller can proceed without
+ * per-user attribution. Next request retries.
+ *
+ * $endpointLabel is used for structured log context so support can trace
+ * which dial-session path triggered the backfill.
+ */
+function hs_ensure_owner_cached(string $client_id, array $hs, string $endpointLabel = 'hs_owner_backfill'): array {
+    // Already enriched — no-op.
+    if (!empty($hs['owner_id']) && !empty($hs['user_id'])) {
+        return $hs;
+    }
+
+    $accessToken = (string)($hs['access_token'] ?? '');
+    if ($accessToken === '') return $hs; // can't enrich without a token
+
+    // Step 1: introspect to get user_id (HS OAuth response doesn't include it).
+    $introspect = hs_introspect_access_token($accessToken);
+    if (!$introspect) {
+        _pb_write_api_log($endpointLabel . '.introspect_failed', [
+            'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+        ]);
+        return $hs;
+    }
+
+    // Step 2: fetch owner_id via Owners API (client-side filter).
+    $ownerId = hs_lookup_owner_id($accessToken, $introspect['user_id'], $endpointLabel);
+
+    // Step 3: merge + persist. We persist user_id + email even if owner_id
+    // wasn't found — no need to re-introspect on the next request. owner_id
+    // stays null; ensure_owner_cached will retry the owners lookup next time.
+    $hs['user_id']     = $introspect['user_id'];
+    $hs['hub_id']      = $hs['hub_id'] ?: $introspect['hub_id']; // don't overwrite an existing hub_id
+    $hs['owner_email'] = $introspect['email'];
+    if ($ownerId !== null) {
+        $hs['owner_id'] = $ownerId;
+    }
+    save_hs_tokens($client_id, $hs);
+
+    _pb_write_api_log($endpointLabel . '.enriched', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+        'user_id'        => $introspect['user_id'],
+        'owner_id'       => $ownerId,
+        'owner_found'    => $ownerId !== null,
+    ]);
+
+    return $hs;
+}
