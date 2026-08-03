@@ -241,7 +241,12 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     ];
     if ($callHttpCode >= 400 && $callRaw) {
         $errBody = json_decode($callRaw, true);
-        $logData['apollo_error'] = is_array($errBody) ? $errBody : substr($callRaw, 0, 500);
+        // Scrub OAuth token patterns from the raw fallback — this goes to
+        // log_msg (app.log) which support / Loggly may read. Mirror of the
+        // Close call_logger fix. See LESSONS.md 2026-08-03 adversarial review
+        // round 6 — the previous commit's message claimed "Apollo + Close"
+        // but only fixed Close. Round 6 caught the miss.
+        $logData['apollo_error'] = is_array($errBody) ? $errBody : _pb_scrub_tokens(substr($callRaw, 0, 500));
     }
     log_msg('apollo_call_log: ' . json_encode($logData));
 
