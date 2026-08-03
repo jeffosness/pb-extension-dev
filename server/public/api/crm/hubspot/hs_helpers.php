@@ -791,6 +791,18 @@ function hs_resolve_contact_ids_map_from_objects($accessToken, $objectType, arra
 
     $assoc = $json['associations']['contacts']['results'] ?? [];
     if (!is_array($assoc)) {
+      // Silent-increment used to hide this — HubSpot shape drift (results:
+      // {items:[...]}) would silently return zero contacts across a batch
+      // with no breadcrumb. Log the first occurrence per invocation for
+      // triage. See LESSONS.md 2026-07-03 (payload-shape guess class).
+      if (($diag['assoc_resolve']['fail'] ?? 0) === 0) {
+        _pb_write_api_log('hs_resolve_contact_ids.shape_unexpected', [
+          'object_type'      => $objectType,
+          'object_id_sample' => (string)$oid,
+          'assoc_type'       => gettype($assoc),
+          'response_keys'    => array_keys($json),
+        ]);
+      }
       $diag['assoc_resolve']['fail']++;
       continue;
     }
@@ -806,6 +818,21 @@ function hs_resolve_contact_ids_map_from_objects($accessToken, $objectType, arra
     }
 
     $diag['assoc_resolve']['ok']++;
+  }
+
+  // End-of-loop batch summary — matches the pattern in hs_fetch_contacts /
+  // hs_fetch_companies / hs_fetch_tasks / close_fetch_contacts /
+  // apollo_fetch_contacts. Without this, the first-per-batch failure log
+  // names one object but hides the total scope (e.g. 500 of 500 failed).
+  // See LESSONS.md 2026-08-03 adversarial review finding (SRE lens #1).
+  if (($diag['assoc_resolve']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('hs_resolve_contact_ids.batch_summary', [
+      'ok'          => $diag['assoc_resolve']['ok'],
+      'fail'        => $diag['assoc_resolve']['fail'],
+      'last_http'   => $diag['assoc_resolve']['last_http'],
+      'total'       => count($objectIds),
+      'object_type' => $objectType,
+    ]);
   }
 
   // Convert to arrays

@@ -46,7 +46,14 @@ if ($code !== 200 || !is_array($json) || empty($json['healthy'])) {
   api_error('Invalid Apollo API key (HTTP ' . $code . '). Check that you copied the full master key.', 'unauthorized', 401, [
     'http_code'  => $code,
     'pb_message' => $fail['message'] ?: null,
-    'hint'       => $fail['message'] ?: (is_string($raw) ? substr($raw, 0, 200) : null),
+    // NOTE: `hint` used to fall back to substr($raw, 0, 200) when message
+    // extraction failed. That leaked raw untrusted Apollo response text to
+    // any surface reading resp.error.hint. Dropped the fallback — if
+    // extraction failed, popup shows the wrapper message ("Invalid Apollo
+    // API key (HTTP N). Check that you copied the full master key.") which
+    // is more actionable than 200 chars of an Apollo error page anyway.
+    // See LESSONS.md 2026-08-03 adversarial review finding #2.
+    'hint'       => $fail['message'] ?: null,
   ]);
 }
 

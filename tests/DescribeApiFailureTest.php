@@ -168,6 +168,33 @@ final class DescribeApiFailureTest extends TestCase
     }
 
     #[Test]
+    public function message_scrubs_bearer_token_pattern(): void
+    {
+        // Providers occasionally echo tokens in error messages. The message
+        // reaches the customer's popup + Loggly — must be scrubbed. See
+        // LESSONS.md 2026-08-03 adversarial review finding.
+        $result = describe_api_failure(
+            ['http_code' => 401, 'raw_body' => ''],
+            ['message' => 'Authorization header Bearer pat-na1-realtokenXYZ123ABC456 was rejected.']
+        );
+        $this->assertStringNotContainsString('pat-na1-realtokenXYZ123ABC456', $result['message']);
+        $this->assertStringContainsString('[REDACTED_TOKEN]', $result['message']);
+    }
+
+    #[Test]
+    public function message_scrubs_json_string_token_pattern(): void
+    {
+        // If a provider embeds a JSON snippet in their error text, our regex
+        // should catch access_token/refresh_token/api_key JSON-string forms.
+        $result = describe_api_failure(
+            ['http_code' => 400, 'raw_body' => ''],
+            ['error' => ['message' => 'Bad request: "access_token":"tok_live_abc123xyz789" is invalid']]
+        );
+        $this->assertStringNotContainsString('tok_live_abc123xyz789', $result['message']);
+        $this->assertStringContainsString('[REDACTED]', $result['message']);
+    }
+
+    #[Test]
     public function message_truncated_and_control_chars_stripped(): void
     {
         // Provider-controlled text is untrusted; we clean it before surfacing.

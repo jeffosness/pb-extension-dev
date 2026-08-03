@@ -563,6 +563,23 @@ function describe_api_failure(?array $info, $decoded): array {
         }
     }
     if ($message !== '') {
+        // Scrub OAuth token patterns from the provider message before it
+        // surfaces to the customer's popup (via api_error extras -> getErrorMessage).
+        // Providers occasionally echo tokens back in error text ("Invalid token:
+        // pat-na1-XXXX..."), and a customer screenshot of that alert could leak
+        // the token to support tickets or Loggly. Same regex applied to
+        // $bodySnippet above — kept in sync. See LESSONS.md 2026-08-03
+        // adversarial review finding #1.
+        $message = preg_replace(
+            '/"(access_token|refresh_token|id_token|token|api_key|client_secret)"\s*:\s*"[^"]*"/i',
+            '"$1":"[REDACTED]"',
+            $message
+        );
+        $message = preg_replace(
+            '/(?:Bearer\s+|access_token=|refresh_token=|api_key=)[A-Za-z0-9._~+\/=-]{20,}/i',
+            '[REDACTED_TOKEN]',
+            $message
+        );
         $message = preg_replace('/[\x00-\x1F\x7F]/', ' ', $message);
         if (strlen($message) > 200) {
             $message = substr($message, 0, 200) . '…';
