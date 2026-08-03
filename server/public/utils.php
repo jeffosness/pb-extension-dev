@@ -539,10 +539,11 @@ function describe_api_failure(?array $info, $decoded): array {
     }
 
     // Provider error text — try common shapes in order of specificity.
-    //   {"error":{"message":"..."}}    — PhoneBurner, some HubSpot endpoints
-    //   {"error_description":"..."}    — OAuth 2.0 spec (HS/Close/Apollo OAuth)
-    //   {"message":"..."}              — HubSpot general
-    //   {"error":"..."}                — Close, some OAuth error responses
+    //   {"error":{"message":"..."}}                 — some HubSpot endpoints
+    //   {"error_description":"..."}                 — OAuth 2.0 spec (HS/Close/Apollo OAuth)
+    //   {"message":"..."}                           — HubSpot general
+    //   {"error":"..."}                             — Close, some OAuth error responses
+    //   {"debug_codes":[{"reason":"..."}]}          — PhoneBurner API (see LESSONS.md 2026-08-02)
     // Trimmed to 200 chars + control chars stripped before surfacing back to
     // the customer's popup via api_error extras — provider text is untrusted.
     $message = '';
@@ -552,7 +553,14 @@ function describe_api_failure(?array $info, $decoded): array {
             ?? $decoded['error_description']
             ?? $decoded['message']
             ?? (is_string($decoded['error'] ?? null) ? $decoded['error'] : '')
+            ?? ''
         );
+        // PhoneBurner shape: {"status":"error","debug_codes":[{"code":N,"reason":"..."}]}
+        // Only checked if nothing above matched — belt-and-suspenders for other
+        // providers that might use `debug_codes` differently.
+        if ($message === '' && isset($decoded['debug_codes'][0]['reason'])) {
+            $message = (string)$decoded['debug_codes'][0]['reason'];
+        }
     }
     if ($message !== '') {
         $message = preg_replace('/[\x00-\x1F\x7F]/', ' ', $message);

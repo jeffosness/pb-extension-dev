@@ -65,6 +65,42 @@ final class DescribeApiFailureTest extends TestCase
     }
 
     #[Test]
+    public function phoneburner_debug_codes_shape(): void
+    {
+        // PhoneBurner API returns errors with useful text buried in
+        // debug_codes[0].reason. Caught in dev testing 2026-08-02 when
+        // an expired PAT surfaced empty pb_message despite the log showing
+        // the reason clearly in the decoded response. See LESSONS.md.
+        $result = describe_api_failure(
+            ['http_code' => 401, 'raw_body' => ''],
+            [
+                'http_status' => 401,
+                'status'      => 'error',
+                'debug_codes' => [
+                    ['code' => 40109, 'reason' => 'Expired oauth token'],
+                ],
+            ]
+        );
+        $this->assertSame('Expired oauth token', $result['message']);
+    }
+
+    #[Test]
+    public function standard_shapes_take_precedence_over_debug_codes(): void
+    {
+        // If a provider ever returns BOTH a standard shape (error.message)
+        // and debug_codes, the standard shape should win — debug_codes is
+        // only checked as a last-resort fallback.
+        $result = describe_api_failure(
+            ['http_code' => 400, 'raw_body' => ''],
+            [
+                'error'       => ['message' => 'Standard error text'],
+                'debug_codes' => [['reason' => 'Debug fallback text']],
+            ]
+        );
+        $this->assertSame('Standard error text', $result['message']);
+    }
+
+    #[Test]
     public function unknown_shape_yields_empty_message(): void
     {
         // Novel shape we haven't mapped — message empty, response still logged.
