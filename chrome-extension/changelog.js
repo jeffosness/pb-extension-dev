@@ -16,6 +16,13 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.4": {
+    title: "What's Improved in v0.8.4",
+    items: [
+      "Clearer error alerts — when a dial session can't launch, you'll now see PhoneBurner's actual explanation (\"You already have an active dial session\", etc.) instead of a generic \"failed\" message",
+      "Every error alert now includes a Support ID — quote it to us if you file a ticket and we can pull up your exact request in the logs in seconds"
+    ]
+  },
   "0.8.3": {
     title: "What's New in v0.8.3",
     items: [
