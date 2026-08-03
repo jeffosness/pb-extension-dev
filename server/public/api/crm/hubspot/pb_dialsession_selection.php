@@ -328,24 +328,6 @@ $payload = [
   ],
 ];
 
-// DEV-ONLY: mirror the exact payload sent to PB to a webhook catcher so
-// Salt-side can build their intake handler against a known-good fixture.
-// Best-effort, short timeout, ignores errors — never blocks the dial session.
-if (strpos((string)(cfg()['BASE_URL'] ?? ''), 'extension-dev') !== false) {
-  $__dbg = curl_init('https://webhooktest.phoneburner.biz/webhooks/webhook_demo.php');
-  curl_setopt($__dbg, CURLOPT_POST, true);
-  curl_setopt($__dbg, CURLOPT_POSTFIELDS, json_encode(
-    ['source' => 'hs_selection', 'payload' => $payload],
-    JSON_UNESCAPED_SLASHES
-  ));
-  curl_setopt($__dbg, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-  curl_setopt($__dbg, CURLOPT_RETURNTRANSFER, true);
-  curl_setopt($__dbg, CURLOPT_CONNECTTIMEOUT, 2);
-  curl_setopt($__dbg, CURLOPT_TIMEOUT, 3);
-  @curl_exec($__dbg);
-  curl_close($__dbg);
-}
-
 // Call PhoneBurner. Shared helper handles logging + api_error on failure,
 // including capturing PB's response body so support can triage the failure.
 // Returns {response, pb_ms, pb_http} on success — pb_ms + pb_http feed the
