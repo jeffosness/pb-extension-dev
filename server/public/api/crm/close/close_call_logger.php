@@ -434,7 +434,11 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     ];
     if ($httpCode >= 400 && $rawResp) {
         $errBody = json_decode($rawResp, true);
-        $logData['close_error'] = is_array($errBody) ? $errBody : substr($rawResp, 0, 500);
+        // Scrub OAuth token patterns from the raw fallback — this goes to
+        // log_msg (app.log) which support / Loggly may read. Same class as
+        // the customer-facing leak fixed in describe_api_failure. See
+        // LESSONS.md 2026-08-03 adversarial review round 5, finding #2.
+        $logData['close_error'] = is_array($errBody) ? $errBody : _pb_scrub_tokens(substr($rawResp, 0, 500));
     }
     log_msg('close_call_log: ' . json_encode($logData));
 

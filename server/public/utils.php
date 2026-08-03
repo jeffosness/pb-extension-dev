@@ -491,6 +491,34 @@ function pb_call_dialsession($pat, array $payload) {
 }
 
 /**
+ * Scrub OAuth-style token patterns from a text string. Belt-and-suspenders
+ * used at any boundary where provider response text may reach a customer's
+ * popup, a support ticket screenshot, or a log file. Two patterns:
+ *
+ *   1. JSON-string form: `"access_token":"..."` → `"access_token":"[REDACTED]"`
+ *   2. Bearer / query-string form: `Bearer XXX`, `access_token=XXX` → `[REDACTED_TOKEN]`
+ *
+ * See LESSONS.md 2026-08-03 — a fifth adversarial-review round found that
+ * scrubbing only inside describe_api_failure missed sibling paths in
+ * apollo_helpers.php and close_call_logger.php that also surfaced raw
+ * provider text. Factoring out this helper prevents the next drift.
+ */
+function _pb_scrub_tokens(string $text): string {
+    if ($text === '') return '';
+    $text = preg_replace(
+        '/"(access_token|refresh_token|id_token|token|api_key|client_secret)"\s*:\s*"[^"]*"/i',
+        '"$1":"[REDACTED]"',
+        $text
+    );
+    $text = preg_replace(
+        '/(?:Bearer\s+|access_token=|refresh_token=|api_key=)[A-Za-z0-9._~+\/=-]{20,}/i',
+        '[REDACTED_TOKEN]',
+        $text
+    );
+    return $text;
+}
+
+/**
  * Build a structured description of a failed external API call so callers can
  * log/surface it consistently. Pure function — no side effects.
  *
@@ -523,20 +551,8 @@ function describe_api_failure(?array $info, $decoded): array {
     // redact_pii_recursive() only sees keys after JSON decode; when decode
     // FAILS (BOM prefix, HTML wrapper, mid-stream truncation on a CDN), the
     // raw string reaches Loggly. If a 200-OK-with-tokens body happens to fail
-    // decode, we don't want the tokens on disk. Scrubs both JSON-string ("k":"v")
-    // and query-string / bearer-header shapes.
-    if ($bodySnippet !== '') {
-        $bodySnippet = preg_replace(
-            '/"(access_token|refresh_token|id_token|token|api_key|client_secret)"\s*:\s*"[^"]*"/i',
-            '"$1":"[REDACTED]"',
-            $bodySnippet
-        );
-        $bodySnippet = preg_replace(
-            '/(?:Bearer\s+|access_token=|refresh_token=|api_key=)[A-Za-z0-9._~+\/=-]{20,}/i',
-            '[REDACTED_TOKEN]',
-            $bodySnippet
-        );
-    }
+    // decode, we don't want the tokens on disk. See _pb_scrub_tokens above.
+    $bodySnippet = _pb_scrub_tokens($bodySnippet);
 
     // Provider error text — try common shapes in order of specificity.
     //   {"error":{"message":"..."}}                 — some HubSpot endpoints
@@ -563,6 +579,11 @@ function describe_api_failure(?array $info, $decoded): array {
         }
     }
     if ($message !== '') {
+        // Scrub OAuth token patterns before the message reaches the customer's
+        // popup (via api_error extras -> getErrorMessage) or Loggly. Providers
+        // occasionally echo tokens in error text ("Invalid token: pat-na1-XXXX...").
+        // See _pb_scrub_tokens above and LESSONS.md 2026-08-03.
+        $message = _pb_scrub_tokens($message);
         $message = preg_replace('/[\x00-\x1F\x7F]/', ' ', $message);
         if (strlen($message) > 200) {
             $message = substr($message, 0, 200) . '…';
