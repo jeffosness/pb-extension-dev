@@ -258,7 +258,11 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
           ]);
         }
         $diag['contacts_fetch']['fail']++;
-        $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 500) : null;
+        // Scrub OAuth token patterns before storing in $diag — this field
+        // flows through api_error extras to the customer's response body
+        // (via pb_dialsession_selection.php:71). See LESSONS.md 2026-08-03
+        // adversarial review round 5, finding #1.
+        $diag['contacts_fetch']['last_error'] = is_string($raw) ? _pb_scrub_tokens(substr($raw, 0, 500)) : null;
         continue;
       }
 
@@ -288,7 +292,11 @@ function apollo_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = 
           ]);
         }
         $diag['contacts_fetch']['fail'] += count($batch);
-        $diag['contacts_fetch']['last_error'] = is_string($raw) ? substr($raw, 0, 500) : null;
+        // Scrub OAuth token patterns before storing in $diag — this field
+        // flows through api_error extras to the customer's response body
+        // (via pb_dialsession_selection.php:71). See LESSONS.md 2026-08-03
+        // adversarial review round 5, finding #1.
+        $diag['contacts_fetch']['last_error'] = is_string($raw) ? _pb_scrub_tokens(substr($raw, 0, 500)) : null;
         continue;
       }
 
