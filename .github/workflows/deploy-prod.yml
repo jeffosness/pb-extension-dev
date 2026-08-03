@@ -72,20 +72,20 @@ jobs:
               return;
             }
 
-            // Tier 2 file patterns — KEEP IN SYNC with risk-tier-check.yml's
-            // TIER_2_PATTERNS list. If a file gets added there and not here
-            // (or vice versa), the cool-off silently mis-fires.
-            const TIER_2_PATTERNS = [
-              /^server\/public\/utils\.php$/,
-              /^server\/public\/api\/core\/bootstrap\.php$/,
-              /^server\/public\/webhooks\/.*\.php$/,
-              /^server\/public\/sse\.php$/,
-              /^server\/public\/config\.sample\.php$/,
-              /^server\/public\/api\/.*oauth_.*\.php$/,
-              /^server\/public\/api\/.*_call_logger\.php$/,
-              /^server\/public\/api\/core\/oauth_pb_(save|clear)\.php$/,
-              /^SECURITY\.md$/,
-            ];
+            // Tier 2 file patterns — SINGLE SOURCE OF TRUTH in
+            // .github/tier2-patterns.json (shared with risk-tier-check.yml).
+            // Read from the checked-out tag. If the tag predates this file
+            // (redeploy of an old commit), warn and skip cool-off — matches
+            // the conservative "skip on uncertainty" behavior further down.
+            const fs = require('fs');
+            let TIER_2_PATTERNS;
+            try {
+              const raw = fs.readFileSync('.github/tier2-patterns.json', 'utf8');
+              TIER_2_PATTERNS = JSON.parse(raw).patterns.map(s => new RegExp(s));
+            } catch (e) {
+              core.warning(`Could not load .github/tier2-patterns.json (${e.message}); skipping cool-off.`);
+              return;
+            }
 
             // Find the previous prod-* tag so we can compute what's in
             // this deploy (i.e. what's changed since the last time prod

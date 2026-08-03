@@ -1,0 +1,14 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for Tier-2 (security-critical) file patterns. Consumed by both .github/workflows/risk-tier-check.yml (PR classification) and .github/workflows/deploy-prod.yml (4-hour prod cool-off). Each string is a JavaScript RegExp source matched against a repo-relative file path. KEEP IN SYNC with SECURITY.md's 'Files that trigger Security Impact review' list. Editing this one file updates both gates at once — do not re-inline these patterns into the workflows.",
+  "patterns": [
+    "^server/public/utils\\.php$",
+    "^server/public/api/core/bootstrap\\.php$",
+    "^server/public/webhooks/.*\\.php$",
+    "^server/public/sse\\.php$",
+    "^server/public/config\\.sample\\.php$",
+    "^server/public/api/.*oauth_.*\\.php$",
+    "^server/public/api/.*_call_logger\\.php$",
+    "^server/public/api/core/oauth_pb_(save|clear)\\.php$",
+    "^SECURITY\\.md$"
+  ]
+}

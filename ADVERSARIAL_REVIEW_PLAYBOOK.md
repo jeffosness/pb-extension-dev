@@ -3,15 +3,15 @@
 The method behind the reviews that have been catching high-impact bugs other reviewers miss. Copy the prompts; keep the process.
 
 ## The one-sentence version
-Run **two independent hostile reviewers** (different model families) who must **prove every finding with `file:line` + a concrete failure scenario**, seed them with the **system's known failure classes**, make them **verify against live state (not the diff or the PR text)** — then **adjudicate every claim yourself before it reaches a human**, killing what you can't reproduce.
+Run **two or more independent hostile reviewers with diverse lenses** who must **prove every finding with `file:line` + a concrete failure scenario**, seed them with the **system's known failure classes**, make them **verify against live state (not the diff or the PR text)** — then **adjudicate every claim yourself before it reaches a human**, killing what you can't reproduce.
 
 ## Why it works (don't skip this)
 - **Hostility + an evidence bar** kills vague findings. The persona line that does the work: *"a false accusation embarrasses you — only report a real problem with a concrete failure scenario."*
-- **Two independent models** (e.g. Claude + Codex) have **uncorrelated blind spots**. Convergence = high confidence; divergence = look harder.
+- **Independent passes with diverse assigned lenses** have **less-correlated blind spots**. Convergence across lenses = higher confidence; divergence = look harder. Caveat: the run-recipe below spawns *same-family* Claude subagents, which share training-level blind spots — so their agreement is NOT the strong statistical independence that cross-*family* review (a second model family run out-of-band) would give. Don't over-trust convergence; use it as a signal, not a proof.
 - **Adjudication is the secret sauce, not the agents.** The agents produce candidate findings, some wrong. Value comes from re-verifying each against live code and dropping the unverifiable. Without it you get confident noise, and people stop reading reviews.
 
 ## The process (7 steps)
-1. **Fetch ground truth.** The diff, the full files on the branch (`git show origin/<branch>:<path>`), and the *live* state the change depends on — `gh api` for branch protection, live PyPI for a dep, the actual RLS/GRANT on a referenced table, the current-main body of an RPC being replaced. **Never trust the PR description or the diff alone.**
+1. **Fetch ground truth.** The diff, the full files on the branch (`git show origin/<branch>:<path>`), and the *live* state the change depends on — `gh api` for branch protection, a deployed endpoint's actual response, a captured live webhook payload, the real rendered CRM DOM the scraper targets, the current-main body of a function being replaced. **Never trust the PR description or the diff alone.**
 2. **Calibrate the lens to the artifact:**
    - *Code* → can it break prod / corrupt data / leak?
    - *Docs* → does it mislead, drift from what shipped, or falsely certify?
@@ -28,7 +28,7 @@ Run **two independent hostile reviewers** (different model families) who must **
 7. **Re-review the fix hostilely too.** A fix can address the symptom not the cause, or introduce a new bug. Verify the fix reached `main` and that a regression test now guards the class.
 
 ## The hostile-reviewer prompt (copy this)
-> You are a [30-year domain expert — e.g. telecom billing-systems auditor + database engineer] doing a HOSTILE code review. Your conviction: the author shipped fast with AI and got something wrong, and you will prove it with EVIDENCE (`file:line`). Be harsh — but a false accusation embarrasses you, so only report a REAL problem with a concrete failure scenario. READ-ONLY: do not modify or merge anything.
+> You are a [30-year domain expert — e.g. a Chrome-extension security reviewer + PHP API/token-storage auditor, or a CRM-integration engineer who has watched webhook payloads drift] doing a HOSTILE code review. Your conviction: the author shipped fast with AI and got something wrong, and you will prove it with EVIDENCE (`file:line`). Be harsh — but a false accusation embarrasses you, so only report a REAL problem with a concrete failure scenario. READ-ONLY: do not modify or merge anything.
 > Verify claims against the actual branch and live state, not the diff or the PR description.
 > Known failure classes for this system to check explicitly: [list].
 > Your lens: [assign ONE — security / data-integrity / silent-failure / one-brain / fix-quality].
@@ -38,11 +38,9 @@ Run **two independent hostile reviewers** (different model families) who must **
 Seed every review with these; they're the incidents this program has actually hit across projects:
 - **Identity by mutable name, not immutable ID** (cross-customer exposure).
 - **Cross-field contradiction** shipped to customers (e.g. "cleared" while still flagged).
-- **Write-path divergence** — a write updates the audit table but not the table the UI/consumer reads (false success).
-- **Silent suppression / empty-as-success** — a gate or query returns nothing and it's read as "all good" (e.g. #700: coverage gate read the wrong field → 17% → suppressed every email, no alarm).
-- **`REVOKE ... FROM anon` no-op** — EXECUTE defaults to PUBLIC and anon inherits it; must revoke `anon, PUBLIC`.
-- **Stale-paste of an RPC body** — re-`CREATE OR REPLACE` from an old copy silently reverts the latest fix.
-- **Destructive migration** — cascading delete destroys evidence, or a no-`ON DELETE` FK aborts the release.
+- **Write-path divergence** — a write updates one store but not the one the UI/consumer reads (false success). This repo's instance: the `contacts_map` key diverging from the `crm_id` sent to PhoneBurner (see repo-specific list below).
+- **Silent suppression / empty-as-success** — a gate or query returns nothing and it's read as "all good" (this repo's instance: LESSONS.md 2026-07-08, the CRM Distribution dashboard silently counted non-user event types after CTC events landed in the same log → inflated numbers, no alarm).
+- **Destructive / non-atomic write** — a write that isn't atomic truncates or corrupts a token/session file (why `atomic_write_json()` exists), or a log-format change silently breaks the Support-ID → log lookup path.
 - **Doc drift** — the plan-of-record certifies a safety posture the shipped code no longer has.
 - **Approval integrity** — material change pushed onto a stale approval; guardrail assumed but not enforced by branch protection.
 
@@ -61,8 +59,8 @@ Seed every review of a Tier 1+ PR with these. They're drawn from [LESSONS.md](LE
 
 - **Shallow error handlers copy-pasted across integrations** — N endpoints, N missed opportunities to log the provider's error body. See LESSONS.md 2026-07-27. The adversarial pass on that PR found the sweep itself missed 3 more sites — BLOCKER caught pre-merge.
 - **Undefined-variable dangling refs after a refactor** — deleting a local assignment (`$t0 = ...; $pb_ms = ...`) but leaving downstream references. Under PHP 8 these emit warnings on every success and silently break stability contracts (e.g. `pb_ms: null` in the response JSON). Caught in the 2026-07-27 adversarial pass.
-- **Docs-as-guardrail without a CI counterpart** — CLAUDE.md checklist items drift because there's no mechanical enforcement. Repeat class: LESSONS.md 2026-07-09 (whitelist checklist item hit a repeat regression), 2026-07-27 (adversarial-review process was "fill in a section" self-review, missed a BLOCKER).
-- **Silent suppression / empty-as-success on dashboards** — LESSONS.md 2026-07-08 (CRM Distribution silently included non-user event types after CTC events landed in the same log); 2026-07-23 (level:0 pollution from webhook writes in user-behavior aggregations).
+- **Docs-as-guardrail without a CI counterpart** — CLAUDE.md checklist items drift because there's no mechanical enforcement. Repeat class: LESSONS.md 2026-07-09 (whitelist checklist item hit a repeat regression), 2026-07-28 (adversarial-review gate was "fill in a section" self-review, which missed a BLOCKER two independent hostile lenses later caught).
+- **Silent suppression / empty-as-success on dashboards** — LESSONS.md 2026-07-08 (CRM Distribution silently included non-user event types after CTC events landed in the same log). Same class, not yet in LESSONS.md: PR #189 excluded the `click_to_call_done` webhook from user-behavior aggregations after it polluted them — log it if the class recurs.
 - **PHP `?>` inside `//` comment terminates PHP mode** — a fresh prod deploy served source code because a comment referenced PHP close-tag syntax literally. LESSONS.md 2026-07-17. When reviewing PHP that quotes syntax in comments, grep for close-tag inside line comments.
 - **Payload-shape guess for a new webhook** — assumed the shape from a neighbor. Real webhook uses different keys, entire dashboard dimension logs as null. LESSONS.md 2026-07-03. Verify against a captured live payload before shipping.
 - **Cool-off gate at the wrong boundary** — a Tier-2 gate at PR-merge blocked the dev-testing path itself. LESSONS.md 2026-07-08. Any new gate must be traced against the actual deploy pipeline end-to-end before shipping.
@@ -86,8 +84,8 @@ When the task calls for a hostile review (any Tier 2 PR — see CLAUDE.md Risk-t
 4. **Report to the user** with a merged table: severity, reviewer, status. Fix BLOCKERs and MAJORs before merge. Ship MINORs / NITs as same-PR if cheap, or as follow-up.
 5. **When you push fixes for BLOCKERs, re-run at least one hostile pass on the fix.** Fixes have their own regression class (step 7 of the process above).
 
-The playbook takes about 15 minutes of parallel agent-work. On its first application in this repo (LESSONS.md 2026-07-27) it caught a BLOCKER that two solo review passes missed. **For Tier 2 PRs it is not optional — CLAUDE.md's Risk-tier gates require it.** For Tier 1 PRs it's strongly encouraged but not gated.
+The playbook takes about 15 minutes of parallel agent-work. On its first real application in this repo (LESSONS.md 2026-07-27 / 2026-07-28) it caught a BLOCKER that solo self-review missed — two independent hostile lenses converged on it. **For Tier 2 PRs it is required by policy (CLAUDE.md's Risk-tier gates + SECURITY.md).** But know the mechanical limit: the CI check (`.github/workflows/risk-tier-check.yml`) only verifies that a `## Adversarial Review` section exists with ≥20 non-comment characters — it *cannot* tell whether you actually ran the parallel-agent process. Passing CI is not evidence the playbook ran; the requirement binds you, not the gate. Treating "section filled in" as "review done" is exactly the 2026-07-28 failure class this repo already hit. For Tier 1 PRs it's strongly encouraged but not gated.
 
 ## When self-review is enough (Tier 0 / trivial PRs)
 
-Not every PR needs the full playbook. For Tier 0 (docs, dashboard, changelog, marketing) and trivial Tier 1 changes (a single-line bug fix, a rename, a comment update), the PR-body "Adversarial Review" section — a real 2–5 line stab at "what could break?" — is sufficient. Reserve the parallel-hostile-agent process for changes where a BLOCKER hitting prod would actually cost customers: shared helpers, security-critical files, auth/OAuth flows, cross-integration abstractions, anything that fans out to many callers. When in doubt, run it — 15 min of parallel work is cheaper than a bad prod deploy.
+Not every PR needs the full playbook. For Tier 0 (docs, dashboard, changelog, marketing) and trivial Tier 1 changes (a single-line bug fix, a rename, a comment update), the PR-body "Adversarial Review" section — a real 2–5 line stab at "what could break?" — is sufficient. Reserve the parallel-hostile-agent process for changes where a BLOCKER hitting prod would actually cost customers: shared helpers, security-critical files, auth/OAuth flows, cross-integration abstractions, anything that fans out to many callers. (Some of these — e.g. a shared `{provider}_helpers.php` — are CI **Tier 1**, not Tier 2; run the full process on judgment regardless of the CI label.) When in doubt, run it — 15 min of parallel work is cheaper than a bad prod deploy.
