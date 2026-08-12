@@ -489,10 +489,16 @@ function pb_call_dialsession($pat, array $payload) {
   // during the wait so it doesn't look like a hang.
   //
   // Belt-and-suspenders: bump PHP's max_execution_time so a 60s curl wait
-  // doesn't get killed by a stock php.ini default of 30s. @-suppressed so
+  // doesn't get killed by a stock php.ini default of 30s. Only bumps when
+  // the current limit is strictly between 0 and 90 — set_time_limit RESETS
+  // the timer (not max()), so we mustn't call it when we'd shrink a higher
+  // existing allowance or downgrade "unlimited" (0) to 90. @-suppressed so
   // hardened setups that disable set_time_limit fail silently rather than
-  // erroring out (curl still runs, just capped by whatever ini_get returns).
-  @set_time_limit(90);
+  // erroring out (curl still runs, just capped by whatever ini returns).
+  $currentLimit = (int)ini_get('max_execution_time');
+  if ($currentLimit > 0 && $currentLimit < 90) {
+    @set_time_limit(90);
+  }
 
   if (function_exists('pb_api_call')) {
     return pb_api_call($pat, 'POST', '/dialsession', $payload, 60);
@@ -793,12 +799,19 @@ function pb_dialsession_or_fail(string $pat, array $payload, string $endpointLab
         // timeout empirically instead of by guess. Added 2026-08-12 alongside
         // the 20s->60s timeout bump; before this line we only had visibility
         // into the failure tail. Pure additive log — no functional impact.
+        //
+        // Key order matters: extraLog first, canonical keys second. array_merge
+        // resolves collisions in favor of the LATER arg, so our endpoint/pb_ms
+        // /pb_http always win over any caller-supplied same-named key. Without
+        // this order a future caller passing e.g. `pb_ms` in their extras would
+        // silently overwrite our timing value (the very metric this line
+        // exists to feed). Adversarial reviewers 2026-08-12 converged on this.
         if (function_exists('api_log')) {
-            api_log('pb_dialsession.ok', array_merge([
+            api_log('pb_dialsession.ok', array_merge($extraLog, [
                 'endpoint' => $endpointLabel,
                 'pb_ms'    => $pb_ms,
                 'pb_http'  => $httpCode,
-            ], $extraLog));
+            ]));
         }
         return [
             'response' => $resp,
@@ -811,7 +824,12 @@ function pb_dialsession_or_fail(string $pat, array $payload, string $endpointLab
     // failure logs the same structured shape (see describe_api_failure).
     $fail = describe_api_failure($info, $resp);
 
-    $logFields = array_merge([
+    // Key order: extraLog first, canonical keys second (later wins). Prevents
+    // a future caller from silently shadowing our diagnostic fields — see the
+    // .ok log path above for the same guard. Fixes a latent failure mode
+    // introduced with the original error-log helper (PR #190); paired here
+    // with the success-log addition (2026-08-12).
+    $logFields = array_merge($extraLog, [
         'endpoint'        => $endpointLabel,
         'pb_http'         => $fail['status'],
         'pb_ms'           => $pb_ms,
@@ -819,7 +837,7 @@ function pb_dialsession_or_fail(string $pat, array $payload, string $endpointLab
         'pb_response'     => $fail['response'],
         'pb_body_snippet' => $fail['body_snippet'],
         'curl_error'      => $fail['curl_error'],
-    ], $extraLog);
+    ]);
 
     if (function_exists('api_log')) {
         api_log('pb_dialsession.error', $logFields);
