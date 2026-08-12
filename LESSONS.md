@@ -6,6 +6,30 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-08-12 — Our `pb_api_call` timeout was below PhoneBurner's own recommended client default
+
+**What happened:** Claire Ferreira (proroofersinc.com) hit `Operation timed out after 20003 milliseconds with 0 bytes received` when launching a dial session from a HubSpot list of 1,354 contacts (500 sent to PB after truncation). Other customers' sessions were succeeding fine. The error was our `pb_api_call` client-side curl timeout — `CURLOPT_TIMEOUT = 20` — cutting the connection before PB could respond.
+
+**Why 20s wasn't enough for her:** Salt's `/rest/1/dialsession` intake iterates contacts one-by-one in `Controller_Rest_Resource_Contacts::postMultipleContacts`, running per-contact duplicate checks (email + phone + external_id + external_crm_id + lead_id, all scoped to the owner's contact database) and calling `EntityManagerInterface->flush()` after each `postSingleContact()`. **The work scales O(N × account_size).** For a 500-contact batch against proroofers' large existing contact DB, that's legitimately 25-45 seconds — not a bug, just how the intake is architected.
+
+**Why we set 20s originally:** Reasonable default for the common case (small selections + fast PB response). Prod PB responds to a single-contact `/dialsession` in ~800ms, so 20s was ~25× normal. The failure mode we optimized for was "PB is broken, don't hang the customer's popup forever." We hadn't accounted for the intake-side O(N) scaling.
+
+**What Salt's own defaults told us on inspection:** Their sample PHP client (`salt/docs/api/Client/Networx_PHP_Client.php:34`) uses `CURLOPT_TIMEOUT = 30`. Their own `SoftphoneCalldone.php` outbound curl uses 30s. Their internal `Controller/Dialer/Sessions.php` bumps `max_execution_time` to 1800s (30 min). No hard server-side timeout on the /dialsession POST itself. **Our 20s was strictly below what they explicitly designed clients to use.**
+
+**Silent secondary bug that longer timeouts help with:** if PB accepts the payload but responds in 22s, we hang up at 20s and tell the customer "failed" — but PB already committed the session server-side. Customer retries, now there are TWO PB dial sessions from one intent. The 60s ceiling widens the window in which we correctly see PB's success, shrinking that zombie-session class.
+
+**Fix (this PR):**
+
+1. `pb_api_call($pat, $method, $path, $body = null, int $timeoutSec = 20)` — new optional param, default preserves existing behavior. Non-invasive for the four existing callers.
+2. `pb_call_dialsession` — passes 60. Adds `@set_time_limit(90)` belt-and-suspenders so a stock `php.ini` `max_execution_time=30` doesn't kill the request before curl finishes. The `@`-suppression handles hardened setups that disable `set_time_limit`.
+3. `pb_dialsession_or_fail` — logs `pb_dialsession.ok` with `pb_ms` on the success path (before it only logged the failure tail). Empirical PB latency distribution is now visible so we can tune the timeout with data instead of guesses.
+
+**Broader lesson — check the vendor's own sample-client timeout before setting yours.** If we'd read Salt's `docs/api/Client/Networx_PHP_Client.php` when writing our first `pb_api_call`, we'd have set 30-60s from day one. Their sample encodes their own knowledge of typical intake latency; ignoring it in favor of what "feels reasonable" from the outside cost one customer report to surface. Adding to the mental model: **for every external API we call, spend two minutes on their reference client to see what timeout / retry / backoff they recommend, then meet or exceed it.**
+
+**Not doing:** progressive retry with smaller payloads on timeout (splitting 500 into 2×250). Too much complexity, changes user-visible semantics, and the empirical fix (bump timeout to what Salt actually expects) resolves the reported class of failure. The new `.ok` log line will tell us if we need to revisit.
+
+---
+
 ## 2026-08-02 — Diagnostic instrumentation took FOUR sweeps to close; the pattern is now formally named
 
 **What happened:** Jeff local-tested v0.8.4 on dev after PR #190 merged, hit an OAuth `PAT validation failed` error, screenshot showed the new Support ID (`6893d68645a5`), SSHed into the dev VPS, grepped `/opt/pb-extension-dev/var/log/api.log`, found the entry — and it was **still shallow**. The `oauth_pb_save.php` endpoint had never been in any of the three prior audit sweeps for shallow error handlers (the initial PR #190 sweep, the audit-sweep follow-up, and the adversarial review of that follow-up). Fourth sweep started with a proper full audit (an Explore agent enumerating every callsite of `pb_api_call` / `http_post_form_info` / `curl_exec` / all provider-specific helpers). Found 15 more sites. Instrumented all of them. Ran the adversarial-review playbook. Two hostile reviewers converged on THREE more sites the fourth sweep still missed:

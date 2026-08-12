@@ -480,8 +480,22 @@ function clear_apollo_tokens($client_id)
 // -------------------------------------------------------------------------
 
 function pb_call_dialsession($pat, array $payload) {
+  // PB's /dialsession intake iterates contacts sequentially with per-contact
+  // duplicate checks + Doctrine flush (see salt/classes/Controller/Rest/1/
+  // Resource/Contacts.php::postMultipleContacts). For 500-contact payloads on
+  // accounts with large existing contact databases this legitimately takes
+  // 25-45s. Salt has no server-side timeout and their own sample client uses
+  // 30s. We give it 60s of headroom — the extension shows progress messaging
+  // during the wait so it doesn't look like a hang.
+  //
+  // Belt-and-suspenders: bump PHP's max_execution_time so a 60s curl wait
+  // doesn't get killed by a stock php.ini default of 30s. @-suppressed so
+  // hardened setups that disable set_time_limit fail silently rather than
+  // erroring out (curl still runs, just capped by whatever ini_get returns).
+  @set_time_limit(90);
+
   if (function_exists('pb_api_call')) {
-    return pb_api_call($pat, 'POST', '/dialsession', $payload);
+    return pb_api_call($pat, 'POST', '/dialsession', $payload, 60);
   }
   if (function_exists('pb_api')) {
     $resp = pb_api($pat, 'POST', '/dialsession', $payload);
@@ -774,6 +788,18 @@ function pb_dialsession_or_fail(string $pat, array $payload, string $endpointLab
 
     $httpCode = (int)($info['http_code'] ?? 0);
     if ($httpCode >= 200 && $httpCode < 400 && is_array($resp)) {
+        // Log successful calls too so we can see the pb_ms distribution across
+        // customers/endpoints — needed to right-size the /dialsession curl
+        // timeout empirically instead of by guess. Added 2026-08-12 alongside
+        // the 20s->60s timeout bump; before this line we only had visibility
+        // into the failure tail. Pure additive log — no functional impact.
+        if (function_exists('api_log')) {
+            api_log('pb_dialsession.ok', array_merge([
+                'endpoint' => $endpointLabel,
+                'pb_ms'    => $pb_ms,
+                'pb_http'  => $httpCode,
+            ], $extraLog));
+        }
         return [
             'response' => $resp,
             'pb_ms'    => $pb_ms,
@@ -1151,7 +1177,18 @@ function http_post_form_info($url, array $fields): array
  * $method: 'GET', 'POST', 'PUT', etc.
  * $path: e.g. '/dialsession' (we’ll assemble with PB_API_BASE).
  */
-function pb_api_call($pat, $method, $path, $body = null)
+/**
+ * @param int $timeoutSec Curl request timeout in seconds. Default 20s matches
+ *   the pre-2026-08-12 behavior and is appropriate for fast operations
+ *   (GETs, small POSTs). Callers making a request PB may legitimately take
+ *   longer to service — notably /dialsession with 500-contact payloads on
+ *   accounts with large existing contact databases — should pass a larger
+ *   value. See pb_call_dialsession() for the /dialsession-specific bump to
+ *   60s and LESSONS.md 2026-08-12 (Claire Ferreira / proroofers, 20003ms
+ *   curl timeout on a 1354-member HubSpot list). Salt's own sample client
+ *   in salt/docs/api/Client/Networx_PHP_Client.php uses 30s.
+ */
+function pb_api_call($pat, $method, $path, $body = null, int $timeoutSec = 20)
 {
     $url = rtrim(cfg()['PB_API_BASE'], '/') . '/' . ltrim($path, '/');
 
@@ -1166,7 +1203,7 @@ function pb_api_call($pat, $method, $path, $body = null)
     curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+    curl_setopt($ch, CURLOPT_TIMEOUT, $timeoutSec);
 
     if (!is_null($body)) {
         $payload = json_encode($body);
