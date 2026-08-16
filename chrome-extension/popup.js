@@ -206,6 +206,15 @@ function sendToBackground(msg) {
 async function withHarvestProgress(statusEl, taskPromise, opts = {}) {
   const defaultNoun = opts.defaultNoun || "record";
   const defaultNounPlural = opts.defaultNounPlural || "records";
+  // If skipHarvestPhase is true, we skip the "Scanning HubSpot…" phase and
+  // start the backend ticker immediately. Used for launch flows that don't
+  // have a client-side DOM harvest — e.g. List Launch, where the server
+  // fetches list membership from HubSpot API directly.
+  const skipHarvestPhase = !!opts.skipHarvestPhase;
+  // Optional context label (list name, queue name, etc.) woven into the
+  // ticker messages so the wait feels tied to what the user picked instead
+  // of generic "your dial session" copy. Empty string → generic wording.
+  const contextName = typeof opts.contextName === "string" ? opts.contextName.trim() : "";
 
   let currentNounPlural = defaultNounPlural;
   let harvestDone = false;
@@ -215,12 +224,24 @@ async function withHarvestProgress(statusEl, taskPromise, opts = {}) {
     if (statusEl) statusEl.textContent = text;
   };
 
-  const backendMessages = [
-    "Pulling contact details from HubSpot…",
-    "Fetching phone numbers and emails…",
-    "Building your dial session in PhoneBurner…",
-    "Almost there — get ready to dial…",
-  ];
+  // Build the backend-phase ticker. When a context name is present the
+  // opening message names it explicitly; subsequent lines cycle through
+  // the same generic-sounding activity messages either way so long waits
+  // don't stall on the same string.
+  const backendMessages = contextName
+    ? [
+        "Loading records from " + contextName + "…",
+        "Pulling contact details from HubSpot…",
+        "Fetching phone numbers and emails…",
+        "Building your dial session in PhoneBurner…",
+        "Almost there — get ready to dial…",
+      ]
+    : [
+        "Pulling contact details from HubSpot…",
+        "Fetching phone numbers and emails…",
+        "Building your dial session in PhoneBurner…",
+        "Almost there — get ready to dial…",
+      ];
 
   const startTicker = () => {
     let i = 0;
@@ -257,21 +278,34 @@ async function withHarvestProgress(statusEl, taskPromise, opts = {}) {
     setStatus(text);
   };
 
-  try {
-    chrome.runtime.onMessage.addListener(onMsg);
-  } catch (_) {}
-
-  // Seed the initial message so the user sees feedback even before the first
-  // HS_HARVEST_PROGRESS event lands (~50-200ms in).
-  setStatus("Scanning HubSpot for your selected " + defaultNounPlural + "…");
+  // Only listen for harvest events when a harvest phase actually runs.
+  // List Launch never emits HS_HARVEST_PROGRESS so subscribing is wasted
+  // (and would delay the ticker if a stale message from a previous run
+  // happened to arrive).
+  if (!skipHarvestPhase) {
+    try {
+      chrome.runtime.onMessage.addListener(onMsg);
+    } catch (_) {}
+    // Seed the initial message so the user sees feedback even before the
+    // first HS_HARVEST_PROGRESS event lands (~50-200ms in).
+    setStatus("Scanning HubSpot for your selected " + defaultNounPlural + "…");
+  } else {
+    // No harvest phase — start the backend ticker immediately so the wait
+    // doesn't sit on a static string. Common case: List Launch, where all
+    // the time is server-side (HS API pagination + PB /dialsession).
+    harvestDone = true;
+    startTicker();
+  }
 
   try {
     return await taskPromise;
   } finally {
     stopTicker();
-    try {
-      chrome.runtime.onMessage.removeListener(onMsg);
-    } catch (_) {}
+    if (!skipHarvestPhase) {
+      try {
+        chrome.runtime.onMessage.removeListener(onMsg);
+      } catch (_) {}
+    }
   }
 }
 
@@ -1352,17 +1386,16 @@ async function launchDialSessionFromList() {
     console.error("Permission request crashed:", err);
   }
 
-  // Build contextual loading message
-  const size = parseInt(selectedOpt?.dataset?.size || "0", 10);
-  const typeLabel = objectType === "companies" ? "companies" : "contacts";
-  let loadingMsg = "Building dial session";
-  if (size > 0) {
-    loadingMsg += ` from ${Math.min(size, 500)} ${typeLabel}`;
-  }
-  loadingMsg += "…";
-  if (size > 50) {
-    loadingMsg += " This may take a moment.";
-  }
+  // Pull the list's user-visible name from the selected <option> so the
+  // rotating status ticker can name it explicitly ("Loading records from
+  // Large List…"). Falls back to a generic phrasing if the option text
+  // isn't a clean list name (e.g. "Large List (contacts list)" — strip
+  // the trailing " (contacts list)" / " (companies list)" annotation
+  // that hs_lists.php adds).
+  const listNameRaw = (selectedOpt?.textContent || "").trim();
+  const listName = listNameRaw
+    .replace(/\s*\((?:contacts?|companies)\s+list\)\s*$/i, "")
+    .trim();
 
   // Disable controls during request
   if (listBtn) {
@@ -1371,16 +1404,26 @@ async function launchDialSessionFromList() {
   }
   if (listSelect) listSelect.disabled = true;
   if (listStatus) {
-    listStatus.textContent = loadingMsg;
     listStatus.classList.add("loading");
   }
 
-  const resp = await sendToBackground({
-    type: "HS_LAUNCH_FROM_LIST",
-    list_id: listId,
-    object_type: objectType,
-    portal_id: ACTIVE_CTX?.portalId || HS_STATE.portalId,
-  });
+  // List Launch has no client-side harvest phase — the server does the
+  // HubSpot list-membership fetch. Use skipHarvestPhase to start the
+  // backend ticker immediately, and weave the list name into the copy
+  // so the wait feels tied to what the user picked.
+  const resp = await withHarvestProgress(
+    listStatus,
+    sendToBackground({
+      type: "HS_LAUNCH_FROM_LIST",
+      list_id: listId,
+      object_type: objectType,
+      portal_id: ACTIVE_CTX?.portalId || HS_STATE.portalId,
+    }),
+    {
+      skipHarvestPhase: true,
+      contextName: listName,
+    }
+  );
 
   // Remove loading animation
   if (listStatus) listStatus.classList.remove("loading");

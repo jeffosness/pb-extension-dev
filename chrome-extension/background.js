@@ -300,6 +300,19 @@ function detectCrmFromUrl(tabUrl) {
         else if (typeId === "0-3") objectType = "deal";
       }
     }
+    // Segment pages: /contacts/{portalId}/objectLists/{segmentId}/(filters|...)
+    // HubSpot "Lists" that live under `objectLists` are query-based segments
+    // (as opposed to the static `/objects/0-X/views/{id}/list` lists above).
+    // The URL doesn't encode object type — HubSpot always uses the `/contacts/`
+    // app-prefix for CRM pages regardless of what the segment queries. Default
+    // to contact because that's what ~all segments in the wild target; a user
+    // with a company segment can still fall back to the HubSpot Lists dropdown
+    // in the popup. If we ever want stronger inference we can peek at DOM
+    // column headers, but this covers the common case.
+    else if (path.match(/\/objectLists\/(\d+)/)) {
+      pageType = "list";
+      objectType = "contact";
+    }
     // Tasks pages: /tasks/{portalId}/view/...
     // (Older task queue URL. Same feature; different URL shape.)
     else if (path.match(/\/tasks\/\d+\/(view|queue)\//)) {

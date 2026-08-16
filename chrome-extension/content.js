@@ -1830,6 +1830,15 @@ function hs_getPageContext() {
     else if (recObjId === "0-3") objectType = "deal";
   }
 
+  // Segments: /contacts/{portalId}/objectLists/{segmentId}/... — URL doesn't
+  // encode object type, default to contact (see the same reasoning in
+  // background.js:detectCrmFromUrl). Only apply the default when nothing
+  // above matched so an explicit /objects/{typeId}/ or /record/{typeId}/
+  // classification always wins.
+  if (objectType === "unknown" && parts.indexOf("objectLists") !== -1) {
+    objectType = "contact";
+  }
+
   return {
     objectType,
     portalId,

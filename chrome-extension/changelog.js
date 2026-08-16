@@ -16,6 +16,14 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.5": {
+    title: "What's New in v0.8.5",
+    items: [
+      "Launch dial sessions from HubSpot segments — select contacts on any segment view (URLs with /objectLists/) and the Launch card now shows up just like a regular list",
+      "Nicer wait experience when launching from a large HubSpot list — the popup cycles through progress messages naming your list instead of a static \"Building dial session…\" line",
+      "Large-list launches also benefit from a longer server-side window (up to 60 seconds) so bigger lists no longer time out on busy PhoneBurner accounts"
+    ]
+  },
   "0.8.4": {
     title: "What's Improved in v0.8.4",
     items: [
