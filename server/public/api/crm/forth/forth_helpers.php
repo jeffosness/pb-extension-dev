@@ -75,7 +75,10 @@ function forth_mint_access_token_or_fail(string $client_id, array $tokens): arra
 
   $ms     = (int) round((microtime(true) - $t0) * 1000);
   $status = (int)($info['http_code'] ?? 0);
-  $resp   = ($status >= 200 && $status < 300 && is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
+  // Decode regardless of status so the failure branch below hands the DECODED
+  // error body to describe_api_failure (preserves Forth's own message, e.g.
+  // "Client not found"). Success is still gated on status + non-empty api_key.
+  $resp   = (is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
 
   // Forth nests the token under `response`; also tolerate a flat shape.
   $inner  = (is_array($resp) && isset($resp['response']) && is_array($resp['response'])) ? $resp['response'] : $resp;
@@ -126,7 +129,10 @@ function forth_get_access_token_or_fail(string $client_id, array &$tokens): stri
 
 /**
  * GET request to the Forth API with Api-Key auth.
- * Returns [$httpCode, $jsonArray, $rawBody].
+ * Returns [$httpCode, $jsonArray, $rawBody, $info] where $info is a
+ * describe_api_failure-ready array (http_code, raw_body, curl_error). Capturing
+ * curl_error means transport failures (timeout/DNS/TLS → http_code 0) still log
+ * the underlying reason, per CLAUDE.md's external-call failure-logging rule.
  */
 function forth_api_get_json(string $apiKey, string $url): array {
   $ch = curl_init($url);
@@ -140,14 +146,17 @@ function forth_api_get_json(string $apiKey, string $url): array {
   ]);
   $raw  = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $err  = curl_error($ch);
   curl_close($ch);
   $json = (is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
-  return [$code, $json, $raw];
+  $info = ['http_code' => $code, 'raw_body' => is_string($raw) ? $raw : ''];
+  if ($err !== '') $info['curl_error'] = $err;
+  return [$code, $json, $raw, $info];
 }
 
 /**
  * POST JSON to the Forth API with Api-Key auth.
- * Returns [$httpCode, $jsonArray, $rawBody].
+ * Returns [$httpCode, $jsonArray, $rawBody, $info] (see forth_api_get_json).
  */
 function forth_api_post_json(string $apiKey, string $url, array $body): array {
   $ch = curl_init($url);
@@ -164,9 +173,12 @@ function forth_api_post_json(string $apiKey, string $url, array $body): array {
   ]);
   $raw  = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $err  = curl_error($ch);
   curl_close($ch);
   $json = (is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
-  return [$code, $json, $raw];
+  $info = ['http_code' => $code, 'raw_body' => is_string($raw) ? $raw : ''];
+  if ($err !== '') $info['curl_error'] = $err;
+  return [$code, $json, $raw, $info];
 }
 
 /**
@@ -179,13 +191,13 @@ function forth_api_post_json(string $apiKey, string $url, array $body): array {
  * NOTE: `id` comes back as int OR string across entries — always cast to int.
  */
 function forth_fetch_disposition_map(string $apiKey): array {
-  list($code, $json, $raw) = forth_api_get_json($apiKey, FORTH_API_BASE . 'calls/disposition');
+  list($code, $json, $raw, $info) = forth_api_get_json($apiKey, FORTH_API_BASE . 'calls/disposition');
   $map = [];
   if ($code !== 200 || !is_array($json)) {
     // Log Forth's own error text (not just the HTTP code) so a customer whose
     // dispositions silently stop mapping has a diagnostic trail. Uses
     // _pb_write_api_log so it is safe in the webhook context (no bootstrap).
-    $fail = describe_api_failure(['http_code' => $code, 'raw_body' => (string)$raw], $json);
+    $fail = describe_api_failure($info, $json);
     _pb_write_api_log('forth_dispo_fetch.error', [
       'status'       => $fail['status'],
       'provider_msg' => $fail['message'],

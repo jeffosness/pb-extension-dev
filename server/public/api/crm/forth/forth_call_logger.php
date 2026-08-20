@@ -72,7 +72,10 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
         if ($mintErr !== '') $mintInfo['curl_error'] = $mintErr;
 
         $mintCode = (int)($mintInfo['http_code'] ?? 0);
-        $mintResp = ($mintCode >= 200 && $mintCode < 300 && $mintRaw) ? json_decode($mintRaw, true) : null;
+        // Decode regardless of status so the failure branch hands describe_api_failure
+        // the DECODED error body (preserves Forth's own message). Success is still
+        // gated on a non-empty api_key below.
+        $mintResp = (is_string($mintRaw) && $mintRaw !== '') ? json_decode($mintRaw, true) : null;
         $mintInner = (is_array($mintResp) && isset($mintResp['response']) && is_array($mintResp['response']))
             ? $mintResp['response'] : $mintResp;
         $newKey = is_array($mintInner) ? (string)($mintInner['api_key'] ?? '') : '';
@@ -153,7 +156,8 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
             $pat = load_pb_token($clientId);
             if ($pat) {
                 list($pbInfo, $pbContact) = pb_api_call($pat, 'GET', '/contacts/' . rawurlencode($pbUserId));
-                if ((int)($pbInfo['http_code'] ?? 0) === 200 && is_array($pbContact)) {
+                $pbHttp = (int)($pbInfo['http_code'] ?? 0);
+                if ($pbHttp === 200 && is_array($pbContact)) {
                     $pbEcd = $pbContact['external_crm_data'] ?? $pbContact['external_crm'] ?? null;
                     if (is_array($pbEcd)) {
                         foreach ($pbEcd as $row) {
@@ -167,6 +171,18 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
                             }
                         }
                     }
+                } else {
+                    // The PB lookup itself failed (e.g. expired PAT / non-200) —
+                    // capture PB's own error text so this doesn't silently reduce
+                    // to "contact not in contacts_map" below. CLAUDE.md external-
+                    // call failure-logging rule.
+                    $pbFail = describe_api_failure($pbInfo, $pbContact);
+                    _pb_write_api_log('forth_call_log_pb_lookup.error', [
+                        'status'       => $pbFail['status'],
+                        'provider_msg' => $pbFail['message'],
+                        'body_snippet' => $pbFail['body_snippet'],
+                        'curl_error'   => $pbFail['curl_error'],
+                    ]);
                 }
             }
         }
@@ -231,11 +247,12 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
     // -------------------------------------------------------------------------
     // 1) Create the call activity
     // -------------------------------------------------------------------------
-    list($httpCode, $callResp, $rawResp) = forth_api_post_json($apiKey, FORTH_API_BASE . 'calls', $callData);
+    list($httpCode, $callResp, $rawResp, $callInfo) = forth_api_post_json($apiKey, FORTH_API_BASE . 'calls', $callData);
 
+    $callOk  = ($httpCode >= 200 && $httpCode < 300);
     $logData = [
         'http_code'     => $httpCode,
-        'success'       => ($httpCode >= 200 && $httpCode < 300),
+        'success'       => $callOk,
         'contact_id'    => $forthContactId,
         'pb_status'     => $status,
         'pb_connected'  => $payload['connected'] ?? null,
@@ -243,14 +260,16 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
         'has_notes'     => !empty($callNotes),
         'has_recording' => isset($callData['recording_url']),
     ];
-    if ($httpCode >= 400) {
-        // Route through describe_api_failure so the logged body is token-scrubbed
-        // AND PII-redacted — a Forth 4xx often echoes submitted fields, and our
-        // `notes` embeds agent-typed call notes. Never log the raw decoded body.
-        $fail = describe_api_failure(['http_code' => $httpCode, 'raw_body' => (string)$rawResp], $callResp);
+    if (!$callOk) {
+        // ANY non-2xx (incl. http_code 0 from timeout/DNS/TLS). Route through
+        // describe_api_failure so the logged body is token-scrubbed AND
+        // PII-redacted — a Forth 4xx often echoes submitted fields, and our
+        // `notes` embeds agent-typed call notes. $callInfo carries the curl error.
+        $fail = describe_api_failure($callInfo, $callResp);
         $logData['provider_msg'] = $fail['message'];
         $logData['forth_error']  = $fail['response'];
         $logData['body_snippet'] = $fail['body_snippet'];
+        $logData['curl_error']   = $fail['curl_error'];
     }
     log_msg('forth_call_log: ' . json_encode($logData));
 
@@ -259,7 +278,7 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
     //    (POST /v1/contacts/{contact_id}/notes). note_type=1, public=true.
     // -------------------------------------------------------------------------
     if (!empty($callNotes)) {
-        list($noteCode, $_noteResp, $_noteRaw) = forth_api_post_json(
+        list($noteCode, $_noteResp, $_noteRaw, $noteInfo) = forth_api_post_json(
             $apiKey,
             FORTH_API_BASE . 'contacts/' . $forthContactId . '/notes',
             [
@@ -268,15 +287,17 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
                 'public'    => true,
             ]
         );
+        $noteOk  = ($noteCode >= 200 && $noteCode < 300);
         $noteLog = [
             'http_code'  => $noteCode,
-            'success'    => ($noteCode >= 200 && $noteCode < 300),
+            'success'    => $noteOk,
             'contact_id' => $forthContactId,
         ];
-        if ($noteCode >= 400) {
-            // Capture Forth's own error text, not just the HTTP code.
-            $nfail = describe_api_failure(['http_code' => $noteCode, 'raw_body' => (string)$_noteRaw], $_noteResp);
+        if (!$noteOk) {
+            // Any non-2xx — capture Forth's own error text + curl error.
+            $nfail = describe_api_failure($noteInfo, $_noteResp);
             $noteLog['provider_msg'] = $nfail['message'];
+            $noteLog['curl_error']   = $nfail['curl_error'];
         }
         log_msg('forth_note_log: ' . json_encode($noteLog));
     }
