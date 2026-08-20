@@ -268,4 +268,13 @@ if ($crmName === 'apollo') {
     }
 }
 
+if ($crmName === 'forth') {
+    try {
+        require_once __DIR__ . '/../api/crm/forth/forth_call_logger.php';
+        forth_log_call($state, $payload, $lastCall, $status);
+    } catch (\Throwable $e) {
+        log_msg('forth_call_log_error: ' . $e->getMessage());
+    }
+}
+
 echo 'OK';

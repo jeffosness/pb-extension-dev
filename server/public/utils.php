@@ -476,6 +476,66 @@ function clear_apollo_tokens($client_id)
 
 
 // -------------------------------------------------------------------------
+// Forth CRM token helpers (per client_id)
+//
+// Forth auth model (differs from OAuth providers above): the customer mints a
+// durable API credential pair in Forth (User Type = Service) — a `client_id`
+// (Key ID) + `client_secret` (Secret). Those are exchanged at
+// POST https://api.forthcrm.com/v1/auth/token for a short-lived `api_key`
+// access token (10-day TTL, `expires_in` = 864000s) that is sent as the
+// `Api-Key:` request header on every other call. There is NO refresh_token —
+// re-minting just re-posts the durable client_id/client_secret. So the token
+// file persists BOTH the durable creds and the cached api_key:
+//   { client_id, client_secret, api_key, created_at, expires_at, saved_at }
+// -------------------------------------------------------------------------
+
+function forth_token_path(string $client_id): string
+{
+    $dir = tokens_base_dir() . '/forth';
+    ensure_dir_secure($dir);
+    return $dir . '/' . $client_id . '.json';
+}
+
+function save_forth_tokens($client_id, array $tokens)
+{
+    $client_id = (string)$client_id;
+    $path = forth_token_path($client_id);
+
+    $tokens['saved_at'] = date('c');
+    atomic_write_json($path, $tokens);
+    audit_token_event('write', 'forth', $client_id, 'ok');
+}
+
+function load_forth_tokens($client_id)
+{
+    $client_id = (string)$client_id;
+    $path = forth_token_path($client_id);
+
+    if (!is_file($path)) {
+        audit_token_event('read', 'forth', $client_id, 'missing');
+        return null;
+    }
+
+    $data = json_decode(@file_get_contents($path), true);
+    $result = is_array($data) ? $data : null;
+    audit_token_event('read', 'forth', $client_id, $result ? 'ok' : 'error');
+    return $result;
+}
+
+function clear_forth_tokens($client_id)
+{
+    $client_id = (string)$client_id;
+    $path = forth_token_path($client_id);
+
+    $existed = is_file($path);
+    if ($existed) {
+        @unlink($path);
+    }
+    audit_token_event('delete', 'forth', $client_id, $existed ? 'ok' : 'missing');
+}
+
+
+// -------------------------------------------------------------------------
 // PhoneBurner API: create dial session (shared by all L3 providers)
 // -------------------------------------------------------------------------
 

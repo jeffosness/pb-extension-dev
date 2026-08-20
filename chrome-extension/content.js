@@ -1094,6 +1094,17 @@ function isSameCrmRecord(currentUrl, targetUrl) {
       return cur.hash === tgt.hash;
     }
 
+    // Forth CRM keeps EVERY page on /index.php and identifies the record solely
+    // by the `cid` query param. Sub-tabs (History/Calls/Notes/Banks) mutate the
+    // URL in place via history.replaceState(&t=...), and related pages live under
+    // different module/page params (e.g. module=tools&page=enrollment&cid=...).
+    // Comparing the full search string here would treat every tab switch as a
+    // "different record" and yank the user back mid-workflow. Compare cid only:
+    // same contact → no auto-navigation (rep roams freely); different cid → follow.
+    if (curHost.endsWith("forthcrm.com") && tgtHost.endsWith("forthcrm.com")) {
+      return cur.searchParams.get("cid") === tgt.searchParams.get("cid");
+    }
+
     // Include the query string in the comparison so CRMs that put the record
     // id in a query param — e.g. AgencyZoom's /lead/index?id={leadId} — are
     // detected as different records. Prior code compared origin+pathname only,

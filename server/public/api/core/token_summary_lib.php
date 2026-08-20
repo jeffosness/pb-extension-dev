@@ -41,6 +41,7 @@ function token_read_whitelist(): array
             'dialsession_from_scan', 'pb_dialsession_selection',
             'pb_dialsession_from_list', 'pb_dialsession_from_tasks',
             'hs_call_logger', 'close_call_logger', 'apollo_call_logger',
+            'forth_call_logger',
             'call_done', 'contact_displayed', 'refresh_sse_code',
             'user_settings_get', 'user_settings_save', 'track_crm_usage',
             'apollo_sequences', 'apollo_sequence_tasks',
@@ -70,6 +71,17 @@ function token_read_whitelist(): array
             'pb_dialsession_selection', 'pb_dialsession_from_tasks',
             'apollo_sequences', 'apollo_sequence_tasks',
             'apollo_call_logger', 'call_done', 'contact_displayed',
+        ],
+        // Forth CRM (L3, API-Key auth). save_credentials replaces the OAuth
+        // finish step — Forth mints durable client_id/secret in-app, pasted by
+        // the user. Endpoints marked [TODO] don't exist yet; listing them now
+        // keeps the whitelist ahead of the code so the first prod deploy after
+        // they land doesn't trip a false-positive anomaly. See LESSONS.md
+        // 2026-07-09.
+        'forth' => [
+            'state', 'save_credentials', 'oauth_disconnect',
+            'pb_dialsession_selection', 'forth_call_logger',
+            'call_done', 'contact_displayed',
         ],
     ];
 }
