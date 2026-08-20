@@ -267,3 +267,126 @@ function forth_format_duration_hms(int $seconds): string {
   $s = $seconds % 60;
   return sprintf('%02d:%02d:%02d', $h, $m, $s);
 }
+
+/**
+ * Normalize a Forth "phone" field into [primaryDigits, additionalDigits[]].
+ * Forth is inconsistent across endpoints: Search Contacts returns phone as an
+ * ARRAY (of strings and/or {phone:...} objects); the contact-list endpoint
+ * returns a single string. Tolerate all shapes.
+ */
+function forth_normalize_phone_field($val): array {
+  $nums = [];
+  if (is_string($val)) {
+    if (trim($val) !== '') $nums[] = trim($val);
+  } elseif (is_array($val)) {
+    foreach ($val as $p) {
+      if (is_string($p)) {
+        if (trim($p) !== '') $nums[] = trim($p);
+      } elseif (is_array($p)) {
+        $n = trim((string)($p['phone'] ?? $p['number'] ?? ''));
+        if ($n !== '') $nums[] = $n;
+      }
+    }
+  }
+  // De-dupe while preserving order.
+  $nums = array_values(array_unique($nums));
+  $primary = array_shift($nums);
+  return [$primary ?? '', $nums];
+}
+
+/**
+ * Fetch full contact records from Forth by their numeric contact IDs
+ * (GET /v1/contacts/{id}) and normalize into the PhoneBurner dial-session shape.
+ *
+ * Returns a list of:
+ *   [ 'forth_id', 'first_name', 'last_name', 'email', 'phone', 'additional_phones' ]
+ *
+ * NOTE: the exact Get Contact response field names still need verification
+ * against a live account (docs are behind auth). Normalization is deliberately
+ * tolerant: firstname|first_name, lastname|last_name, email|emails[], and the
+ * phone/cell_phone/home_phone family via forth_normalize_phone_field(). Adjust
+ * once we can see a real Get Contact payload. See GH #207.
+ */
+function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$diag = []): array {
+  $contacts = [];
+  $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
+
+  foreach ($contactIds as $cid) {
+    $cid = trim((string)$cid);
+    if ($cid === '' || !ctype_digit($cid)) continue;
+
+    $url = FORTH_API_BASE . 'contacts/' . rawurlencode($cid);
+    list($code, $json, $raw, $info) = forth_api_get_json($apiKey, $url);
+    $diag['contacts_fetch']['last_http'] = $code;
+
+    if ($code !== 200 || !is_array($json)) {
+      if (($diag['contacts_fetch']['fail'] ?? 0) === 0) {
+        // Log the first per-batch failure only (avoid log spam on outage).
+        $fail = describe_api_failure($info, $json);
+        _pb_write_api_log('forth_fetch_contacts.per_record_failed', [
+          'status'       => $fail['status'],
+          'provider_msg' => $fail['message'],
+          'body_snippet' => $fail['body_snippet'],
+          'curl_error'   => $fail['curl_error'],
+        ]);
+      }
+      $diag['contacts_fetch']['fail']++;
+      continue;
+    }
+
+    // Contact object may be nested under `response` (Forth's usual envelope).
+    $c = (isset($json['response']) && is_array($json['response'])) ? $json['response'] : $json;
+
+    $first = trim((string)($c['first_name'] ?? $c['firstname'] ?? ''));
+    $last  = trim((string)($c['last_name']  ?? $c['lastname']  ?? ''));
+    if ($first === '' && $last === '') {
+      // Fall back to a single fullname field.
+      $full = trim((string)($c['fullname'] ?? $c['name'] ?? ''));
+      if ($full !== '') {
+        $parts = preg_split('/\s+/', $full, 2);
+        $first = $parts[0] ?? '';
+        $last  = $parts[1] ?? '';
+      }
+    }
+
+    // Email: string or first non-empty of an emails[] array.
+    $email = trim((string)($c['email'] ?? ''));
+    if ($email === '' && is_array($c['emails'] ?? null)) {
+      foreach ($c['emails'] as $em) {
+        $addr = is_array($em) ? trim((string)($em['email'] ?? '')) : trim((string)$em);
+        if ($addr !== '') { $email = $addr; break; }
+      }
+    }
+
+    // Phones: merge the primary `phone` family across the shapes Forth uses.
+    list($primaryPhone, $extra) = forth_normalize_phone_field($c['phone'] ?? null);
+    $additional = [];
+    foreach ([$c['cell_phone'] ?? null, $c['home_phone'] ?? null, $c['work_phone'] ?? null] as $other) {
+      list($n, ) = forth_normalize_phone_field($other);
+      if ($n !== '') { if ($primaryPhone === '') $primaryPhone = $n; else $additional[] = $n; }
+    }
+    foreach ($extra as $n) { $additional[] = $n; }
+    $additional = array_values(array_filter(array_unique($additional), fn($n) => $n !== '' && $n !== $primaryPhone));
+
+    $contacts[] = [
+      'forth_id'          => $cid,
+      'first_name'        => $first,
+      'last_name'         => $last,
+      'email'             => $email,
+      'phone'             => $primaryPhone,
+      'additional_phones' => $additional,
+    ];
+    $diag['contacts_fetch']['ok']++;
+  }
+
+  if (($diag['contacts_fetch']['fail'] ?? 0) > 0) {
+    _pb_write_api_log('forth_fetch_contacts.batch_summary', [
+      'ok'        => $diag['contacts_fetch']['ok'],
+      'fail'      => $diag['contacts_fetch']['fail'],
+      'last_http' => $diag['contacts_fetch']['last_http'],
+      'total'     => count($contactIds),
+    ]);
+  }
+
+  return $contacts;
+}
