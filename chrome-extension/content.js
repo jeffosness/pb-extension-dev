@@ -1101,8 +1101,15 @@ function isSameCrmRecord(currentUrl, targetUrl) {
     // Comparing the full search string here would treat every tab switch as a
     // "different record" and yank the user back mid-workflow. Compare cid only:
     // same contact → no auto-navigation (rep roams freely); different cid → follow.
-    if (curHost.endsWith("forthcrm.com") && tgtHost.endsWith("forthcrm.com")) {
-      return cur.searchParams.get("cid") === tgt.searchParams.get("cid");
+    const curIsForth = curHost === "forthcrm.com" || curHost.endsWith(".forthcrm.com");
+    const tgtIsForth = tgtHost === "forthcrm.com" || tgtHost.endsWith(".forthcrm.com");
+    if (curIsForth && tgtIsForth) {
+      // Require a real cid on BOTH sides — if the target has no cid (e.g. a
+      // list page), fall through to navigation rather than suppressing it.
+      // null === null must NOT count as "same record".
+      const curCid = cur.searchParams.get("cid");
+      const tgtCid = tgt.searchParams.get("cid");
+      return curCid !== null && curCid === tgtCid;
     }
 
     // Include the query string in the comparison so CRMs that put the record

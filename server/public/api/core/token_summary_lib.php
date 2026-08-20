@@ -141,7 +141,7 @@ function compute_token_summary(): array
         'writes'      => 0,
         'deletes'     => 0,
         'errors'      => 0,
-        'by_prov'     => ['pb' => 0, 'hubspot' => 0, 'close' => 0, 'apollo' => 0],
+        'by_prov'     => ['pb' => 0, 'hubspot' => 0, 'close' => 0, 'apollo' => 0, 'forth' => 0],
         'anomalies'   => [],
         'log_missing' => false,
         'audit_path'  => $audit_path,

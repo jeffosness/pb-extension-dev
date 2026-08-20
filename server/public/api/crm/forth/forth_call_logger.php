@@ -243,9 +243,14 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
         'has_notes'     => !empty($callNotes),
         'has_recording' => isset($callData['recording_url']),
     ];
-    if ($httpCode >= 400 && $rawResp) {
-        $errBody = json_decode($rawResp, true);
-        $logData['forth_error'] = is_array($errBody) ? $errBody : _pb_scrub_tokens(substr($rawResp, 0, 500));
+    if ($httpCode >= 400) {
+        // Route through describe_api_failure so the logged body is token-scrubbed
+        // AND PII-redacted — a Forth 4xx often echoes submitted fields, and our
+        // `notes` embeds agent-typed call notes. Never log the raw decoded body.
+        $fail = describe_api_failure(['http_code' => $httpCode, 'raw_body' => (string)$rawResp], $callResp);
+        $logData['provider_msg'] = $fail['message'];
+        $logData['forth_error']  = $fail['response'];
+        $logData['body_snippet'] = $fail['body_snippet'];
     }
     log_msg('forth_call_log: ' . json_encode($logData));
 
@@ -263,10 +268,16 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
                 'public'    => true,
             ]
         );
-        log_msg('forth_note_log: ' . json_encode([
-            'http_code' => $noteCode,
-            'success'   => ($noteCode >= 200 && $noteCode < 300),
+        $noteLog = [
+            'http_code'  => $noteCode,
+            'success'    => ($noteCode >= 200 && $noteCode < 300),
             'contact_id' => $forthContactId,
-        ]));
+        ];
+        if ($noteCode >= 400) {
+            // Capture Forth's own error text, not just the HTTP code.
+            $nfail = describe_api_failure(['http_code' => $noteCode, 'raw_body' => (string)$_noteRaw], $_noteResp);
+            $noteLog['provider_msg'] = $nfail['message'];
+        }
+        log_msg('forth_note_log: ' . json_encode($noteLog));
     }
 }

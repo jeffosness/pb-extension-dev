@@ -26,9 +26,11 @@ if (!defined('FORTH_API_BASE')) {
  * True when the cached api_key is missing or past its early-refresh window.
  */
 function forth_token_is_expired(array $tokens): bool {
-  if (empty($tokens['api_key'])) return true;
-  $exp = isset($tokens['expires_at']) ? (int)$tokens['expires_at'] : 0;
-  return $exp > 0 && time() >= $exp;
+  // Missing api_key OR missing expires_at both count as expired so a partially
+  // written / legacy token file self-heals via a fresh mint instead of using a
+  // stale key forever (which would 401 on every call with no recovery).
+  if (empty($tokens['api_key']) || empty($tokens['expires_at'])) return true;
+  return time() >= (int)$tokens['expires_at'];
 }
 
 /**
@@ -177,9 +179,22 @@ function forth_api_post_json(string $apiKey, string $url, array $body): array {
  * NOTE: `id` comes back as int OR string across entries — always cast to int.
  */
 function forth_fetch_disposition_map(string $apiKey): array {
-  list($code, $json) = forth_api_get_json($apiKey, FORTH_API_BASE . 'calls/disposition');
+  list($code, $json, $raw) = forth_api_get_json($apiKey, FORTH_API_BASE . 'calls/disposition');
   $map = [];
-  if ($code !== 200 || !is_array($json)) return $map;
+  if ($code !== 200 || !is_array($json)) {
+    // Log Forth's own error text (not just the HTTP code) so a customer whose
+    // dispositions silently stop mapping has a diagnostic trail. Uses
+    // _pb_write_api_log so it is safe in the webhook context (no bootstrap).
+    $fail = describe_api_failure(['http_code' => $code, 'raw_body' => (string)$raw], $json);
+    _pb_write_api_log('forth_dispo_fetch.error', [
+      'status'       => $fail['status'],
+      'provider_msg' => $fail['message'],
+      'response'     => $fail['response'],
+      'body_snippet' => $fail['body_snippet'],
+      'curl_error'   => $fail['curl_error'],
+    ]);
+    return $map;
+  }
 
   $inner = (isset($json['response']) && is_array($json['response'])) ? $json['response'] : $json;
   foreach (['system_dispositions', 'custom_dispositions'] as $bucket) {
@@ -211,7 +226,9 @@ function forth_map_pb_status_to_disposition_id(string $pbStatus, string $connect
   // 2) Keyword → canonical Forth system disposition name, then look up its id.
   $pick = null;
   if ($s !== '') {
-    if (strpos($s, 'voicemail') !== false || strpos($s, 'left message') !== false || strpos($s, 'message') !== false) {
+    // Only match specific voicemail phrasings — NOT a bare "message" substring,
+    // which would misclassify statuses like "No Message Reached" as Left Message.
+    if (strpos($s, 'voicemail') !== false || strpos($s, 'left message') !== false) {
       $pick = 'left message';
     } elseif (strpos($s, 'wrong') !== false || strpos($s, 'bad number') !== false || strpos($s, 'bad_number') !== false) {
       $pick = 'wrong number';
