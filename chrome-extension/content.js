@@ -28,6 +28,11 @@ chrome.storage.local.get(["pb_env_override"]).then((res) => {
   if (env === "prod" || env === "dev") {
     BASE_URL = BASE_URLS[env];
     CURRENT_ENV = env;
+    // Env resolved AFTER the synchronous load-time detection ran. A devOnly
+    // provider (Forth) is skipped while CURRENT_ENV is still the default, so
+    // re-detect + re-send now that we know the real env — otherwise the tab
+    // stays cached as generic and the popup shows the wrong (scan) UI.
+    refreshCrmContext();
   }
 });
 
@@ -36,6 +41,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const env = changes.pb_env_override.newValue;
   CURRENT_ENV = env === "dev" || env === "prod" ? env : DEFAULT_ENV;
   BASE_URL = BASE_URLS[CURRENT_ENV];
+  // A live dev<->prod toggle changes whether Forth is recognized — re-detect.
+  refreshCrmContext();
 });
 
 // CRM_REGISTRY is defined in crm_config.js (injected before this script)
@@ -77,8 +84,29 @@ function detectCrmContext() {
   return { host, path, crmId, level, crmName };
 }
 
-// Compute CRM context once per page and tell the background script
-const CURRENT_CRM_CONTEXT = detectCrmContext();
+// Compute CRM context and tell the background script. `let` (not const) because
+// the env override resolves asynchronously (see refreshCrmContext below), so a
+// devOnly provider like Forth may only be recognized on a later pass.
+let CURRENT_CRM_CONTEXT = detectCrmContext();
+
+// Re-detect and re-send CRM context to the background cache. Called after the
+// env override resolves / changes so the tab's cached context reflects the real
+// env. No-op unless the detected identity actually changed.
+function refreshCrmContext() {
+  try {
+    const next = detectCrmContext();
+    if (
+      !CURRENT_CRM_CONTEXT ||
+      next.crmId !== CURRENT_CRM_CONTEXT.crmId ||
+      next.level !== CURRENT_CRM_CONTEXT.level
+    ) {
+      CURRENT_CRM_CONTEXT = next;
+      try {
+        chrome.runtime.sendMessage({ type: "CRM_CONTEXT", context: CURRENT_CRM_CONTEXT });
+      } catch (e) {}
+    }
+  } catch (e) {}
+}
 
 try {
   chrome.runtime.sendMessage({

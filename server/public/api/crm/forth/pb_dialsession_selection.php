@@ -239,7 +239,7 @@ api_ok_flat([
   'session_token'   => $session_token,
   'temp_code'       => $tempCode,
   'dialsession_url' => $launch_url,
-  'launch_url'      => $launch_url . (strpos($launch_url, '?') ? '&' : '?') . 'code=' . urlencode($tempCode),
+  'launch_url'      => $launch_url . (strpos($launch_url, '?') !== false ? '&' : '?') . 'code=' . urlencode($tempCode),
   'contacts_sent'   => count($pbContacts),
   'skipped'         => $skipped,
   'pb_ms'           => $pb_ms,

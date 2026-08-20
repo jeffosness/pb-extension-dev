@@ -838,9 +838,16 @@ function applyContextVisibility(ctx, pbConnected) {
   const forthDialCard = $("forth-dial-card");
   const forthSettingsCard = $("forth-settings-card");
   const forthApiKeyCard = $("forth-apikey-card");
-  // Dial card: on Forth pages. Settings card: when connected. Credential-entry
-  // card: on Forth pages when NOT yet connected (matches Apollo/Close pattern).
-  setVisible(forthDialCard, isForth);
+  // Dial card: Forth LIST pages only — the launch path extracts checked
+  // tr[data-contact_id] rows, which exist only on the contact-list page (cid
+  // absent → pageType "list"). On record pages (cid present) there are no list
+  // rows, so showing the card would dead-end at "No contacts found"; the rep
+  // uses click-to-call / follow-me there instead. Mirrors HubSpot's selection
+  // card being list-only.
+  const forthIsList = isForth && pageType === "list";
+  setVisible(forthDialCard, forthIsList);
+  // Settings card: when connected. Credential-entry card: on any Forth page
+  // when NOT yet connected (matches Apollo/Close pattern).
   setVisible(forthSettingsCard, FORTH_STATE.connected);
   setVisible(forthApiKeyCard, isForth && !FORTH_STATE.connected);
   if (FORTH_STATE.connected) {
@@ -849,7 +856,7 @@ function applyContextVisibility(ctx, pbConnected) {
     if (forthSettingsStatus) forthSettingsStatus.textContent = "Connected ✔";
     if (forthDisconnectBtn) forthDisconnectBtn.disabled = false;
   }
-  if (isForth) {
+  if (forthIsList) {
     refreshForthDialUi();
   }
 
