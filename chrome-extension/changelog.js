@@ -16,6 +16,12 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.6": {
+    title: "What's New in v0.8.6",
+    items: [
+      "HubSpot Prospecting workspace support — the Task Queue Launch card now appears on the new Sales Workspace task list (URLs starting with /prospecting/), matching how it works on the older Tasks view"
+    ]
+  },
   "0.8.5": {
     title: "What's New in v0.8.5",
     items: [
