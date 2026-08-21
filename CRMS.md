@@ -564,6 +564,59 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
 
 ---
 
+## Forth CRM-specific reference
+
+> **Captured 2026-08-21 from developer.setforth.com** (the "SetForth Complete API
+> Documentation" export). The live docs are the source of truth — verify before
+> relying. We deliberately do **not** vendor the PDF into the repo; the shapes we
+> integrate against live here so they're diffable/greppable. The PDF is archived
+> on GH issue #207.
+
+- **App host:** `client.forthcrm.com` (single-page app; every page is
+  `/index.php`, record identity is the `?cid=` query param). **API base:**
+  `https://api.forthcrm.com/v1/`. Debt-settlement vertical.
+- **Auth (API-Key, not OAuth):** customer mints a durable `client_id` (Key ID) +
+  `client_secret` (Secret) in Forth (Admin → Users & Administration → API;
+  requires a signed API Agreement). `POST /auth/token` with JSON
+  `{client_id, client_secret}` → `{response:{api_key, expires_in:864000}}`. The
+  `api_key` is a **10-day** token sent as the **`Api-Key:`** header (NOT
+  `Authorization: Bearer`). No refresh token — re-mint with the durable pair.
+- **Rate limit:** 20 req/sec (429 on exceed).
+
+**`POST /v1/calls` (Create Call Record)** — logs to the contact's "Calls" tab:
+- **REQUIRED:** `contactID` (int), `call_type` (enum `Outgoing`/`Incoming`),
+  `call_disposition` (int). ← all three must be sent or the request 400s.
+- Optional: `created_at` ("YYYY-MM-DD HH:MM:SS"), `duration` ("hh:mm:ss",
+  default `00:01:27`), `notes`, `event_id`, `dialer_id` (no PhoneBurner entry in
+  their list yet — omit), `recording_url`, `assigned_agent` (int, DPP agent user id).
+- `GET /v1/calls/disposition` → `{response:{system_dispositions:[{disposition_name,id}], custom_dispositions?:[…]}}`.
+  System ids: No Answer=1, Connected=2, Left Message=3, Wrong Number=4. **`id`
+  comes back as int OR string — cast.**
+
+**`GET /v1/contacts/{id}` (Get Contact)** — field names our normalizer depends on:
+- Name: `first_name`, `middle_name`, `last_name`. Email: `email` (string).
+- **Phones: `phone_number` is the PRIMARY** (string), plus `cell_phone`,
+  `work_phone` (+ `*_extension` fields we ignore). **There is NO `home_phone`** —
+  `phone_number` IS the home/primary line. (The Search Contacts endpoint instead
+  returns `firstname`/`lastname` and a `phone` ARRAY + `email` array — different
+  shape; the normalizer tolerates both.)
+- `assigned_to` (int) = owning DPP agent → we pass it as `assigned_agent` on `/calls`.
+
+**Notes:** `POST /v1/contacts/{contact_id}/notes` with `{content, note_type, public}`.
+
+**Contact-list page DOM** (for selection launch): rows are `tr[data-contact_id]`
+with a row checkbox; phone pills are
+`<a data-dpp-modal-url="/screenloads/quickcall.php?to={cid}">{number}</a>` (the
+`to=` param is the **contact id**, the dialable number is the link **text**).
+`record_url` → `https://client.forthcrm.com/index.php?module=contacts&page=view2&cid={cid}`.
+
+**Onboarding prerequisite (customer-facing):** account owner signs Forth's API
+Agreement → an admin mints a **Service** credential (Key ID + Secret) → paste
+both into the extension (Settings). More friction than our OAuth CRMs; no
+partner/OAuth-app option exists.
+
+---
+
 ## Cross-cutting patterns learned from adding CRMs
 
 ### Testing with Real CRM Data
