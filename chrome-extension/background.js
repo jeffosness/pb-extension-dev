@@ -64,6 +64,17 @@ function clickToCallEnabled() {
   return true;
 }
 
+// Forth CRM (L3) feature gate. Forth is dev-only until we've validated the full
+// flow end-to-end against live API credentials (which require a signed Forth
+// API Agreement). While this returns CURRENT_ENV === "dev", customers on prod
+// see Forth behave exactly as it does today (generic L1 scan) — the L3
+// detection, connect UI, dial-session launch, and CTC finder all no-op for them.
+// TO LAUNCH: change to `return true;` once tested, and drop `devOnly` from the
+// Forth entry in crm_config.js. See GH #207.
+function forthEnabled() {
+  return CURRENT_ENV === "dev";
+}
+
 // Per-user toggle for the in-page pill. Default true. The popup writes this
 // via the Click-to-Call settings card. Distinct from clickToCallEnabled()
 // (which is the env-level feature flag) so the user pref persists across
@@ -92,7 +103,7 @@ const tabContexts = {}; // { [tabId]: { crmId, crmName, level, host, path } }
 // context (id/type) is resolved from the URL via detectCrmFromUrl(); CRMs not
 // listed here can still be added later (L1/L2 can place calls without a
 // record id — they just can't log the call back).
-const CTC_SUPPORTED_CRMS = ["hubspot"];
+const CTC_SUPPORTED_CRMS = ["hubspot", "forth"];
 
 // Map a CRM object type to the PhoneBurner crm_name used in external_crm_data.
 // Mirrors the dial-session convention (see pb_dialsession_selection.php):
@@ -339,8 +350,25 @@ function detectCrmFromUrl(tabUrl) {
 
     return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType, pageType, recordId, portalId };
   }
+
+  // Forth CRM (L3). Every page is /index.php; the record identity is the `cid`
+  // query param. Handled BEFORE the registry loop so we can emit pageType/
+  // recordId like HubSpot. Dev-gated: in prod, fall through so Forth resolves
+  // as generic L1 (its current working behavior) and no L3 UI activates.
+  if (host.includes("forthcrm.com")) {
+    if (!forthEnabled()) {
+      return { host, path, crmId: "generic", crmName: host, level: 1 };
+    }
+    const cidMatch = path.match(/[?&]cid=(\d+)/);
+    const pageType = cidMatch ? "record" : "list";
+    const recordId = cidMatch ? cidMatch[1] : null;
+    return { host, path, crmId: "forth", crmName: "Forth CRM", level: 3, objectType: "contact", pageType, recordId };
+  }
+
   // Look up all other CRMs from shared registry
   for (const crm of CRM_REGISTRY) {
+    // devOnly providers are invisible outside dev — resolve as generic instead.
+    if (crm.devOnly && CURRENT_ENV !== "dev") continue;
     const matches = Array.isArray(crm.hostMatch) ? crm.hostMatch : [crm.hostMatch];
     if (matches.some((m) => m && host.includes(m))) {
       return { host, path, crmId: crm.id, crmName: crm.displayName, level: crm.level || 1 };
@@ -1281,6 +1309,107 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
 
         await registerSessionForTab(closeTab.id, sessionToken, tempCode, BASE_URL);
+
+        chrome.windows.create({
+          url: dialUrl,
+          type: "popup",
+          focused: true,
+          width: 1200,
+          height: 900,
+        });
+
+        return sendResponse({ ok: true, sessionToken, dialUrl });
+      }
+
+      // -------------------------
+      // Forth L3: launch from selected contacts on the contact-list page
+      // -------------------------
+      if (msg.type === "FORTH_LAUNCH_FROM_SELECTED") {
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const forthTab = (tabs || []).find((t) =>
+          (t.url || "").includes("client.forthcrm.com"),
+        );
+        if (!forthTab || !forthTab.id) {
+          return sendResponse({
+            ok: false,
+            error: "Open a Forth contact list with contacts visible.",
+          });
+        }
+
+        await ensureContentScript(forthTab.id);
+
+        const selected = await new Promise((resolve) => {
+          chrome.tabs.sendMessage(
+            forthTab.id,
+            { type: "FORTH_GET_SELECTED_IDS" },
+            { frameId: 0 },
+            (res) => {
+              if (chrome.runtime.lastError)
+                return resolve({ error: chrome.runtime.lastError.message });
+              resolve(res);
+            },
+          );
+        });
+
+        if (!selected || selected.error) {
+          return sendResponse({
+            ok: false,
+            error: selected?.error || "Could not read Forth contacts.",
+          });
+        }
+
+        const contactIds = Array.isArray(selected.ids) ? selected.ids : [];
+        if (!contactIds.length)
+          return sendResponse({
+            ok: false,
+            error: "No contacts found on this page.",
+          });
+
+        // Track usage (best effort)
+        try {
+          const hp = deriveHostPathFromTabUrl(forthTab.url || "");
+          await api("core/track_crm_usage.php", {
+            crm_id: "forth",
+            host: hp.host || "client.forthcrm.com",
+            path: hp.path || "",
+            level: 3,
+            object_type: "contacts",
+            selected_count: contactIds.length,
+            launch_source: "selection",
+          });
+        } catch (e) {}
+
+        const resp = await api("crm/forth/pb_dialsession_selection.php", {
+          contact_ids: contactIds,
+          context: {
+            url: selected.url || forthTab.url || null,
+            title: selected.title || null,
+            selectedCount: contactIds.length,
+          },
+        });
+
+        const sessionToken =
+          resp.session_token || resp.data?.session_token || null;
+        const tempCode = resp.temp_code || resp.data?.temp_code || null;
+        const dialUrl =
+          resp.launch_url ||
+          resp.dialsession_url ||
+          resp.data?.launch_url ||
+          resp.data?.dialsession_url ||
+          null;
+
+        if (!sessionToken || !dialUrl) {
+          return sendResponse({
+            ok: false,
+            error: resp?.error || "Failed to create dial session.",
+            details: resp,
+          });
+        }
+
+        await registerSessionForTab(forthTab.id, sessionToken, tempCode, BASE_URL);
 
         chrome.windows.create({
           url: dialUrl,

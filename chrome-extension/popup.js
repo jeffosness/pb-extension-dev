@@ -678,6 +678,7 @@ let PB_CONNECTED = false;
 let HS_STATE = { connected: false, portalId: null, hasTaskScope: false };
 let CLOSE_STATE = { connected: false };
 let APOLLO_STATE = { connected: false };
+let FORTH_STATE = { connected: false };
 
 function setCrmHeader(context) {
   ACTIVE_CTX = context || null;
@@ -713,6 +714,13 @@ function isApolloL3(ctx) {
   return !!(ctx && ctx.crmId === "apollo" && ctx.level === 3);
 }
 
+// Forth is dev-gated in background.js's detectCrmFromUrl — in prod it resolves
+// as generic (level 1), so this returns false and no Forth UI renders. No
+// separate popup-side env check is needed.
+function isForthL3(ctx) {
+  return !!(ctx && ctx.crmId === "forth" && ctx.level === 3);
+}
+
 function applyContextVisibility(ctx, pbConnected) {
   const currentPageCard = $("card-current-page");
   const hsDialCard = $("hubspot-dial-card");
@@ -722,11 +730,12 @@ function applyContextVisibility(ctx, pbConnected) {
   const isHS = isHubSpotL3(ctx);
   const isClose = isCloseL3(ctx);
   const isApollo = isApolloL3(ctx);
+  const isForth = isForthL3(ctx);
   const pageType = ctx?.pageType || "other";
   const bothAuth = pbConnected && HS_STATE.connected;
 
   // Scan & Launch: any non-L3 page (generic scanner may work on obscure CRMs)
-  setVisible(currentPageCard, !isHS && !isClose && !isApollo);
+  setVisible(currentPageCard, !isHS && !isClose && !isApollo && !isForth);
 
   // Inline Connect prompts — shown on the Dial tab when the user is on a
   // matching L3 CRM page AND that CRM isn't connected yet. Gives them a
@@ -735,6 +744,7 @@ function applyContextVisibility(ctx, pbConnected) {
   setVisible($("hs-connect-inline-card"),     isHS     && !HS_STATE.connected);
   setVisible($("close-connect-inline-card"),  isClose  && !CLOSE_STATE.connected);
   setVisible($("apollo-connect-inline-card"), isApollo && !APOLLO_STATE.connected);
+  setVisible($("forth-connect-inline-card"),  isForth  && !FORTH_STATE.connected);
 
   // Selection card: HS list pages only
   setVisible(hsDialCard, isHS && pageType === "list");
@@ -822,6 +832,32 @@ function applyContextVisibility(ctx, pbConnected) {
   }
   if (APOLLO_STATE.connected && pbConnected) {
     fetchApolloSequences();
+  }
+
+  // Forth CRM cards
+  const forthDialCard = $("forth-dial-card");
+  const forthSettingsCard = $("forth-settings-card");
+  const forthApiKeyCard = $("forth-apikey-card");
+  // Dial card: Forth LIST pages only — the launch path extracts checked
+  // tr[data-contact_id] rows, which exist only on the contact-list page (cid
+  // absent → pageType "list"). On record pages (cid present) there are no list
+  // rows, so showing the card would dead-end at "No contacts found"; the rep
+  // uses click-to-call / follow-me there instead. Mirrors HubSpot's selection
+  // card being list-only.
+  const forthIsList = isForth && pageType === "list";
+  setVisible(forthDialCard, forthIsList);
+  // Settings card: when connected. Credential-entry card: on any Forth page
+  // when NOT yet connected (matches Apollo/Close pattern).
+  setVisible(forthSettingsCard, FORTH_STATE.connected);
+  setVisible(forthApiKeyCard, isForth && !FORTH_STATE.connected);
+  if (FORTH_STATE.connected) {
+    const forthSettingsStatus = $("forth-settings-status");
+    const forthDisconnectBtn = $("forth-disconnect");
+    if (forthSettingsStatus) forthSettingsStatus.textContent = "Connected ✔";
+    if (forthDisconnectBtn) forthDisconnectBtn.disabled = false;
+  }
+  if (forthIsList) {
+    refreshForthDialUi();
   }
 
   // Populate active cards
@@ -1707,6 +1743,150 @@ async function launchCloseDialSession() {
 }
 
 // ---------------------------
+// Forth CRM connection
+// ---------------------------
+
+async function checkForthConnectionState() {
+  try {
+    const state = await hsPost("crm/forth/state.php");
+    FORTH_STATE.connected = !!state?.forth_ready;
+  } catch (e) {
+    FORTH_STATE.connected = false;
+  }
+  return FORTH_STATE.connected;
+}
+
+// Save the pasted Key ID + Secret. The server validates them by exchanging for
+// an access token before persisting, so a bad pair surfaces here as an error.
+async function saveForthCredentials() {
+  const idEl = $("forth-client-id");
+  const secretEl = $("forth-client-secret");
+  const status = $("forth-apikey-status");
+  const btn = $("forth-save-credentials");
+
+  const forthClientId = (idEl?.value || "").trim();
+  const forthClientSecret = (secretEl?.value || "").trim();
+
+  if (!forthClientId || !forthClientSecret) {
+    if (status) status.textContent = "Enter both the Key ID and Secret.";
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  if (status) {
+    status.textContent = "Validating credentials…";
+    status.classList.add("loading");
+  }
+
+  const resp = await hsPost("crm/forth/save_credentials.php", {
+    forth_client_id: forthClientId,
+    forth_client_secret: forthClientSecret,
+  });
+
+  if (status) status.classList.remove("loading");
+
+  if (!resp || resp.ok !== true) {
+    const errorMsg = getErrorMessage(resp, "Could not connect Forth. Check the Key ID and Secret.");
+    if (status) status.textContent = errorMsg;
+    if (btn) btn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  // Clear the secret from the DOM once accepted.
+  if (secretEl) secretEl.value = "";
+  FORTH_STATE.connected = true;
+  if (status) status.textContent = "Connected ✔";
+  if (btn) btn.disabled = false;
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+  activateTab("dial");
+}
+
+async function disconnectForth() {
+  const confirmed = await showConfirm("Disconnect Forth for this session?");
+  if (!confirmed) return;
+
+  const btn = $("forth-disconnect");
+  const settingsStatus = $("forth-settings-status");
+  if (btn) btn.disabled = true;
+  if (settingsStatus) settingsStatus.textContent = "Disconnecting…";
+
+  const resp = await hsPost("crm/forth/oauth_disconnect.php");
+
+  if (!resp || resp.ok !== true) {
+    const errorMsg = getErrorMessage(resp, "Failed to disconnect Forth.");
+    if (settingsStatus) settingsStatus.textContent = "Failed to disconnect.";
+    if (btn) btn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  FORTH_STATE.connected = false;
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+  activateTab("dial");
+}
+
+function refreshForthDialUi() {
+  const btn = $("forth-dial-action");
+  const status = $("forth-dial-status");
+
+  if (!FORTH_STATE.connected) {
+    if (btn) {
+      btn.textContent = "Connect Forth";
+      btn.dataset.mode = "connect";
+      btn.disabled = false;
+    }
+    if (status) status.textContent = "Connect Forth (Settings) to launch dial sessions.";
+  } else if (!PB_CONNECTED) {
+    if (btn) {
+      btn.textContent = "Launch Dial Session";
+      btn.dataset.mode = "";
+      btn.disabled = true;
+    }
+    if (status) status.textContent = "Save your PhoneBurner PAT first.";
+  } else {
+    if (btn) {
+      btn.textContent = "Launch Dial Session";
+      btn.dataset.mode = "launch";
+      btn.disabled = false;
+    }
+    if (status) status.textContent = "";
+  }
+}
+
+async function launchForthDialSession() {
+  const btn = $("forth-dial-action");
+  const status = $("forth-dial-status");
+
+  // "Connect" mode routes to the Settings tab where the credential inputs live.
+  if (btn && btn.dataset.mode === "connect") {
+    activateTab("settings");
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  if (status) {
+    status.textContent = "Building dial session from selected contacts…";
+    status.classList.add("loading");
+  }
+
+  const resp = await sendToBackground({ type: "FORTH_LAUNCH_FROM_SELECTED" });
+
+  if (status) status.classList.remove("loading");
+
+  if (!resp || !resp.ok) {
+    const errorMsg = getErrorMessage(resp, "Failed to launch dial session.");
+    if (status) status.textContent = errorMsg;
+    if (btn) btn.disabled = false;
+    await showAlert(errorMsg);
+    return;
+  }
+
+  if (status) status.textContent = "Dial session launched!";
+  window.close();
+}
+
+// ---------------------------
 // Apollo CRM connection
 // ---------------------------
 
@@ -2259,11 +2439,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("apollo-oauth-connect")?.addEventListener("click", startApolloOAuth);
   $("apollo-sequence-select")?.addEventListener("change", onApolloSequenceChange);
 
+  // Forth CRM
+  $("forth-dial-action")?.addEventListener("click", launchForthDialSession);
+  $("forth-save-credentials")?.addEventListener("click", saveForthCredentials);
+  $("forth-disconnect")?.addEventListener("click", disconnectForth);
+
   // Inline Connect prompts on the Dial tab (issue #113). Each button just
   // delegates to the existing OAuth-start function for that CRM.
   $("hs-connect-inline-btn")?.addEventListener("click", startHubSpotOAuth);
   $("close-connect-inline-btn")?.addEventListener("click", startCloseOAuth);
   $("apollo-connect-inline-btn")?.addEventListener("click", startApolloOAuth);
+  // Forth has no OAuth redirect — the connect prompt routes to Settings where
+  // the Key ID + Secret inputs live.
+  $("forth-connect-inline-btn")?.addEventListener("click", () => activateTab("settings"));
   $("apollo-task-filter")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-sequence-launch")?.addEventListener("click", launchApolloFromTasks);
   $("apollo-phone-pref")?.addEventListener("change", onApolloPhonePrefChange);
@@ -2300,6 +2488,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 3b. Check Close connection
   await checkCloseConnectionState();
   await checkApolloConnectionState();
+  // Forth is dev-gated: ACTIVE_CTX is only "forth" in dev on a Forth page, so
+  // this probe (and its server request) never fires for prod customers.
+  if (isForthL3(ACTIVE_CTX)) {
+    await checkForthConnectionState();
+  }
 
   // 4. Apply context-aware visibility
   applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);

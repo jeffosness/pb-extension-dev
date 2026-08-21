@@ -503,7 +503,7 @@ api_log('crm_usage_dashboard.view', [
         </div>
       </div>
       <div class="grid-4" style="margin-top: 12px;">
-        <?php foreach (['pb', 'hubspot', 'close', 'apollo'] as $prov): ?>
+        <?php foreach (['pb', 'hubspot', 'close', 'apollo', 'forth'] as $prov): ?>
           <div class="stat">
             <div class="label"><?= strtoupper($prov) ?> events</div>
             <div class="value" id="token-security-by-<?= $prov ?>"><?= number_format($token_summary['by_prov'][$prov]) ?></div>
@@ -794,6 +794,7 @@ document.addEventListener("DOMContentLoaded", () => {
     hubspot:    "#ff7a59",
     close:      "#1a3e72",
     apollo:     "#7c3aed",
+    forth:      "#f26722",
     pipedrive:  "#24292e",
     salesforce: "#00a1e0",
     zoho:       "#c8202f",
@@ -1212,7 +1213,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Per-provider events
-    ["pb", "hubspot", "close", "apollo"].forEach(prov => {
+    ["pb", "hubspot", "close", "apollo", "forth"].forEach(prov => {
       const el = document.getElementById("token-security-by-" + prov);
       if (el && s.by_prov && typeof s.by_prov[prov] === "number") {
         el.textContent = fmt(s.by_prov[prov]);

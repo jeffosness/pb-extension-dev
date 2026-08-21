@@ -19,18 +19,30 @@ const BASE_URLS = {
 };
 const DEFAULT_ENV = "prod";
 let BASE_URL = BASE_URLS[DEFAULT_ENV];
+// Resolved env, mirrored from background.js. Used to gate devOnly CRM providers
+// (e.g. Forth) in detectCrmContext so they stay invisible to prod customers.
+let CURRENT_ENV = DEFAULT_ENV;
 
 chrome.storage.local.get(["pb_env_override"]).then((res) => {
   const env = res?.pb_env_override;
   if (env === "prod" || env === "dev") {
     BASE_URL = BASE_URLS[env];
+    CURRENT_ENV = env;
+    // Env resolved AFTER the synchronous load-time detection ran. A devOnly
+    // provider (Forth) is skipped while CURRENT_ENV is still the default, so
+    // re-detect + re-send now that we know the real env — otherwise the tab
+    // stays cached as generic and the popup shows the wrong (scan) UI.
+    refreshCrmContext();
   }
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes.pb_env_override) return;
   const env = changes.pb_env_override.newValue;
-  BASE_URL = BASE_URLS[env] || BASE_URLS[DEFAULT_ENV];
+  CURRENT_ENV = env === "dev" || env === "prod" ? env : DEFAULT_ENV;
+  BASE_URL = BASE_URLS[CURRENT_ENV];
+  // A live dev<->prod toggle changes whether Forth is recognized — re-detect.
+  refreshCrmContext();
 });
 
 // CRM_REGISTRY is defined in crm_config.js (injected before this script)
@@ -58,6 +70,8 @@ function detectCrmContext() {
   let crmName = host;
 
   for (const crm of CRM_REGISTRY) {
+    // devOnly providers (e.g. Forth) stay invisible outside dev.
+    if (crm.devOnly && CURRENT_ENV !== "dev") continue;
     const matches = Array.isArray(crm.hostMatch) ? crm.hostMatch : [crm.hostMatch];
     if (matches.some((m) => m && host.includes(m))) {
       crmId = crm.id;
@@ -70,8 +84,29 @@ function detectCrmContext() {
   return { host, path, crmId, level, crmName };
 }
 
-// Compute CRM context once per page and tell the background script
-const CURRENT_CRM_CONTEXT = detectCrmContext();
+// Compute CRM context and tell the background script. `let` (not const) because
+// the env override resolves asynchronously (see refreshCrmContext below), so a
+// devOnly provider like Forth may only be recognized on a later pass.
+let CURRENT_CRM_CONTEXT = detectCrmContext();
+
+// Re-detect and re-send CRM context to the background cache. Called after the
+// env override resolves / changes so the tab's cached context reflects the real
+// env. No-op unless the detected identity actually changed.
+function refreshCrmContext() {
+  try {
+    const next = detectCrmContext();
+    if (
+      !CURRENT_CRM_CONTEXT ||
+      next.crmId !== CURRENT_CRM_CONTEXT.crmId ||
+      next.level !== CURRENT_CRM_CONTEXT.level
+    ) {
+      CURRENT_CRM_CONTEXT = next;
+      try {
+        chrome.runtime.sendMessage({ type: "CRM_CONTEXT", context: CURRENT_CRM_CONTEXT });
+      } catch (e) {}
+    }
+  } catch (e) {}
+}
 
 try {
   chrome.runtime.sendMessage({
@@ -1092,6 +1127,24 @@ function isSameCrmRecord(currentUrl, targetUrl) {
     // Apollo uses hash-based routing (#/contacts/id) — compare hashes
     if (cur.hash && tgt.hash && cur.hostname.includes('apollo.io') && cur.pathname === '/' && tgt.pathname === '/') {
       return cur.hash === tgt.hash;
+    }
+
+    // Forth CRM keeps EVERY page on /index.php and identifies the record solely
+    // by the `cid` query param. Sub-tabs (History/Calls/Notes/Banks) mutate the
+    // URL in place via history.replaceState(&t=...), and related pages live under
+    // different module/page params (e.g. module=tools&page=enrollment&cid=...).
+    // Comparing the full search string here would treat every tab switch as a
+    // "different record" and yank the user back mid-workflow. Compare cid only:
+    // same contact → no auto-navigation (rep roams freely); different cid → follow.
+    const curIsForth = curHost === "forthcrm.com" || curHost.endsWith(".forthcrm.com");
+    const tgtIsForth = tgtHost === "forthcrm.com" || tgtHost.endsWith(".forthcrm.com");
+    if (curIsForth && tgtIsForth) {
+      // Require a real cid on BOTH sides — if the target has no cid (e.g. a
+      // list page), fall through to navigation rather than suppressing it.
+      // null === null must NOT count as "same record".
+      const curCid = cur.searchParams.get("cid");
+      const tgtCid = tgt.searchParams.get("cid");
+      return curCid !== null && curCid === tgtCid;
     }
 
     // Include the query string in the comparison so CRMs that put the record
@@ -2448,13 +2501,43 @@ function pbCtcFindHubspot() {
   return out;
 }
 
+// Forth click-to-call finder. Forth renders every dialable number as
+//   <a data-dpp-modal-url="/screenloads/quickcall.php?to={cid}">615-265-0077</a>
+// on BOTH the contact-list page and the record page. GOTCHA: the `to=` param is
+// the CONTACT ID, not the number — the dialable number is the link TEXT.
+function pbCtcFindForth() {
+  var out = [];
+  try {
+    var anchors = document.querySelectorAll(
+      'a[data-dpp-modal-url*="quickcall.php"]'
+    );
+    for (var i = 0; i < anchors.length; i++) {
+      var a = anchors[i];
+      var num = pbCtcNormalizePhone(a.textContent || "");
+      if (!num) continue; // anchor isn't a phone number
+      var modal = a.getAttribute("data-dpp-modal-url") || "";
+      var m = modal.match(/[?&]to=(\d+)/);
+      out.push({
+        el: a,
+        number: num,
+        recordId: m ? m[1] : null, // Forth cid
+        objectType: "contact",
+      });
+    }
+  } catch (e) {}
+  return out;
+}
+
 var PB_CTC_FINDERS = {
   hubspot: pbCtcFindHubspot,
+  forth: pbCtcFindForth,
 };
 
 function pbCtcDecorate() {
   try {
-    var ctx = CURRENT_CRM_CONTEXT || detectCrmContext();
+    // Detect fresh (not the load-time cache): CURRENT_ENV resolves async, so a
+    // devOnly provider like Forth may not have been recognized at page-load time.
+    var ctx = detectCrmContext();
     var finder = PB_CTC_FINDERS[ctx.crmId];
     if (!finder) return;
     var targets = finder();
@@ -2593,6 +2676,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // --- Close L3 contact ID extraction ---
+  // --- Forth L3 contact ID extraction ---
+  // Forth's contact-list rows are <tr data-contact_id="123"> each with a
+  // checkbox. If any rows are checked, launch only those; otherwise launch all
+  // rendered rows. (Forth paginates server-side, so "all" == the current page.)
+  if (msg && msg.type === "FORTH_GET_SELECTED_IDS") {
+    try {
+      var forthCtx = detectCrmContext();
+      if (forthCtx.crmId !== "forth") {
+        sendResponse({ error: "Not on a Forth page." });
+        return true;
+      }
+
+      var forthRows = document.querySelectorAll("tr[data-contact_id]");
+      var forthSelected = [];
+      var forthAll = [];
+      for (var fi = 0; fi < forthRows.length; fi++) {
+        var frow = forthRows[fi];
+        var fid = frow.getAttribute("data-contact_id") || "";
+        if (!/^\d+$/.test(fid)) continue;
+        forthAll.push(fid);
+        var fcb = frow.querySelector('input[type="checkbox"]');
+        if (fcb && fcb.checked) forthSelected.push(fid);
+      }
+
+      var forthIds = forthSelected.length > 0 ? forthSelected : forthAll;
+      // De-dupe (a row can render twice in Forth's sticky-header table).
+      forthIds = forthIds.filter(function (v, ix, arr) {
+        return arr.indexOf(v) === ix;
+      });
+
+      sendResponse({
+        ids: forthIds,
+        id_type: "contact",
+        url: window.location.href,
+        title: document.title || "",
+      });
+    } catch (e) {
+      sendResponse({ error: e && e.message ? e.message : String(e) });
+    }
+    return true;
+  }
+
   if (msg && msg.type === "CLOSE_GET_SELECTED_IDS") {
     try {
       var ctx = CURRENT_CRM_CONTEXT || detectCrmContext();

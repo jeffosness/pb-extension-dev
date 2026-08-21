@@ -50,4 +50,17 @@ const CRM_REGISTRY = [
     level: 2,
     hostMatch: "app.agencyzoom.com",
   },
+  {
+    // Forth CRM (debt-settlement vertical). L3 API-Key integration.
+    // devOnly: hidden from customers until the full flow is validated — both
+    // detectCrmFromUrl (background.js) and detectCrmContext (content.js) skip
+    // devOnly entries unless CURRENT_ENV === "dev", so in prod Forth resolves
+    // as generic L1 (its current, working behavior) and no L3 UI appears.
+    // Flip by removing devOnly once we've tested end-to-end with live creds.
+    id: "forth",
+    displayName: "Forth CRM",
+    level: 3,
+    hostMatch: "client.forthcrm.com",
+    devOnly: true,
+  },
 ];
