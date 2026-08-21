@@ -576,8 +576,10 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
   `/index.php`, record identity is the `?cid=` query param). **API base:**
   `https://api.forthcrm.com/v1/`. Debt-settlement vertical.
 - **Auth (API-Key, not OAuth):** customer mints a durable `client_id` (Key ID) +
-  `client_secret` (Secret) in Forth (Admin → Users & Administration → API;
-  requires a signed API Agreement). `POST /auth/token` with JSON
+  `client_secret` (Secret) in Forth (**Admin → REST API** →
+  `index.php?module=administration&page=api`; requires a signed API Agreement).
+  **The Secret is displayed only ONCE at generation** — if lost, the key must be
+  deleted and regenerated. `POST /auth/token` with JSON
   `{client_id, client_secret}` → `{response:{api_key, expires_in:864000}}`. The
   `api_key` is a **10-day** token sent as the **`Api-Key:`** header (NOT
   `Authorization: Bearer`). No refresh token — re-mint with the durable pair.
@@ -611,9 +613,12 @@ with a row checkbox; phone pills are
 `record_url` → `https://client.forthcrm.com/index.php?module=contacts&page=view2&cid={cid}`.
 
 **Onboarding prerequisite (customer-facing):** account owner signs Forth's API
-Agreement → an admin mints a **Service** credential (Key ID + Secret) → paste
-both into the extension (Settings). More friction than our OAuth CRMs; no
-partner/OAuth-app option exists.
+Agreement → an admin creates a **Service User** ("API User", free/API-only, per
+company) → Admin → REST API → Service → pick company + user → Generate Key →
+**copy the Secret immediately (shown once)** → paste Key ID + Secret into the
+extension (Settings). More friction than our OAuth CRMs; no partner/OAuth-app
+option exists. The KB must stress the copy-the-Secret-now step — a user who
+closes Forth's dialog without saving the Secret has to delete + regenerate.
 
 ---
 
