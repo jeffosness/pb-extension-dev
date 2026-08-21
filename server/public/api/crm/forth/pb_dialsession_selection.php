@@ -136,6 +136,8 @@ foreach ($forthContacts as $c) {
     'crm_name'       => 'forth',
     'crm_identifier' => $forthId,
     'record_url'     => $recordUrl,
+    // Owning DPP agent (Forth user id) → call_done logger sets assigned_agent.
+    'assigned_agent' => $c['assigned_to'] ?? null,
   ];
 }
 

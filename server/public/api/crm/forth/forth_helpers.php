@@ -358,15 +358,24 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
       }
     }
 
-    // Phones: merge the primary `phone` family across the shapes Forth uses.
-    list($primaryPhone, $extra) = forth_normalize_phone_field($c['phone'] ?? null);
+    // Phones. Get Contact's PRIMARY number is `phone_number` (a string); the
+    // Search Contacts endpoint instead returns a `phone` array — tolerate both.
+    // cell_phone + work_phone become additional numbers. (Forth has no
+    // `home_phone` field — phone_number IS the home/primary line. Extensions
+    // (phone_extension/cell_extension) are intentionally ignored for dialing.)
+    list($primaryPhone, $extra) = forth_normalize_phone_field($c['phone_number'] ?? $c['phone'] ?? null);
     $additional = [];
-    foreach ([$c['cell_phone'] ?? null, $c['home_phone'] ?? null, $c['work_phone'] ?? null] as $other) {
+    foreach ([$c['cell_phone'] ?? null, $c['work_phone'] ?? null] as $other) {
       list($n, ) = forth_normalize_phone_field($other);
       if ($n !== '') { if ($primaryPhone === '') $primaryPhone = $n; else $additional[] = $n; }
     }
     foreach ($extra as $n) { $additional[] = $n; }
     $additional = array_values(array_filter(array_unique($additional), fn($n) => $n !== '' && $n !== $primaryPhone));
+
+    // assigned_to = the contact's owning DPP agent (user id). Used to attribute
+    // the logged call via POST /calls `assigned_agent`.
+    $assignedTo = isset($c['assigned_to']) && ctype_digit((string)$c['assigned_to'])
+      ? (int)$c['assigned_to'] : null;
 
     $contacts[] = [
       'forth_id'          => $cid,
@@ -375,6 +384,7 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
       'email'             => $email,
       'phone'             => $primaryPhone,
       'additional_phones' => $additional,
+      'assigned_to'       => $assignedTo,
     ];
     $diag['contacts_fetch']['ok']++;
   }

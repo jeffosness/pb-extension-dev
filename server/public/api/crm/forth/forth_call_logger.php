@@ -215,16 +215,29 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
     $dispoMap = forth_fetch_disposition_map($apiKey);
     $dispoId  = forth_map_pb_status_to_disposition_id($status, (string)($payload['connected'] ?? '0'), $dispoMap);
 
-    $callData = [
-        'contactID' => $forthContactId,
-        'call_type' => 'Outgoing',
-        'duration'  => forth_format_duration_hms((int)($lastCall['duration'] ?? 0)),
-        'notes'     => $noteText,
-        // created_at omitted → Forth timestamps server-side (avoids TZ guessing).
-    ];
-    if ($dispoId !== null) {
-        $callData['call_disposition'] = $dispoId;
+    // call_disposition is a REQUIRED field on POST /calls (per Forth API docs).
+    // If the PB status didn't map, fall back to the account's "No Answer"
+    // disposition, else the first available one — never omit it.
+    if ($dispoId === null && !empty($dispoMap)) {
+        $dispoId = $dispoMap['no answer'] ?? reset($dispoMap);
     }
+    if ($dispoId === null) {
+        // Dispositions couldn't be fetched (already logged by the fetch helper).
+        // A POST without call_disposition would 400, so skip rather than fire a
+        // doomed request. The call still exists in PB; only the Forth mirror is
+        // skipped this once.
+        log_msg('forth_call_log_skip: call_disposition required but disposition list unavailable for client ' . $clientHash);
+        return;
+    }
+
+    $callData = [
+        'contactID'        => $forthContactId,
+        'call_type'        => 'Outgoing',
+        'call_disposition' => $dispoId,
+        'duration'         => forth_format_duration_hms((int)($lastCall['duration'] ?? 0)),
+        'notes'            => $noteText,
+        // created_at / dialer_id omitted — both optional per the API docs.
+    ];
 
     // Recording (Forth example uses https). Upgrade PB http→https defensively.
     $recordingUrl = trim((string)($payload['recording_url_public'] ?? ''));
