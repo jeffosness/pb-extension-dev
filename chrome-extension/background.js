@@ -1003,11 +1003,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           (t.url || "").includes("hubspot.com"),
         );
 
-        // Extract portal_id from URL if on a HubSpot tab, fallback to message
+        // Portal ID via detectCrmFromUrl (single source of truth for all
+        // HubSpot URL shapes). msg.portal_id from the popup is the fallback
+        // when no HubSpot tab is active. See the same pattern applied in
+        // HS_LAUNCH_FROM_TASKS below and the v0.8.6 fix that motivated it.
         let portalId = msg.portal_id || null;
         if (hubTab?.url) {
-          const portalMatch = hubTab.url.match(/\/contacts\/(\d+)\//);
-          if (portalMatch) portalId = portalMatch[1];
+          const detected = detectCrmFromUrl(hubTab.url).portalId;
+          if (detected) portalId = detected;
         }
 
         // Track usage (best effort)
@@ -1113,18 +1116,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
         }
 
-        // Extract portal_id + hostname from the active HubSpot tab.
-        // Two URL shapes to handle:
-        //   /tasks/{portalId}/view/...                   — older task queue view
-        //   /contacts/{portalId}/objects/0-27/views/...  — newer "All Tasks" table view
-        // Both use the same numeric portalId; try each pattern in turn.
-        let portalId = null;
-        const tasksPortalMatch = hubTab.url.match(/\/tasks\/(\d+)\//);
-        if (tasksPortalMatch) portalId = tasksPortalMatch[1];
-        if (!portalId) {
-          const contactsPortalMatch = hubTab.url.match(/\/contacts\/(\d+)\//);
-          if (contactsPortalMatch) portalId = contactsPortalMatch[1];
-        }
+        // Portal ID via detectCrmFromUrl — single source of truth for all
+        // HubSpot URL shapes (legacy /contacts/, /tasks/, new /prospecting/,
+        // etc.). Duplicating this regex inline caused v0.8.6 follow-me to
+        // break on /prospecting/{portalId}/tasks — no portalId → server-side
+        // record_url stayed null → auto-nav skipped. Route everything
+        // through detectCrmFromUrl going forward.
+        const portalId = detectCrmFromUrl(hubTab.url).portalId || null;
         const hp = deriveHostPathFromTabUrl(hubTab.url);
 
         // Track usage (best effort — never block the launch on this)
