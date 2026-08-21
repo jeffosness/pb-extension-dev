@@ -1809,8 +1809,9 @@ function hs_getPageContext() {
   let objectType = "unknown";
   let portalId = null;
 
-  // /contacts/{portalId}/objects/...
-  if (parts[0] === "contacts" && parts[1]) {
+  // Portal ID lives after either the /contacts/ (legacy CRM app) or
+  // /prospecting/ (newer Sales Workspace) prefix. Both are numeric.
+  if ((parts[0] === "contacts" || parts[0] === "prospecting") && parts[1]) {
     portalId = parts[1];
   }
 

@@ -260,9 +260,14 @@ function detectCrmFromUrl(tabUrl) {
     };
 
   if (host.includes("hubspot.com")) {
-    // Extract portalId from /contacts/{portalId}/
+    // Extract portalId. HubSpot uses two app-prefixes for CRM pages:
+    //   /contacts/{portalId}/...      — legacy CRM app (records, lists, segments)
+    //   /prospecting/{portalId}/...   — newer Sales Workspace / Breeze Prospecting
+    // The Prospecting workspace was introduced 2025 and is where Sales Hub Pro/
+    // Enterprise users increasingly work; its task list at /prospecting/{id}/tasks
+    // is handled by the pageType branches below.
     let portalId = null;
-    const portalMatch = path.match(/\/contacts\/(\d+)\//);
+    const portalMatch = path.match(/\/(?:contacts|prospecting)\/(\d+)/);
     if (portalMatch) portalId = portalMatch[1];
 
     // Detect page type and object context from URL
@@ -320,6 +325,15 @@ function detectCrmFromUrl(tabUrl) {
       // Portal ID is in the path here too: /tasks/{portalId}/view/...
       const tasksPortalMatch = path.match(/\/tasks\/(\d+)\//);
       if (tasksPortalMatch && !portalId) portalId = tasksPortalMatch[1];
+    }
+    // Prospecting workspace task list: /prospecting/{portalId}/tasks
+    // Same HubSpot framework-data-table + object-type 0-27 backing store as
+    // the /objects/0-27/ view above, just wrapped in the newer Sales Workspace
+    // shell. Row selector (tr[data-test-id^="row-"]) and "N selected" bulk-
+    // actions markers are identical, so no harvest changes needed — only URL
+    // classification (verified against Sales Team Demo portal 2026-08-21).
+    else if (path.match(/\/prospecting\/\d+\/tasks(?:$|[/?])/)) {
+      pageType = "tasks";
     }
 
     return { host, path, crmId: "hubspot", crmName: "HubSpot", level: 3, objectType, pageType, recordId, portalId };
