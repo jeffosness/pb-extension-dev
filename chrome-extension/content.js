@@ -2140,16 +2140,33 @@ async function hs_collectSelectedIdsDeep({
 
 // Task-queue row harvester. Returns {taskId, checked} per row so the caller
 // can distinguish "user selected specific tasks" from "user wants all visible
-// tasks". Matches the same row selector the classic and newer HubSpot task
-// views both use: <tr data-test-id="row-{taskId}">.
+// tasks". HubSpot ships two row shapes across their task views:
+//
+//   Older /objects/0-27/ + /tasks/{id}/view/ (legacy per-queue view)
+//     <tr data-test-id="row-{taskId}">
+//
+//   Newer /prospecting/{id}/tasks (Sales Workspace, 2025+)
+//     <tr data-test-id="crm-table-row" data-test-object-id="{taskId}">
+//
+// Both use a <tr> per task with a checkbox input inside; only the taskId
+// discovery differs. Verified against Sales Team Demo portal 2026-08-21.
 function hs_collectTaskRowsFromDom() {
   const out = [];
-  const rows = document.querySelectorAll('tr[data-test-id^="row-"]');
+  const rows = document.querySelectorAll(
+    'tr[data-test-id^="row-"], tr[data-test-id="crm-table-row"][data-test-object-id]'
+  );
   rows.forEach((row) => {
     const testId = row.getAttribute("data-test-id") || "";
-    const m = testId.match(/^row-(\d+)$/);
-    if (!m) return;
-    const taskId = m[1];
+    let taskId = null;
+    const legacyMatch = testId.match(/^row-(\d+)$/);
+    if (legacyMatch) {
+      // Legacy shape — taskId encoded in the test-id itself.
+      taskId = legacyMatch[1];
+    } else if (testId === "crm-table-row") {
+      // Prospecting shape — taskId on data-test-object-id.
+      taskId = row.getAttribute("data-test-object-id");
+    }
+    if (!taskId || !/^\d+$/.test(taskId)) return;
     const cb = row.querySelector('input[type="checkbox"]');
     const checked = !!(cb && cb.checked);
     out.push({ taskId, checked });
@@ -2743,16 +2760,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // --- HubSpot Task Queue: scrape task IDs from the tasks page DOM ---
-  // The HubSpot tasks table marks each row with data-test-id="row-{taskId}".
   // If any rows have their checkbox checked, return only those task IDs;
   // otherwise return all visible task IDs (the customer dials the whole view).
   //
-  // WORKS ON BOTH TASK VIEWS: verified via a captured DOM from the newer
-  // /objects/0-27/views/{viewId}/list table — those rows carry the same
-  // <tr data-test-id="row-{taskId}"> attribute as the classic Task Queue
-  // (/tasks/{portalId}/view/) rows. Cell-id namespaces differ between the
-  // two views (cell-0-27-* vs cell-DEFAULT_NAMESPACE-*), which matters for
-  // the CTC pill finder above, but the row-level test id is identical.
+  // WORKS ON ALL THREE TASK VIEWS — see hs_collectTaskRowsFromDom for the
+  // row-selector rationale and the two shapes it handles:
+  //   /tasks/{portalId}/view/                  (classic per-queue view)
+  //   /contacts/{portalId}/objects/0-27/...    (all-tasks left-nav view)
+  //   /prospecting/{portalId}/tasks            (Sales Workspace, 2025+)
+  // The first two share <tr data-test-id="row-{taskId}">. Prospecting uses
+  // <tr data-test-id="crm-table-row" data-test-object-id="{taskId}"> — same
+  // <tr> + checkbox shape, different id encoding. Fix landed 2026-08-21.
   //
   // v0.8.3 (2026-07-22): moved off one-shot querySelectorAll to the same
   // scroll-harvest core the Selection flow uses. HubSpot renders task rows

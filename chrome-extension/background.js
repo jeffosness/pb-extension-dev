@@ -328,10 +328,11 @@ function detectCrmFromUrl(tabUrl) {
     }
     // Prospecting workspace task list: /prospecting/{portalId}/tasks
     // Same HubSpot framework-data-table + object-type 0-27 backing store as
-    // the /objects/0-27/ view above, just wrapped in the newer Sales Workspace
-    // shell. Row selector (tr[data-test-id^="row-"]) and "N selected" bulk-
-    // actions markers are identical, so no harvest changes needed — only URL
-    // classification (verified against Sales Team Demo portal 2026-08-21).
+    // the /objects/0-27/ view above, but a DIFFERENT row test-id encoding:
+    // rows are <tr data-test-id="crm-table-row" data-test-object-id="{taskId}">
+    // instead of <tr data-test-id="row-{taskId}">. Bulk-actions "N selected"
+    // markers are identical. See hs_collectTaskRowsFromDom in content.js for
+    // the dual-selector fix (2026-08-21, verified against Sales Team Demo).
     else if (path.match(/\/prospecting\/\d+\/tasks(?:$|[/?])/)) {
       pageType = "tasks";
     }
