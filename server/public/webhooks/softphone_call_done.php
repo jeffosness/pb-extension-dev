@@ -207,48 +207,65 @@ try {
             $intentClientId = (string)($popped['client_id'] ?? '');
             $intentTaskId   = (string)($popped['task_id']   ?? '');
             $intentCrmName  = (string)($popped['crm_name']  ?? '');
+            $intentCrmId    = (string)($popped['crm_id']    ?? '');
 
             $completed = false;
-            if ($intentClientId !== '' && $intentTaskId !== '' && $intentCrmName !== '') {
-                // Per-CRM dispatch. Add a new case here when adding
-                // task-completion for another provider — see CRMS.md.
-                switch ($intentCrmName) {
-                    case 'hubspot':
-                        require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
-                        $completed = hubspot_complete_task_for_client(
-                            $intentClientId,
-                            $intentTaskId
-                        );
-                        break;
-                    // case 'close':
-                    //   require_once __DIR__ . '/../api/crm/close/close_call_logger.php';
-                    //   $completed = close_complete_task_for_client(
-                    //       $intentClientId, $intentTaskId
-                    //   );
-                    //   break;
-                    default:
-                        log_msg('ctc_intent_dispatch: no completer for crm_name=' . $intentCrmName);
-                        break;
+            if ($intentClientId !== '' && $intentCrmName !== '') {
+                // TASK-COMPLETION intents (carry task_id) — HubSpot marks the
+                // task done. Add a case per task-completion provider (see CRMS.md).
+                if ($intentTaskId !== '') {
+                    switch ($intentCrmName) {
+                        case 'hubspot':
+                            require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
+                            $completed = hubspot_complete_task_for_client(
+                                $intentClientId,
+                                $intentTaskId
+                            );
+                            break;
+                        default:
+                            log_msg('ctc_intent_dispatch: no completer for crm_name=' . $intentCrmName);
+                            break;
+                    }
+                }
+                // CALL-LOGGING intents (carry crm_id) — Forth logs the CTC call
+                // as a Call Activity. Uses the webhook's authoritative contact
+                // crm_id when present, else the intent's.
+                elseif ($intentCrmId !== '') {
+                    switch ($intentCrmName) {
+                        case 'forth':
+                            require_once __DIR__ . '/../api/crm/forth/forth_call_logger.php';
+                            $logCid = ($crmId !== null && ctype_digit((string)$crmId)) ? (string)$crmId : $intentCrmId;
+                            $completed = forth_log_ctc_call(
+                                $intentClientId,
+                                $logCid,
+                                $payload,
+                                (string)$status
+                            );
+                            break;
+                        default:
+                            log_msg('ctc_intent_dispatch: no logger for crm_name=' . $intentCrmName);
+                            break;
+                    }
                 }
             }
             // Audit line piggybacks on the same daily crm_usage log that's
-            // already rotated. Dashboard picks up the new event_type for
-            // free (event_type=ctc_task_completed). crm_name here is the
-            // intent's (not the webhook payload's) — that's the value the
-            // task was actually completed under.
+            // already rotated. The event reflects which capability ran:
+            // task-completion (HubSpot) vs call-logging (Forth). crm_name here
+            // is the intent's (not the webhook payload's) — the value acted under.
+            $isTaskIntent = ($intentTaskId !== '');
             try {
                 if (isset($logFile) && $logFile) {
                     $auditEntry = [
                         'ts'             => date('c'),
                         'client_id_hash' => substr(hash('sha256', $intentClientId), 0, 12),
                         'member_user_id' => $agentMemberUserId,
-                        'event_type'     => 'ctc_task_completed',
+                        'event_type'     => $isTaskIntent ? 'ctc_task_completed' : 'ctc_call_logged',
                         'crm_id'         => $crmId,
                         'crm_name'       => $intentCrmName ?: $crmName,
                         'host'           => '',
                         'path'           => '',
                         'level'          => 3,
-                        'object_type'    => 'task',
+                        'object_type'    => $isTaskIntent ? 'task' : 'contact',
                         'launch_source'  => 'click_to_call',
                         'selected_count' => 1,
                         'task_id'        => $intentTaskId,

@@ -82,6 +82,10 @@ function token_read_whitelist(): array
             'state', 'save_credentials', 'oauth_disconnect',
             'pb_dialsession_selection', 'forth_call_logger',
             'call_done', 'contact_displayed',
+            // Click-to-call reads Forth tokens on both softphone endpoints:
+            //   softphone_auth_code — checks connection before writing the intent
+            //   softphone_call_done — forth_log_ctc_call loads tokens to POST /calls
+            'softphone_auth_code', 'softphone_call_done',
         ],
     ];
 }

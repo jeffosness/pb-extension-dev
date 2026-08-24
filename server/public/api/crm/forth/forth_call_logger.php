@@ -315,3 +315,160 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
         log_msg('forth_note_log: ' . json_encode($noteLog));
     }
 }
+
+/**
+ * Log a click-to-call (softphone) call to Forth — the SESSION-LESS variant.
+ *
+ * Called from webhooks/softphone_call_done.php on a CTC call, where there is NO
+ * dial session (no contacts_map). Everything needed is passed in directly:
+ *   - $client_id : recovered from the CTC intent bridge (carries client_id)
+ *   - $forth_cid : the Forth contact id (crm_id from the softphone webhook)
+ *   - $payload   : the softphone_call_done payload (status/duration/notes/recording)
+ *
+ * Same POST /calls shape as forth_log_call(), just fed from the softphone payload
+ * instead of session state. Returns true on a 2xx call-activity create.
+ * assigned_agent is omitted (no session to carry the owning agent) — a future
+ * enhancement could Get Contact to recover assigned_to.
+ */
+function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload, string $status): bool {
+    if ($client_id === '' || !ctype_digit($forth_cid)) {
+        log_msg('forth_ctc_log_skip: bad client_id/cid');
+        return false;
+    }
+    $clientHash = substr(hash('sha256', $client_id), 0, 12);
+
+    $tokens = load_forth_tokens($client_id);
+    if (!is_array($tokens) || empty($tokens['client_id']) || empty($tokens['client_secret'])) {
+        log_msg('forth_ctc_log_skip: no Forth credentials for client ' . $clientHash);
+        return false;
+    }
+
+    require_once __DIR__ . '/forth_helpers.php';
+
+    // Inline mint (webhook context — no bootstrap; mirrors forth_log_call).
+    $apiKey = (string)($tokens['api_key'] ?? '');
+    if (forth_token_is_expired($tokens)) {
+        $ch = curl_init(FORTH_API_BASE . 'auth/token');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => json_encode([
+                'client_id'     => (string)$tokens['client_id'],
+                'client_secret' => (string)$tokens['client_secret'],
+            ]),
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+            CURLOPT_TIMEOUT => 15,
+        ]);
+        $mintRaw  = curl_exec($ch);
+        $mintInfo = curl_getinfo($ch);
+        $mintErr  = curl_error($ch);
+        curl_close($ch);
+        $mintInfo['raw_body'] = is_string($mintRaw) ? $mintRaw : '';
+        if ($mintErr !== '') $mintInfo['curl_error'] = $mintErr;
+
+        $mintCode  = (int)($mintInfo['http_code'] ?? 0);
+        $mintResp  = (is_string($mintRaw) && $mintRaw !== '') ? json_decode($mintRaw, true) : null;
+        $mintInner = (is_array($mintResp) && isset($mintResp['response']) && is_array($mintResp['response']))
+            ? $mintResp['response'] : $mintResp;
+        $newKey = is_array($mintInner) ? (string)($mintInner['api_key'] ?? '') : '';
+        if ($newKey !== '') {
+            $now = time();
+            $expiresIn = isset($mintInner['expires_in']) ? (int)$mintInner['expires_in'] : 864000;
+            $tokens['api_key']    = $newKey;
+            $tokens['created_at'] = $now;
+            $tokens['expires_at'] = $now + max(0, $expiresIn - 3600);
+            save_forth_tokens($client_id, $tokens);
+            $apiKey = $newKey;
+        } else {
+            $fail = describe_api_failure($mintInfo, $mintResp);
+            _pb_write_api_log('forth_ctc_log_token_mint.error', [
+                'status'       => $fail['status'],
+                'provider_msg' => $fail['message'],
+                'body_snippet' => $fail['body_snippet'],
+                'curl_error'   => $fail['curl_error'],
+            ]);
+        }
+    }
+    if ($apiKey === '') {
+        log_msg('forth_ctc_log_skip: no valid api_key for client ' . $clientHash);
+        return false;
+    }
+
+    $forthContactId = (int)$forth_cid;
+
+    // Notes text from the softphone payload (same shape as the dial-session path).
+    $callNotes = $payload['call_notes'] ?? [];
+    if (!is_array($callNotes)) $callNotes = [];
+    $callNotes = array_values(array_filter(array_map('trim', $callNotes)));
+    $noteText = 'Call via PhoneBurner (click-to-call): ' . ($status !== '' ? $status : 'Unknown');
+    if (!empty($callNotes)) $noteText .= ' — Notes: ' . implode(' | ', $callNotes);
+
+    // The softphone (CTC) payload has NO `connected` boolean — only `status`
+    // text (e.g. "Connected", "No Answer"). Derive the connected flag from it so
+    // disposition mapping works (otherwise "Connected" mismaps to "No Answer").
+    $connectedFlag = (stripos($status, 'connect') !== false) ? '1' : '0';
+
+    // call_disposition is REQUIRED — map, then fall back to "No Answer"/first.
+    $dispoMap = forth_fetch_disposition_map($apiKey);
+    $dispoId  = forth_map_pb_status_to_disposition_id($status, $connectedFlag, $dispoMap);
+    if ($dispoId === null && !empty($dispoMap)) {
+        $dispoId = $dispoMap['no answer'] ?? reset($dispoMap);
+    }
+    if ($dispoId === null) {
+        log_msg('forth_ctc_log_skip: call_disposition unavailable for client ' . $clientHash);
+        return false;
+    }
+
+    $callData = [
+        'contactID'        => $forthContactId,
+        'call_type'        => 'Outgoing',
+        'call_disposition' => $dispoId,
+        'duration'         => forth_format_duration_hms((int)($payload['duration'] ?? 0)),
+        'notes'            => $noteText,
+    ];
+
+    // Recording: PB only provides recording_url_public for connected calls, and
+    // the CTC payload has no `connected` flag to gate on — so send it whenever
+    // present + https (don't gate on a field the softphone payload lacks).
+    $recordingUrl = trim((string)($payload['recording_url_public'] ?? ''));
+    if ($recordingUrl !== '' && strpos($recordingUrl, 'http://') === 0) {
+        $recordingUrl = 'https://' . substr($recordingUrl, 7);
+    }
+    if ($recordingUrl !== '' && strpos($recordingUrl, 'https://') === 0) {
+        $callData['recording_url'] = $recordingUrl;
+    }
+
+    list($httpCode, $callResp, $rawResp, $callInfo) = forth_api_post_json($apiKey, FORTH_API_BASE . 'calls', $callData);
+    $callOk = ($httpCode >= 200 && $httpCode < 300);
+
+    $logData = [
+        'http_code'   => $httpCode,
+        'success'     => $callOk,
+        'contact_id'  => $forthContactId,
+        'pb_status'   => $status,
+        'disposition' => $dispoId,
+        'source'      => 'click_to_call',
+    ];
+    if (!$callOk) {
+        $fail = describe_api_failure($callInfo, $callResp);
+        $logData['provider_msg'] = $fail['message'];
+        $logData['forth_error']  = $fail['response'];
+        $logData['curl_error']   = $fail['curl_error'];
+    }
+    log_msg('forth_ctc_log: ' . json_encode($logData));
+
+    // User notes → also a Note on the contact.
+    if (!empty($callNotes)) {
+        list($noteCode, $_nR, $_nRaw, $noteInfo) = forth_api_post_json(
+            $apiKey,
+            FORTH_API_BASE . 'contacts/' . $forthContactId . '/notes',
+            ['content' => implode("\n", $callNotes), 'note_type' => 1, 'public' => true]
+        );
+        if ($noteCode < 200 || $noteCode >= 300) {
+            $nfail = describe_api_failure($noteInfo, $_nR);
+            log_msg('forth_ctc_note_log: ' . json_encode(['http_code' => $noteCode, 'success' => false, 'provider_msg' => $nfail['message']]));
+        }
+    }
+
+    return $callOk;
+}

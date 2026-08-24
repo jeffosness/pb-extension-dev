@@ -138,6 +138,9 @@ function redact_pii_recursive(array $data): array {
     '/^.*(paypal|credit|card).*$/i', // payment methods
     '/^.*(first_name|last_name|full_name|contact_name)$/i', // personal names
     '/^.*crm_identifier.*$/i',  // CRM record identifiers
+    '/^.*note.*$/i',            // agent-typed call notes / note bodies
+    '/^.*content.*$/i',         // note content echoed in provider errors
+    '/^.*(ssn|social.?security).*$/i', // SSNs (debt-settlement CRM fields)
   ];
   
   // Exact key matches (for known bulk data fields)

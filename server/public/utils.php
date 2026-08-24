@@ -712,6 +712,11 @@ if (!function_exists('redact_pii_recursive')) {
             '/^.*(paypal|credit|card).*$/i',
             '/^.*(first_name|last_name|full_name|contact_name)$/i',
             '/^.*crm_identifier.*$/i',
+            // Agent-typed call notes / note bodies — a provider that echoes the
+            // submitted field back in a 4xx error must not leak them to app.log.
+            '/^.*note.*$/i',
+            '/^.*content.*$/i',
+            '/^.*(ssn|social.?security).*$/i',
         ];
         $denyKeys = ['payload', 'contacts', 'response_body', 'request_body'];
 
@@ -1436,7 +1441,16 @@ function ctc_intents_dir(): string
  */
 function ctc_normalize_phone(string $phone): string
 {
-    return preg_replace('/\D/', '', $phone);
+    $digits = preg_replace('/\D/', '', (string)$phone);
+    // Canonicalize to the 10-digit US number so the intent key matches whether
+    // the source had a country code or not. The CTC pill's number is scraped
+    // from the CRM DOM (which may omit +1 — e.g. Forth shows "615-265-0077"),
+    // while PhoneBurner's call-done webhook returns E.164 ("+16152650077"). Both
+    // must produce the same key or the intent orphans and the call never logs.
+    if (strlen($digits) === 11 && $digits[0] === '1') {
+        $digits = substr($digits, 1);
+    }
+    return $digits;
 }
 
 /**
@@ -1504,10 +1518,14 @@ function ctc_intent_write(
     string $phone,
     string $client_id,
     string $task_id,
-    string $crm_name
+    string $crm_name,
+    string $crm_id = ''
 ): bool {
     $path = ctc_intent_file_path($pb_user_id, $phone);
-    if ($path === null || $client_id === '' || $task_id === '' || $crm_name === '') {
+    // Need client_id + crm_name, plus at least ONE actionable id: task_id (for
+    // task-completion CRMs like HubSpot) or crm_id (for call-logging CRMs like
+    // Forth). An intent with neither has nothing for the webhook to act on.
+    if ($path === null || $client_id === '' || $crm_name === '' || ($task_id === '' && $crm_id === '')) {
         return false;
     }
 
@@ -1518,6 +1536,7 @@ function ctc_intent_write(
         'client_id'  => $client_id,
         'task_id'    => $task_id,
         'crm_name'   => $crm_name,
+        'crm_id'     => $crm_id,
         'minted_at'  => time(),
     ];
 

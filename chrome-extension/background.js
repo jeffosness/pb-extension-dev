@@ -157,9 +157,18 @@ async function buildSoftphoneUrl(dial) {
   // task views. The server registry only routes on the base name.
   const codeBody = {};
   if (dial.taskId && dial.number && dial.ctcCrmId) {
+    // Task-completion bridge (HubSpot task rows).
     codeBody.task_id  = String(dial.taskId);
     codeBody.phone    = String(dial.number);
     codeBody.crm_name = String(dial.ctcCrmId);
+  } else if (dial.number && dial.recordId && dial.crmName) {
+    // Call-logging bridge (e.g. Forth): carry phone + crm_id + crm_name so
+    // softphone_call_done.php can recover client_id (via the intent) and log
+    // the CTC call. The SERVER registry decides which CRMs get a logging
+    // intent — HubSpot record pills fall through (HubSpot logs natively).
+    codeBody.phone    = String(dial.number);
+    codeBody.crm_id   = String(dial.recordId);
+    codeBody.crm_name = String(dial.crmName);
   }
   let code = "";
   try {
