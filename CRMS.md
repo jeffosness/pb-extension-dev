@@ -622,6 +622,89 @@ closes Forth's dialog without saving the Secret has to delete + regenerate.
 
 ---
 
+## Adding click-to-call (C2C) to an L3 CRM
+
+> Distilled from adding C2C to Forth (2026-08-24). C2C is a **shared framework +
+> per-CRM custom pieces**. Do NOT reinvent the framework; write the two custom
+> bits (a finder + a logger) and register them. First-time-through, the two
+> gotchas that cost us the most were **standing host permission** and **phone-key
+> normalization** — read those first.
+
+### The two-path model
+
+A C2C pill click opens PhoneBurner's hosted softphone and places the call. On
+disposition, PB fires the **`softphone_call_done.php`** webhook (HMAC-signed) —
+a DIFFERENT path than the dial-session `call_done.php`. That webhook carries
+`contact.crm_id` + `custom_data.pb_user_id` but **not `client_id`**, so we use
+the **CTC intent bridge** to recover it. The bridge carries one of two intents:
+
+- **Task-completion** (HubSpot): intent holds `task_id`; the webhook marks the
+  task done. HubSpot call *logging* is done by PB's native integration, not us.
+- **Call-logging** (Forth, and the model for future non-native L3s): intent
+  holds `crm_id`; the webhook logs the call to the CRM via a session-less logger.
+
+### Reusable — do NOT touch per CRM
+
+- Activation + rendering: `maybeActivateCtcInTab` / `CTC_ACTIVATE` /
+  `pbCtcDecorate` / the generic pill button (`content.js`).
+- Softphone flow: `softphone_auth_code.php` → `softphone.php` → PB softphone →
+  `softphone_call_done.php` (HMAC verify is handled — don't touch it).
+- Intent bridge: `ctc_intent_write` / `ctc_intent_consume` (`utils.php`), keyed
+  by `(pb_user_id, ctc_normalize_phone(phone))`. It already carries both
+  `task_id` and `crm_id` — no storage-layer change needed for a new CRM.
+- `ctc_normalize_phone` (canonicalizes to 10 US digits — see gotcha #2).
+
+### Per-CRM — the custom pieces (this is the whole job)
+
+1. **`background.js`** — add the crmId to `CTC_SUPPORTED_CRMS`; extend
+   `ctcCrmName()` only if the CRM has object-type-specific names (like
+   `hubspotcompany`). `buildSoftphoneUrl` already carries `phone`+`crm_id`+
+   `crm_name` on pill clicks for logging CRMs.
+2. **A pill finder** `pbCtcFind{Crm}()` in `content.js` — the ONE genuinely
+   custom bit: per-CRM DOM selector returning `[{el, number, recordId, objectType}]`.
+   Number comes from the link text, id from the DOM. Register in `PB_CTC_FINDERS`.
+3. **`ctc_supported_crm_config()`** (`softphone_auth_code.php`) — add a case:
+   `token_loader`, `connected_key` (OAuth `access_token` vs Forth's durable
+   `client_secret`), and either `task_id_pattern`+`completes_tasks` OR
+   `crm_id_pattern`+`logs_ctc_calls`.
+4. **A logger/completer** in `api/crm/{crm}/{crm}_call_logger.php` — for logging
+   CRMs, a **session-less** `{crm}_log_ctc_call($client_id, $crm_id, $payload,
+   $status)` (reuse the provider's pure helpers; inline-mint the token; the
+   softphone payload has no `connected` field — derive it from `status` text).
+5. **Dispatch case** in `softphone_call_done.php` (task branch vs logging branch).
+6. **Token-read whitelist** — add `softphone_auth_code` + `softphone_call_done`
+   to the CRM's array in `token_read_whitelist()` (`token_summary_lib.php`).
+7. **Standing host permission** — the CRM's launch AND connect flows MUST call
+   `requestOptionalPermissionForActiveSiteBestEffort()` (see gotcha #1).
+
+### Gotchas (read these first — they cost us hours on Forth)
+
+1. **Passive pills need STANDING host permission, not `activeTab`.** Dial
+   sessions work off the launch *gesture* (temporary `activeTab`), but the pill
+   renders on page load with no gesture, so `maybeActivateCtcInTab` bails at its
+   `permissions.contains` gate unless the permission was granted persistently.
+   The CRM's launch/connect flow must call
+   `requestOptionalPermissionForActiveSiteBestEffort()`. We missed this on Forth
+   because we modeled its launch on **Close** — which has no C2C and thus never
+   requested the permission. Symptom: `HOST GRANTED: false`, pill never appears.
+2. **Phone-key normalization must strip the country code.** The pill number is
+   scraped from the DOM (may omit `+1`, e.g. Forth's `615-265-0077`); PB's
+   webhook returns E.164 (`+16152650077`). If the two don't normalize to the
+   same key, the intent orphans and the call silently never logs.
+   `ctc_normalize_phone` now canonicalizes to 10 digits — keep it that way.
+3. **C2C logs via a different path than dial sessions.** The dial-session logger
+   relies on session `contacts_map`; C2C has no session. Write a session-less
+   logger fed by the softphone payload + `crm_id` (client_id from the intent).
+4. **Pill placement on record pages where several phones share one container.**
+   If Home + Cell live in the same `<tr>`, the self-heal must reclaim a stray
+   pill by **matching its number**, not "any pill in the row" — else one flame
+   ends up next to one number but dials the other.
+5. **The softphone payload has no `connected` boolean** — only `status` text.
+   Derive `connected` from the status, and send the recording whenever present
+   (don't gate it on a field the payload lacks).
+
+---
+
 ## Cross-cutting patterns learned from adding CRMs
 
 ### Testing with Real CRM Data

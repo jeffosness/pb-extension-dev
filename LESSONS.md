@@ -6,6 +6,20 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-08-24 — Copying the wrong template hid a whole capability's plumbing (Forth click-to-call)
+
+**What happened:** Adding click-to-call to Forth, the pill wouldn't render despite every gate passing (`showPills: true`, `CURRENT_ENV: 'dev'`, `supported: true`, detection returning Forth L3, and the target anchors confirmed present in the DOM). Live console debugging eventually surfaced `HOST GRANTED: false` — the extension held no *standing* host permission for `client.forthcrm.com`, so `maybeActivateCtcInTab` bailed at its `permissions.contains` gate and never injected the content script.
+
+**Why we didn't catch it earlier:** Forth's dial-session flow was modeled on **Close's** launch handler. Dial sessions worked fine because launching runs under a user *gesture* (temporary `activeTab`), which is enough to inject the content script for that one interaction. But **passive** click-to-call injection fires on page load with no gesture, so it needs the permission granted *persistently* — via `requestOptionalPermissionForActiveSiteBestEffort()`. Every C2C-capable flow (HubSpot launch/task-queue, Apollo, scan) already calls it. **Close does not — because Close has no click-to-call.** By copying the Close template we silently inherited the absence of a call that Close never needed, and nothing failed loudly: dial sessions kept working, so the missing standing permission was invisible until we specifically tested passive pill injection.
+
+**Broader lesson — when you copy a provider as a template, copy the one that has the CAPABILITY you're adding, not just the one with the closest auth model.** Close was the right template for Forth's *dial-session* shape, but the wrong one for *click-to-call* — HubSpot was. A template encodes the author's knowledge of what that capability needs; inheriting a template that lacks the capability inherits its blind spots. Adding to the mental model: before reusing a provider file, ask "does the source provider actually DO the thing I'm adding?" — if not, cross-reference one that does.
+
+**Secondary lessons from the same feature (all now in [CRMS.md → Adding click-to-call to an L3 CRM](CRMS.md#adding-click-to-call-c2c-to-an-l3-crm)):** (1) the intent-bridge phone key must strip the country code, because DOM numbers may omit `+1` while PB's webhook returns E.164 — a mismatch orphans the intent and the call silently never logs; (2) C2C logs via `softphone_call_done.php`, a different path than dial sessions, and needs a *session-less* logger (no `contacts_map`); (3) the softphone payload has no `connected` field — derive it from `status`.
+
+**Process change:** documented the reusable-vs-custom split and these five gotchas as a playbook in CRMS.md so the next CRM's C2C is "write a finder + a logger, register them, and don't forget the standing-permission call." Generalized the CTC intent bridge (task-completion → task-OR-logging) so future L3s plug in without touching the storage layer.
+
+---
+
 ## 2026-08-12 — Our `pb_api_call` timeout was below PhoneBurner's own recommended client default
 
 **What happened:** Claire Ferreira (proroofersinc.com) hit `Operation timed out after 20003 milliseconds with 0 bytes received` when launching a dial session from a HubSpot list of 1,354 contacts (500 sent to PB after truncation). Other customers' sessions were succeeding fine. The error was our `pb_api_call` client-side curl timeout — `CURLOPT_TIMEOUT = 20` — cutting the connection before PB could respond.
