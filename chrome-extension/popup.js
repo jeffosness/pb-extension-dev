@@ -1797,6 +1797,12 @@ async function saveForthCredentials() {
   FORTH_STATE.connected = true;
   if (status) status.textContent = "Connected ✔";
   if (btn) btn.disabled = false;
+
+  // Grant STANDING host permission for this Forth site now (user just clicked
+  // Connect — a valid gesture) so click-to-call pills render passively on Forth
+  // pages without waiting for the first dial-session launch to request it.
+  try { await requestOptionalPermissionForActiveSiteBestEffort(); } catch (e) { /* best effort */ }
+
   applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
   activateTab("dial");
 }
@@ -1865,7 +1871,17 @@ async function launchForthDialSession() {
     return;
   }
 
+  // Best-effort STANDING host-permission request for this Forth site. Required
+  // so the content script injects (follow-me survives navigation) AND so
+  // passive click-to-call pills can render on Forth pages — those need the
+  // permission granted persistently, not just under this launch gesture.
   if (btn) btn.disabled = true;
+  if (status) status.textContent = "Requesting page access…";
+  try {
+    const permResult = await requestOptionalPermissionForActiveSiteBestEffort();
+    if (permResult && permResult.timeout) console.warn("Forth permission request timed out, continuing");
+  } catch (e) { /* best effort */ }
+
   if (status) {
     status.textContent = "Building dial session from selected contacts…";
     status.classList.add("loading");
