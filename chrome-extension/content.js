@@ -2570,10 +2570,25 @@ function pbCtcDecorate() {
       // and pull it back into place. The MutationObserver fires on React's
       // re-renders so this self-heals; React doesn't react to our move, so it
       // settles (no loop).
+      //
+      // CRITICAL: only reclaim a pill whose NUMBER matches this anchor. When
+      // several phones share one container (e.g. Forth's contact panel is a
+      // single <tr> holding Home + Cell), a number-agnostic reclaim would steal
+      // the sibling number's pill → one flame that dials the wrong number.
+      var wantDigits = t.number.replace(/[^\d]/g, "");
       var scope = anchor.closest("tr") || anchor.parentElement;
-      var stray = scope ? scope.querySelector("." + PB_CTC_BTN_CLASS) : null;
-      if (stray) {
-        anchor.insertAdjacentElement("afterend", stray);
+      var strayPill = null;
+      if (scope) {
+        var scopePills = scope.querySelectorAll("." + PB_CTC_BTN_CLASS);
+        for (var sp = 0; sp < scopePills.length; sp++) {
+          if (scopePills[sp].dataset.pbNum === wantDigits) {
+            strayPill = scopePills[sp];
+            break;
+          }
+        }
+      }
+      if (strayPill) {
+        anchor.insertAdjacentElement("afterend", strayPill);
         continue;
       }
 
