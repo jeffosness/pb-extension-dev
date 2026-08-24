@@ -1504,10 +1504,14 @@ function ctc_intent_write(
     string $phone,
     string $client_id,
     string $task_id,
-    string $crm_name
+    string $crm_name,
+    string $crm_id = ''
 ): bool {
     $path = ctc_intent_file_path($pb_user_id, $phone);
-    if ($path === null || $client_id === '' || $task_id === '' || $crm_name === '') {
+    // Need client_id + crm_name, plus at least ONE actionable id: task_id (for
+    // task-completion CRMs like HubSpot) or crm_id (for call-logging CRMs like
+    // Forth). An intent with neither has nothing for the webhook to act on.
+    if ($path === null || $client_id === '' || $crm_name === '' || ($task_id === '' && $crm_id === '')) {
         return false;
     }
 
@@ -1518,6 +1522,7 @@ function ctc_intent_write(
         'client_id'  => $client_id,
         'task_id'    => $task_id,
         'crm_name'   => $crm_name,
+        'crm_id'     => $crm_id,
         'minted_at'  => time(),
     ];
 

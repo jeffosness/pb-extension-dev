@@ -52,30 +52,40 @@ $code = temp_code_store($client_id, 300);
 $task_id  = isset($data['task_id'])  ? (string)$data['task_id']  : '';
 $phone    = isset($data['phone'])    ? (string)$data['phone']    : '';
 $crm_name = isset($data['crm_name']) ? (string)$data['crm_name'] : '';
+$crm_id   = isset($data['crm_id'])   ? (string)$data['crm_id']   : '';
 
 $intent_written = false;
-if ($task_id !== '' && $phone !== '' && $crm_name !== '') {
+if ($phone !== '' && $crm_name !== '') {
     $crmCfg = ctc_supported_crm_config($crm_name);
     if ($crmCfg !== null) {
         // Confirm the CRM is connected — if not, skip the intent write.
         // The webhook would find a record it can't act on, and a stale
-        // entry would sit in the queue for the TTL.
-        $tokens = ($crmCfg['token_loader'])($client_id);
-        $connected = is_array($tokens) && !empty($tokens['access_token']);
+        // entry would sit in the queue for the TTL. The token key that
+        // signals "connected" differs per provider (OAuth access_token vs
+        // Forth's durable client_secret).
+        $tokens  = ($crmCfg['token_loader'])($client_id);
+        $connKey = $crmCfg['connected_key'] ?? 'access_token';
+        $connected = is_array($tokens) && !empty($tokens[$connKey]);
 
         if ($connected) {
             $pb_user_id = resolve_member_user_id_for_client($client_id);
             if ($pb_user_id) {
-                // Per-CRM task_id shape validation — belt-and-suspenders
-                // against a malicious client smuggling arbitrary payloads
-                // into the intent file.
-                if (preg_match($crmCfg['task_id_pattern'], $task_id)) {
+                // Per-CRM id shape validation — belt-and-suspenders against a
+                // malicious client smuggling arbitrary payloads into the intent.
+                //
+                // Two intent flavors:
+                //  • Task-completion (HubSpot): carries task_id; webhook closes it.
+                //  • Call-logging (Forth): carries crm_id (contact id); webhook
+                //    logs the CTC call. Task flow wins if both are present.
+                if ($task_id !== '' && !empty($crmCfg['completes_tasks'])
+                    && isset($crmCfg['task_id_pattern']) && preg_match($crmCfg['task_id_pattern'], $task_id)) {
                     $intent_written = ctc_intent_write(
-                        (string)$pb_user_id,
-                        $phone,
-                        $client_id,
-                        $task_id,
-                        $crm_name
+                        (string)$pb_user_id, $phone, $client_id, $task_id, $crm_name, ''
+                    );
+                } elseif ($crm_id !== '' && !empty($crmCfg['logs_ctc_calls'])
+                    && isset($crmCfg['crm_id_pattern']) && preg_match($crmCfg['crm_id_pattern'], $crm_id)) {
+                    $intent_written = ctc_intent_write(
+                        (string)$pb_user_id, $phone, $client_id, '', $crm_name, $crm_id
                     );
                 }
             }
@@ -107,15 +117,25 @@ function ctc_supported_crm_config(string $crm_name): ?array
         case 'hubspot':
             return [
                 'token_loader'    => 'load_hs_tokens',
+                'connected_key'   => 'access_token',
                 // HubSpot task ids are numeric object ids (see the DOM's
                 // <tr data-test-id="row-{taskId}"> on both task views).
                 'task_id_pattern' => '/^\d{1,20}$/',
+                'completes_tasks' => true,
+            ];
+        case 'forth':
+            return [
+                'token_loader'   => 'load_forth_tokens',
+                // Forth stores durable client_id/client_secret (no OAuth
+                // access_token) — presence of the secret signals "connected".
+                'connected_key'  => 'client_secret',
+                // Forth CTC logs the CALL (no task concept). crm_id is the
+                // numeric Forth contact id from the quickcall anchor's `to=`.
+                'crm_id_pattern' => '/^\d{1,20}$/',
+                'logs_ctc_calls' => true,
             ];
         // case 'close':
-        //   return [
-        //       'token_loader'    => 'load_close_tokens',
-        //       'task_id_pattern' => '/^[a-zA-Z0-9_-]{1,64}$/', // Close task ids look like "task_abc123"
-        //   ];
+        //   return [ 'token_loader' => 'load_close_tokens', 'connected_key' => 'access_token', 'crm_id_pattern' => '/^cont_[a-zA-Z0-9]+$/', 'logs_ctc_calls' => true ];
         // case 'apollo':
         //   return [ ... ];
     }
