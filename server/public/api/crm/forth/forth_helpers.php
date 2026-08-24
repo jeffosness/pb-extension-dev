@@ -358,19 +358,34 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
       }
     }
 
-    // Phones. Get Contact's PRIMARY number is `phone_number` (a string); the
-    // Search Contacts endpoint instead returns a `phone` array — tolerate both.
-    // cell_phone + work_phone become additional numbers. (Forth has no
-    // `home_phone` field — phone_number IS the home/primary line. Extensions
-    // (phone_extension/cell_extension) are intentionally ignored for dialing.)
-    list($primaryPhone, $extra) = forth_normalize_phone_field($c['phone_number'] ?? $c['phone'] ?? null);
-    $additional = [];
-    foreach ([$c['cell_phone'] ?? null, $c['work_phone'] ?? null] as $other) {
-      list($n, ) = forth_normalize_phone_field($other);
-      if ($n !== '') { if ($primaryPhone === '') $primaryPhone = $n; else $additional[] = $n; }
+    // Phones. Dial priority: CELL first (best contact rate for this vertical),
+    // then home (`phone_number`), then work. Additional numbers MUST be objects
+    // {number, phone_type, phone_label} — PB silently drops bare strings (this is
+    // the shape Close/Apollo send). phone_type codes: 1=home, 2=work, 3=mobile.
+    // Get Contact exposes cell_phone/phone_number/work_phone; the Search endpoint
+    // instead returns a `phone` array — tolerate that as a last resort. (No
+    // `home_phone` field exists — phone_number IS the home line. Extensions are
+    // intentionally ignored for dialing.)
+    $primaryPhone = '';
+    $additional   = [];
+    $seenPhones   = [];
+    $addPhone = function (string $n, string $type, string $label) use (&$primaryPhone, &$additional, &$seenPhones) {
+      if ($n === '' || isset($seenPhones[$n])) return;
+      $seenPhones[$n] = true;
+      if ($primaryPhone === '') { $primaryPhone = $n; return; } // first (cell) wins primary
+      $additional[] = ['number' => $n, 'phone_type' => $type, 'phone_label' => $label];
+    };
+    foreach ([['cell_phone', '3', 'Cell'], ['phone_number', '1', 'Home'], ['work_phone', '2', 'Work']] as $spec) {
+      list($n, $extra) = forth_normalize_phone_field($c[$spec[0]] ?? null);
+      $addPhone($n, $spec[1], $spec[2]);
+      foreach ($extra as $en) { $addPhone($en, $spec[1], $spec[2]); }
     }
-    foreach ($extra as $n) { $additional[] = $n; }
-    $additional = array_values(array_filter(array_unique($additional), fn($n) => $n !== '' && $n !== $primaryPhone));
+    // Search-shape fallback: only if none of the named fields were present.
+    if ($primaryPhone === '') {
+      list($n, $extra) = forth_normalize_phone_field($c['phone'] ?? null);
+      $addPhone($n, '1', 'Phone');
+      foreach ($extra as $en) { $addPhone($en, '1', 'Phone'); }
+    }
 
     // assigned_to = the contact's owning DPP agent (user id). Used to attribute
     // the logged call via POST /calls `assigned_agent`.
