@@ -838,14 +838,13 @@ function applyContextVisibility(ctx, pbConnected) {
   const forthDialCard = $("forth-dial-card");
   const forthSettingsCard = $("forth-settings-card");
   const forthApiKeyCard = $("forth-apikey-card");
-  // Dial card: Forth LIST pages only — the launch path extracts checked
-  // tr[data-contact_id] rows, which exist only on the contact-list page (cid
-  // absent → pageType "list"). On record pages (cid present) there are no list
-  // rows, so showing the card would dead-end at "No contacts found"; the rep
-  // uses click-to-call / follow-me there instead. Mirrors HubSpot's selection
-  // card being list-only.
-  const forthIsList = isForth && pageType === "list";
-  setVisible(forthDialCard, forthIsList);
+  // Dial card shows on Forth LIST pages (launch from checked tr[data-contact_id]
+  // rows) AND RECORD pages (launch a single-contact session for the cid in the
+  // URL — FORTH_GET_SELECTED_IDS falls back to the URL cid when no list rows
+  // exist). Other page types have no dialable target.
+  const forthIsRecord = isForth && pageType === "record";
+  const forthCanDial = isForth && (pageType === "list" || forthIsRecord);
+  setVisible(forthDialCard, forthCanDial);
   // Settings card: when connected. Credential-entry card: on any Forth page
   // when NOT yet connected (matches Apollo/Close pattern).
   setVisible(forthSettingsCard, FORTH_STATE.connected);
@@ -856,8 +855,8 @@ function applyContextVisibility(ctx, pbConnected) {
     if (forthSettingsStatus) forthSettingsStatus.textContent = "Connected ✔";
     if (forthDisconnectBtn) forthDisconnectBtn.disabled = false;
   }
-  if (forthIsList) {
-    refreshForthDialUi();
+  if (forthCanDial) {
+    refreshForthDialUi(forthIsRecord);
   }
 
   // Populate active cards
@@ -1826,9 +1825,11 @@ async function disconnectForth() {
   activateTab("dial");
 }
 
-function refreshForthDialUi() {
+function refreshForthDialUi(isRecord) {
   const btn = $("forth-dial-action");
   const status = $("forth-dial-status");
+  // Record page → single-contact launch; list page → launch from selection.
+  const launchLabel = isRecord ? "Dial this contact" : "Launch Dial Session";
 
   if (!FORTH_STATE.connected) {
     if (btn) {
@@ -1839,14 +1840,14 @@ function refreshForthDialUi() {
     if (status) status.textContent = "Connect Forth (Settings) to launch dial sessions.";
   } else if (!PB_CONNECTED) {
     if (btn) {
-      btn.textContent = "Launch Dial Session";
+      btn.textContent = launchLabel;
       btn.dataset.mode = "";
       btn.disabled = true;
     }
     if (status) status.textContent = "Save your PhoneBurner PAT first.";
   } else {
     if (btn) {
-      btn.textContent = "Launch Dial Session";
+      btn.textContent = launchLabel;
       btn.dataset.mode = "launch";
       btn.disabled = false;
     }
