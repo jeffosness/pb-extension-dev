@@ -2701,6 +2701,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       var forthIds = forthSelected.length > 0 ? forthSelected : forthAll;
+
+      // Record-page fallback: no list rows means we're on a contact detail
+      // page (index.php?...&cid=NNN). Launch a single-contact session for the
+      // cid in the URL. Powers "Dial this contact" off the record page.
+      if (forthIds.length === 0) {
+        var forthCid = new URLSearchParams(window.location.search).get("cid");
+        if (forthCid && /^\d+$/.test(forthCid)) forthIds = [forthCid];
+      }
+
       // De-dupe (a row can render twice in Forth's sticky-header table).
       forthIds = forthIds.filter(function (v, ix, arr) {
         return arr.indexOf(v) === ix;
