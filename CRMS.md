@@ -612,13 +612,36 @@ with a row checkbox; phone pills are
 `to=` param is the **contact id**, the dialable number is the link **text**).
 `record_url` → `https://client.forthcrm.com/index.php?module=contacts&page=view2&cid={cid}`.
 
-**Onboarding prerequisite (customer-facing):** account owner signs Forth's API
-Agreement → an admin creates a **Service User** ("API User", free/API-only, per
-company) → Admin → REST API → Service → pick company + user → Generate Key →
-**copy the Secret immediately (shown once)** → paste Key ID + Secret into the
-extension (Settings). More friction than our OAuth CRMs; no partner/OAuth-app
-option exists. The KB must stress the copy-the-Secret-now step — a user who
-closes Forth's dialog without saving the Secret has to delete + regenerate.
+**Onboarding model (customer-facing) — per-user keys, admin-generated
+(decided 2026-08-24):** account owner signs Forth's API Agreement → a Forth
+**admin** generates a **separate Key ID + Secret per user**: Admin → REST API →
+**Standard** → pick company + the specific user → Generate Key → **copy the
+Secret immediately (shown once)** → the admin hands each user their own pair,
+which the user pastes into the extension's Dial-tab connect card. The admin can
+**disable or delete any user's key individually** — the reason we chose per-user
+over a single shared company key.
+
+Why per-user + Standard (the reasoning, so nobody re-litigates it):
+- **Attribution doesn't require it.** We log each call with `assigned_agent =
+  the contact's owning agent`, so even one shared key attributes calls to the
+  right rep. Per-user keys are a *security/ops* choice (no shared secret,
+  per-user revocation), not a functional one.
+- **Standard, not Service.** Service users are free/API-only accounts (can't log
+  in) — good for ONE shared company key, but you can't make a per-*rep* Service
+  key. Per-user keys are generated under each rep's existing **Standard** seat
+  (no extra cost — they already have the seat).
+- **Rejected alternatives:** one shared Service key (simpler, but the admin
+  shares one secret with everyone — no per-user revoke); a company-level
+  connection where the admin connects once and reps inherit without pasting a
+  secret (the "right" long-term answer, but a real architecture change:
+  per-company creds instead of per-install — revisit if a customer pushes back
+  on per-user key distribution). See the connect-card copy in `popup.html`.
+
+More friction than our OAuth CRMs; no partner/OAuth-app option exists. The KB
+must stress the copy-the-Secret-now step (a user who closes Forth's dialog
+without saving the Secret has to delete + regenerate) AND the admin-vs-user
+split (admin generates per-user keys; a rep joining a team asks their admin for
+their own pair).
 
 ---
 
