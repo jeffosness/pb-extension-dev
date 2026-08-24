@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PhoneBurner Dial Session Companion — Dial from your CRM</title>
-  <meta name="description" content="The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more. Reach 4x more people per hour without leaving your CRM." />
+  <meta name="description" content="The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Forth, Salesforce, Pipedrive, AgencyZoom, and more. Reach 4x more people per hour without leaving your CRM." />
   <meta property="og:title" content="PhoneBurner Dial Session Companion — Dial from your CRM" />
-  <meta property="og:description" content="Free Chrome extension that turns your CRM into a power-dialing workstation. Works with HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more." />
+  <meta property="og:description" content="Free Chrome extension that turns your CRM into a power-dialing workstation. Works with HubSpot, Close, Apollo, Forth, Salesforce, Pipedrive, AgencyZoom, and more." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="https://extension.phoneburner.biz/og-image.png" />
 
@@ -195,6 +195,7 @@
     .crm-pill[data-crm="hubspot"]   .crm-pill__dot { background: #ff7a59; }
     .crm-pill[data-crm="close"]     .crm-pill__dot { background: #2cb673; }
     .crm-pill[data-crm="apollo"]    .crm-pill__dot { background: #0095ff; }
+    .crm-pill[data-crm="forth"]     .crm-pill__dot { background: #6d5ae6; }
     .crm-pill[data-crm="sf"]        .crm-pill__dot { background: #00a1e0; }
     .crm-pill[data-crm="pipedrive"] .crm-pill__dot { background: #1a1a1a; }
     .crm-pill[data-crm="agencyzoom"] .crm-pill__dot { background: #f26722; }
@@ -465,7 +466,7 @@
           <span class="eyebrow">Free Chrome Extension</span>
           <h1>Dial from your CRM.<br /><span class="accent">Stay in your CRM.</span></h1>
           <p class="hero__sub">
-            The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more. Reach <strong>4× more people per hour</strong> without leaving your CRM tab.
+            The free Chrome extension that launches PhoneBurner power-dial sessions from inside HubSpot, Close, Apollo, Forth, Salesforce, Pipedrive, AgencyZoom, and more. Reach <strong>4× more people per hour</strong> without leaving your CRM tab.
           </p>
           <div class="hero__ctas">
             <a class="btn btn--primary btn--lg" href="https://chromewebstore.google.com/detail/phoneburner-dial-session/hcnjaaplagkloccolpgibokkdcnmhncj" target="_blank" rel="noopener">Install Free on Chrome Web Store ↗</a>
@@ -502,6 +503,7 @@
         <a class="crm-pill" data-crm="hubspot"   href="#crm-hubspot"><span class="crm-pill__dot"></span>HubSpot</a>
         <a class="crm-pill" data-crm="close"     href="#crm-close"><span class="crm-pill__dot"></span>Close</a>
         <a class="crm-pill" data-crm="apollo"    href="#crm-apollo"><span class="crm-pill__dot"></span>Apollo.io</a>
+        <a class="crm-pill" data-crm="forth"     href="#crm-forth"><span class="crm-pill__dot"></span>Forth CRM</a>
         <a class="crm-pill" data-crm="sf"        href="#crm-sf"><span class="crm-pill__dot"></span>Salesforce</a>
         <a class="crm-pill" data-crm="pipedrive" href="#crm-pipedrive"><span class="crm-pill__dot"></span>Pipedrive</a>
         <a class="crm-pill" data-crm="agencyzoom" href="#crm-agencyzoom"><span class="crm-pill__dot"></span>AgencyZoom</a>
@@ -528,7 +530,7 @@
         <div class="feature-card">
           <div class="feature-card__icon">✓</div>
           <h3>Select &amp; Launch</h3>
-          <p>Pick the contacts, companies, or deals you want to dial from any CRM list view and launch instantly. Works across HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and more.</p>
+          <p>Pick the contacts, companies, or deals you want to dial from any CRM list view and launch instantly. Works across HubSpot, Close, Apollo, Forth, Salesforce, Pipedrive, AgencyZoom, and more.</p>
         </div>
         <div class="feature-card">
           <div class="feature-card__icon">≡</div>
@@ -687,6 +689,19 @@
         </ul>
       </article>
 
+      <article class="crm-detail" id="crm-forth">
+        <h3>Forth CRM <span class="level-badge level-badge--3">Level 3 · Full API</span></h3>
+        <ul>
+          <li>Launch dial sessions from a Forth <strong>contact list</strong> or a <strong>single contact record</strong></li>
+          <li>Phone fetching via the Forth API — the <strong>cell number is dialed first</strong>, with home and work included as additional numbers</li>
+          <li><strong>Call activities logged back to Forth</strong> — recorded in the contact's Call History with disposition, duration, and recording link, attributed to the rep who made the call</li>
+          <li><strong>Notes logged too</strong> — anything typed during the call is saved on the Forth contact alongside the call activity</li>
+          <li><strong>Click-to-call</strong> — a PhoneBurner button on every phone number dials and logs the call in one click</li>
+          <li>Follow widget keeps the Forth tab in sync, roaming freely between a contact's sub-tabs (History, Calls, Notes) without yanking you back</li>
+          <li>API-key authentication — connect with the Key ID and Secret your Forth admin generates for you</li>
+        </ul>
+      </article>
+
       <article class="crm-detail" id="crm-sf">
         <h3>Salesforce <span class="level-badge level-badge--2">Level 2 · Optimized</span></h3>
         <ul>
@@ -800,6 +815,7 @@
               <li><strong>HubSpot:</strong> Call activities log via the existing PhoneBurner ↔ HubSpot integration in your PhoneBurner account (activate it once under PhoneBurner Settings → Integrations → HubSpot).</li>
               <li><strong>Close:</strong> Call activities log to Close through the extension itself — including disposition, custom outcome, and recording link. Any notes typed during the call also appear as a separate Note activity on the lead.</li>
               <li><strong>Apollo:</strong> Activity logging back to Apollo isn't supported yet — it's on the roadmap and ships when there's sufficient customer demand. PhoneBurner's main app keeps the full call record either way.</li>
+              <li><strong>Forth:</strong> Call activities log to Forth through the extension itself — recorded in the contact's Call History with disposition, duration, and recording link, attributed to the rep who made the call. Notes typed during the call are saved on the contact too.</li>
               <li><strong>Salesforce, Pipedrive, and other CRMs:</strong> Call activity logging from this extension isn't currently supported for those CRMs. PhoneBurner's main app retains the full call records. If you want fully native Salesforce activity logging, PhoneBurner has a <a href="https://www.phoneburner.com/integrations/salesforce" target="_blank" rel="noopener">dedicated Salesforce package</a> that's built for that.</li>
             </ul>
           </div>

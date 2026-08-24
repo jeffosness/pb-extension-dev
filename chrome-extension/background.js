@@ -64,15 +64,14 @@ function clickToCallEnabled() {
   return true;
 }
 
-// Forth CRM (L3) feature gate. Forth is dev-only until we've validated the full
-// flow end-to-end against live API credentials (which require a signed Forth
-// API Agreement). While this returns CURRENT_ENV === "dev", customers on prod
-// see Forth behave exactly as it does today (generic L1 scan) — the L3
-// detection, connect UI, dial-session launch, and CTC finder all no-op for them.
-// TO LAUNCH: change to `return true;` once tested, and drop `devOnly` from the
-// Forth entry in crm_config.js. See GH #207.
+// Forth CRM (L3) feature gate. LAUNCHED in v0.8.7 (GH #207) — Forth is now a
+// full L3 provider for all customers. Kept as a named gate (rather than inlined)
+// so it stays greppable and can be flipped back to CURRENT_ENV === "dev" if we
+// ever need to pull Forth from prod without a full revert. The prod backend must
+// carry the Forth server code (deployed via prod tag) before this binary ships —
+// see the launch sequencing in GH #207.
 function forthEnabled() {
-  return CURRENT_ENV === "dev";
+  return true;
 }
 
 // Per-user toggle for the in-page pill. Default true. The popup writes this

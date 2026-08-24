@@ -75,11 +75,22 @@ Full API integration with Apollo:
 • Auto-navigate to Apollo contact profiles during calls
 • OAuth authentication — connect securely with one click
 
+🔹 Forth CRM Support (Level 3)
+Full API integration with Forth:
+
+• Launch dial sessions from a Forth contact list or a single contact record
+• Automatic phone fetching via the Forth API — the cell number is dialed first, with home and work included
+• Call activity logging — calls are recorded in the contact's Call History, attributed to the rep who made the call
+• Call notes sync — notes entered during calls appear on the Forth contact
+• Click-to-call — a PhoneBurner button on every phone number dials and logs the call in one click
+• API-key authentication — connect with the Key ID and Secret your Forth admin generates for you
+
 🔹 Multi-CRM Compatibility
 
 • HubSpot — Advanced Level 3 integration (API-based)
 • Close — Advanced Level 3 integration (API-based)
 • Apollo.io — Advanced Level 3 integration (API-based)
+• Forth CRM — Advanced Level 3 integration (API-based)
 • AgencyZoom — Optimized Level 2 support (task-list dialing)
 • Pipedrive — Optimized Level 2 support
 • Salesforce — Optimized Level 2 support
@@ -146,7 +157,7 @@ This extension is ideal for:
 
 ## Single purpose description
 
-> PhoneBurner Dial Session Companion enables PhoneBurner subscribers to start a PhoneBurner power-dialer session directly from supported CRM web pages (HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and generic-level support for Zoho CRM, monday.com, and other Chromium-compatible CRM sites). When the user explicitly clicks "Launch Dial Session," the extension reads the user's selected contacts from the active CRM page and sends them to PhoneBurner's backend. While a dial session is active, the extension displays a real-time "Follow" overlay on the CRM page showing the current call, live session statistics, and auto-navigating the CRM tab to the contact being dialed. Every action is user-initiated — the extension does not run silently or collect data passively. This is the extension's only function.
+> PhoneBurner Dial Session Companion enables PhoneBurner subscribers to start a PhoneBurner power-dialer session directly from supported CRM web pages (HubSpot, Close, Apollo, Forth, Salesforce, Pipedrive, AgencyZoom, and generic-level support for Zoho CRM, monday.com, and other Chromium-compatible CRM sites). When the user explicitly clicks "Launch Dial Session," the extension reads the user's selected contacts from the active CRM page and sends them to PhoneBurner's backend. While a dial session is active, the extension displays a real-time "Follow" overlay on the CRM page showing the current call, live session statistics, and auto-navigating the CRM tab to the contact being dialed. Every action is user-initiated — the extension does not run silently or collect data passively. This is the extension's only function.
 
 ---
 
@@ -160,7 +171,7 @@ These match the `permissions` and `host_permissions` arrays in `manifest.json`.
 
 ### `activeTab`
 
-> The `activeTab` permission lets the extension read the URL of the currently focused tab so it can detect whether the user is on a supported CRM (HubSpot, Close, Apollo, Salesforce, Pipedrive, AgencyZoom, and other supported CRM sites) when they open the popup. This determines which "Launch Dial Session" controls appear. Combined with `scripting`, it allows the extension to inject content scripts on the active tab only when the user explicitly invokes the extension — never silently in the background.
+> The `activeTab` permission lets the extension read the URL of the currently focused tab so it can detect whether the user is on a supported CRM (HubSpot, Close, Apollo, Forth, Salesforce, Pipedrive, AgencyZoom, and other supported CRM sites) when they open the popup. This determines which "Launch Dial Session" controls appear. Combined with `scripting`, it allows the extension to inject content scripts on the active tab only when the user explicitly invokes the extension — never silently in the background.
 
 ### `scripting`
 
