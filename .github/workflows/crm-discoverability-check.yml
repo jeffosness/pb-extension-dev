@@ -53,11 +53,9 @@ jobs:
 
           # CRMs that are intentionally NOT on customer surfaces.
           # Add ids here with a comment if we ever need an exception.
-          #   forth — dev-gated (crm_config devOnly:true + forthEnabled()===dev).
-          #           Invisible to customers until we flip the gate. REMOVE from
-          #           this list at launch, when Forth is added to STORE_LISTING.md
-          #           + server/public/index.html. See GH #207.
-          SKIP_IDS=("forth")
+          # (Forth was here while dev-gated; removed at its v0.8.7 launch — it
+          #  now appears on both customer surfaces. See GH #207.)
+          SKIP_IDS=()
 
           # Extract (id, displayName) pairs from crm_config.js.
           # crm_config.js format is a JS array of objects with `id: "..."` and

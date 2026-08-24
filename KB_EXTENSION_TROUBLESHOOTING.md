@@ -17,7 +17,7 @@
 
 ## What the Extension Does (1-line summary)
 
-It lets a PhoneBurner customer start a PhoneBurner dial session directly from a CRM (HubSpot, Close, Apollo, Salesforce, Pipedrive) without exporting CSVs, and shows a "Follow" widget on the CRM page that tracks the live call and auto-navigates to the active contact's record.
+It lets a PhoneBurner customer start a PhoneBurner dial session directly from a CRM (HubSpot, Close, Apollo, Forth, Salesforce, Pipedrive) without exporting CSVs, and shows a "Follow" widget on the CRM page that tracks the live call and auto-navigates to the active contact's record.
 
 **Requires:** An active PhoneBurner account. Sign up at https://phoneburner.biz/
 
@@ -32,13 +32,14 @@ The extension supports two integration levels. The level determines which featur
 | HubSpot | 3 (Full API) | OAuth | Selection, Saved Lists, Task Queue, Single Record |
 | Close | 3 (Full API) | OAuth | Selection (Contacts and Leads) |
 | Apollo.io | 3 (Full API) | OAuth | People Selection, Sequence Call Tasks |
+| Forth CRM | 3 (Full API) | API Key (Key ID + Secret) | Selection (contact list), Single Record |
 | Salesforce | 2 (Optimized) | None (scrapes page) | Selected rows only (must check at least one) |
 | Pipedrive | 2 (Optimized) | None (scrapes page) | All visible person rows on the Persons list |
 
 **Other CRMs (e.g., Zoho, monday.com):** Not supported by this extension. PhoneBurner has separate integrations for those — point customers to https://www.phoneburner.com/integrations or their PhoneBurner admin's integrations page.
 
 **Key differences:**
-- **Level 3** integrations use OAuth and fetch data via the CRM's API. They support call logging back to the CRM (Close, Apollo). They are the most reliable.
+- **Level 3** integrations fetch data via the CRM's API (OAuth for HubSpot/Close/Apollo, an API key for Forth). They support call logging back to the CRM (Close, Apollo, Forth). They are the most reliable.
 - **Level 2** reads contact info from the page DOM. Customers must be on a list view with visible contacts. Quality depends on the CRM's page layout.
 
 ---
@@ -72,6 +73,8 @@ The extension supports two integration levels. The level determines which featur
 | "I selected 100 but only X showed up" / "Counts vary on the same list" / "Some of my selected contacts are missing from the dial session" | [Fewer contacts than selected](#24-fewer-contacts-in-dial-session-than-selected) |
 | "The flame icon isn't showing" / "Click-to-call button missing" / "Two call buttons on every record" / "Mic prompt on click-to-call" | [Click-to-Call (HubSpot)](#25-click-to-call-hubspot) |
 | "Can I use AgencyZoom?" / "AgencyZoom tasks not dialing" / "Multiple tasks per lead" | [AgencyZoom](#26-agencyzoom) |
+| "Can I use Forth?" / "Connect Forth" / "Forth API key / Key ID / Secret" / "Where do I get Forth credentials" | [Forth CRM](#27-forth-crm) |
+| "Forth calls/notes not logging" / "Forth click-to-call wrong number" / "Forth cell vs home number" | [Forth CRM](#27-forth-crm) |
 | "HubSpot phone overwritten" / "Phone field changed in HubSpot" | [HubSpot Data Sync conflict](#19-hubspot-data-sync-conflict) |
 | "Is my data safe" / Privacy questions | [Privacy and security](#20-privacy-and-security) |
 | "Extension completely broken" / Nothing works | [Emergency reset](#21-emergency-reset) |
@@ -819,6 +822,46 @@ The very first time a customer clicks a flame icon in a new browser profile, Chr
 - Follow widget lands on the wrong AgencyZoom lead when navigating between calls
 
 Ask for: URL of the task list (with any filter/sort visible), extension version, count expected vs. count actually in the PhoneBurner session.
+
+---
+
+## 27. Forth CRM
+
+**What it is:** A full Level 3 (API) integration for Forth CRM (`client.forthcrm.com`). Reps can launch a PhoneBurner dial session from a Forth **contact list** or from a **single contact record**, calls and notes log back into Forth automatically, and click-to-call adds a dial button next to every phone number.
+
+### Connecting Forth (API key)
+
+Forth does **not** use OAuth. It uses a durable API credential pair — a **Key ID** and a **Secret** — that a Forth **admin** generates.
+
+- **How the admin generates them:** in Forth, **Admin → REST API → Standard →** pick the company and the user **→ Generate Key**. This produces a separate **Key ID + Secret per user**, so any individual user's access can be disabled or deleted without affecting anyone else. The **Secret is shown only once** at creation.
+- **Why per-user:** call activity and notes are attributed to the user whose key made the call. A shared key would attribute every rep's calls to one service account. If the admin already set this up, the rep asks their admin for their own Key ID + Secret.
+- **Requires a signed Forth API Agreement** on the customer's Forth account (handled between the customer and Forth).
+- **Where to enter them:** open the extension popup on a Forth page → the **Dial** tab shows a "Connect Forth" card with **Key ID** and **Secret** fields. Paste both, click Connect. On success it shows "Connected ✔ — ready to dial." Management (disconnect) lives in Settings.
+
+**Common mistake:** pasting the Secret into the Key ID field. The **Key ID** is the shorter numeric value; the **Secret** is the long UUID-style string.
+
+### Dialing, call logging, and follow-me
+
+- **Cell is dialed first.** Forth's phone fields are fetched via the API; the **cell number is the primary dialed number**, with home and work included as additional numbers.
+- **Call activities log to Forth automatically** — recorded in the contact's **Call History** with disposition, duration, and recording link, attributed to the rep who made the call.
+- **Notes typed during the call** are saved on the Forth contact alongside the call activity.
+- **Follow widget** keeps the Forth tab in sync as you dial and lets the rep roam freely between a contact's sub-tabs (History, Calls, Notes) without being yanked back.
+
+### Click-to-call in Forth
+
+A PhoneBurner flame button appears next to every phone number on Forth contact-list and record pages. Clicking it dials that number through PhoneBurner and logs the call (and any note) back to the contact — no dial session required.
+
+### Common questions and fixes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| No "Connect Forth" card in the popup | Not on a Forth page, or on an older extension version | Confirm the URL is on `client.forthcrm.com` and the extension is v0.8.7 or newer. |
+| "Connect Forth" fails / "invalid credentials" | Key ID and Secret swapped, or the key was disabled/deleted in Forth | Re-check which value is which (Key ID = short numeric, Secret = long UUID). Ask the admin to confirm the user's key is still active, or generate a new one. |
+| Connected, but launch says no dialable contacts | The selected rows have no phone number in Forth | Add a phone to the contact(s) in Forth. Cell is preferred. |
+| Click-to-call button dials the wrong number | (Fixed in v0.8.7) earlier internal builds could reclaim a sibling number's button when a contact had multiple phones | Confirm v0.8.7 or newer. |
+| Calls/notes not appearing in Forth | Key belongs to a different user than expected, or the API Agreement isn't active | Confirm the connected key is the rep's own; confirm the Forth API Agreement is signed and active. |
+
+**Escalate if:** connection succeeds but no contacts fetch, or calls complete but nothing logs to Forth after confirming the key is active and the API Agreement is signed. Ask for: the Forth contact URL (with `cid=`), extension version, and approximate call timestamp so engineering can trace via server logs.
 
 ---
 

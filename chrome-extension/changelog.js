@@ -16,6 +16,14 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.7": {
+    title: "What's New in v0.8.7",
+    items: [
+      "Forth CRM is now supported — connect once with your Forth API key, then launch PhoneBurner dial sessions straight from a Forth contact list or a single contact record",
+      "Calls and notes flow back into Forth automatically, attributed to the rep who made the call, and follow-me keeps your Forth screen in sync as you dial",
+      "Click-to-call in Forth — a PhoneBurner button appears next to every phone number so you can dial (and log the call) with one click"
+    ]
+  },
   "0.8.6": {
     title: "What's New in v0.8.6",
     items: [
