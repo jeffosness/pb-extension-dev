@@ -442,16 +442,25 @@
           </button>
         </div>
 
-        <div id="forth-connect-inline-card" class="card hidden">
-          <div class="card-title">Connect Forth to get started</div>
+        <!-- Forth Connect — single card on the Dial tab with the Key ID +
+             Secret inputs right here (no detour to Settings). Once connected,
+             this hides and the dial card takes its place; management lives in
+             Settings. -->
+        <div id="forth-connect-card" class="card hidden">
+          <div class="card-title">Connect Forth CRM <span class="pill">Level 3</span></div>
           <div class="help-text">
-            You're on a Forth page but haven't connected Forth yet. Connect
-            once (Settings tab) to launch dial sessions from your Forth
-            contacts.
+            In Forth: <strong>Admin → REST API</strong> → choose
+            <strong>Service</strong> → pick the company &amp; user →
+            <strong>Generate Key</strong>. Forth shows the
+            <strong>Secret only once</strong> — copy both values before closing
+            Forth's dialog. (Requires a signed Forth API Agreement.)
           </div>
-          <button id="forth-connect-inline-btn" class="primary mt-10">
-            Connect Forth
-          </button>
+          <label for="forth-client-id" class="mt-8">Key ID</label>
+          <input type="text" id="forth-client-id" placeholder="Forth Key ID" autocomplete="off" spellcheck="false" />
+          <label for="forth-client-secret" class="mt-6">Secret</label>
+          <input type="password" id="forth-client-secret" placeholder="Forth Secret" autocomplete="off" spellcheck="false" />
+          <div id="forth-apikey-status" class="status mt-4"></div>
+          <button id="forth-save-credentials" class="primary mt-8">Connect Forth</button>
         </div>
 
         <!-- Current Page (hidden on Level 3) -->
@@ -723,28 +732,6 @@
             for this browser session.
           </div>
           <button id="forth-disconnect" class="danger">Disconnect Forth</button>
-        </div>
-
-        <!-- Forth Connect — credential entry (Key ID + Secret). Surfaces only
-             when the user is on a Forth page AND not yet connected, matching the
-             Apollo/Close pattern (connect prompt lives in the CRM's context). -->
-        <div id="forth-apikey-card" class="card hidden">
-          <div class="card-title">Forth Connection</div>
-          <div class="help-text">
-            In Forth: <strong>Admin → REST API</strong> → choose
-            <strong>Service</strong> → pick the company &amp; user →
-            <strong>Generate Key</strong>. Forth shows the
-            <strong>Secret only once</strong> — copy both values before closing
-            Forth's dialog and paste them here. Lost the Secret? Delete that key
-            in Forth and generate a new one. (Requires a signed Forth API
-            Agreement.)
-          </div>
-          <label for="forth-client-id" class="mt-8">Key ID</label>
-          <input type="text" id="forth-client-id" placeholder="Forth Key ID" autocomplete="off" spellcheck="false" />
-          <label for="forth-client-secret" class="mt-6">Secret</label>
-          <input type="password" id="forth-client-secret" placeholder="Forth Secret" autocomplete="off" spellcheck="false" />
-          <div id="forth-apikey-status" class="status mt-4"></div>
-          <button id="forth-save-credentials" class="primary mt-8">Connect Forth</button>
         </div>
 
         <div class="card">

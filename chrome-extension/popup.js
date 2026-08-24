@@ -744,7 +744,7 @@ function applyContextVisibility(ctx, pbConnected) {
   setVisible($("hs-connect-inline-card"),     isHS     && !HS_STATE.connected);
   setVisible($("close-connect-inline-card"),  isClose  && !CLOSE_STATE.connected);
   setVisible($("apollo-connect-inline-card"), isApollo && !APOLLO_STATE.connected);
-  setVisible($("forth-connect-inline-card"),  isForth  && !FORTH_STATE.connected);
+  // Forth's connect card (with inputs) lives in the Forth block below.
 
   // Selection card: HS list pages only
   setVisible(hsDialCard, isHS && pageType === "list");
@@ -834,21 +834,26 @@ function applyContextVisibility(ctx, pbConnected) {
     fetchApolloSequences();
   }
 
-  // Forth CRM cards
+  // Forth CRM cards. Single-card connect experience: on a Forth page, show the
+  // connect card (Key ID + Secret inputs, inline on the Dial tab) until
+  // connected; then it's replaced by the dial card. Management (disconnect)
+  // lives in Settings — the user is never routed there to connect.
+  const forthConnectCard = $("forth-connect-card");
   const forthDialCard = $("forth-dial-card");
   const forthSettingsCard = $("forth-settings-card");
-  const forthApiKeyCard = $("forth-apikey-card");
-  // Dial card shows on Forth LIST pages (launch from checked tr[data-contact_id]
-  // rows) AND RECORD pages (launch a single-contact session for the cid in the
-  // URL — FORTH_GET_SELECTED_IDS falls back to the URL cid when no list rows
-  // exist). Other page types have no dialable target.
   const forthIsRecord = isForth && pageType === "record";
-  const forthCanDial = isForth && (pageType === "list" || forthIsRecord);
+
+  // Connect card: on any Forth page when NOT yet connected.
+  setVisible(forthConnectCard, isForth && !FORTH_STATE.connected);
+
+  // Dial card: only once CONNECTED, and only on a dialable page — LIST pages
+  // (launch from checked tr[data-contact_id] rows) or RECORD pages (single
+  // contact via the URL cid). Other page types have no dialable target.
+  const forthCanDial = isForth && FORTH_STATE.connected && (pageType === "list" || forthIsRecord);
   setVisible(forthDialCard, forthCanDial);
-  // Settings card: when connected. Credential-entry card: on any Forth page
-  // when NOT yet connected (matches Apollo/Close pattern).
+
+  // Settings card (disconnect / manage) only when connected.
   setVisible(forthSettingsCard, FORTH_STATE.connected);
-  setVisible(forthApiKeyCard, isForth && !FORTH_STATE.connected);
   if (FORTH_STATE.connected) {
     const forthSettingsStatus = $("forth-settings-status");
     const forthDisconnectBtn = $("forth-disconnect");
@@ -1803,8 +1808,17 @@ async function saveForthCredentials() {
   // pages without waiting for the first dial-session launch to request it.
   try { await requestOptionalPermissionForActiveSiteBestEffort(); } catch (e) { /* best effort */ }
 
-  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+  // Stay on the Dial tab — the connect card is replaced by the dial card in
+  // place. No routing to Settings. Surface a clear "ready to dial" confirmation
+  // on the dial card (which applyContextVisibility just revealed).
   activateTab("dial");
+  applyContextVisibility(ACTIVE_CTX, PB_CONNECTED);
+  const forthDialStatus = $("forth-dial-status");
+  if (forthDialStatus) {
+    forthDialStatus.textContent = PB_CONNECTED
+      ? "Connected ✔ — select contacts and dial."
+      : "Connected ✔ — save your PhoneBurner PAT to start dialing.";
+  }
 }
 
 async function disconnectForth() {
@@ -2466,9 +2480,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("hs-connect-inline-btn")?.addEventListener("click", startHubSpotOAuth);
   $("close-connect-inline-btn")?.addEventListener("click", startCloseOAuth);
   $("apollo-connect-inline-btn")?.addEventListener("click", startApolloOAuth);
-  // Forth has no OAuth redirect — the connect prompt routes to Settings where
-  // the Key ID + Secret inputs live.
-  $("forth-connect-inline-btn")?.addEventListener("click", () => activateTab("settings"));
+  // Forth has no inline-connect button — its connect card (with Key ID + Secret
+  // inputs) lives inline on the Dial tab; forth-save-credentials wires it above.
   $("apollo-task-filter")?.addEventListener("change", onApolloSequenceChange);
   $("apollo-sequence-launch")?.addEventListener("click", launchApolloFromTasks);
   $("apollo-phone-pref")?.addEventListener("change", onApolloPhonePrefChange);
