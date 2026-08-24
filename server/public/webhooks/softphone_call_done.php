@@ -249,23 +249,23 @@ try {
                 }
             }
             // Audit line piggybacks on the same daily crm_usage log that's
-            // already rotated. Dashboard picks up the new event_type for
-            // free (event_type=ctc_task_completed). crm_name here is the
-            // intent's (not the webhook payload's) — that's the value the
-            // task was actually completed under.
+            // already rotated. The event reflects which capability ran:
+            // task-completion (HubSpot) vs call-logging (Forth). crm_name here
+            // is the intent's (not the webhook payload's) — the value acted under.
+            $isTaskIntent = ($intentTaskId !== '');
             try {
                 if (isset($logFile) && $logFile) {
                     $auditEntry = [
                         'ts'             => date('c'),
                         'client_id_hash' => substr(hash('sha256', $intentClientId), 0, 12),
                         'member_user_id' => $agentMemberUserId,
-                        'event_type'     => 'ctc_task_completed',
+                        'event_type'     => $isTaskIntent ? 'ctc_task_completed' : 'ctc_call_logged',
                         'crm_id'         => $crmId,
                         'crm_name'       => $intentCrmName ?: $crmName,
                         'host'           => '',
                         'path'           => '',
                         'level'          => 3,
-                        'object_type'    => 'task',
+                        'object_type'    => $isTaskIntent ? 'task' : 'contact',
                         'launch_source'  => 'click_to_call',
                         'selected_count' => 1,
                         'task_id'        => $intentTaskId,

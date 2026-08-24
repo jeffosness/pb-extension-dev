@@ -403,9 +403,14 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
     $noteText = 'Call via PhoneBurner (click-to-call): ' . ($status !== '' ? $status : 'Unknown');
     if (!empty($callNotes)) $noteText .= ' — Notes: ' . implode(' | ', $callNotes);
 
+    // The softphone (CTC) payload has NO `connected` boolean — only `status`
+    // text (e.g. "Connected", "No Answer"). Derive the connected flag from it so
+    // disposition mapping works (otherwise "Connected" mismaps to "No Answer").
+    $connectedFlag = (stripos($status, 'connect') !== false) ? '1' : '0';
+
     // call_disposition is REQUIRED — map, then fall back to "No Answer"/first.
     $dispoMap = forth_fetch_disposition_map($apiKey);
-    $dispoId  = forth_map_pb_status_to_disposition_id($status, (string)($payload['connected'] ?? '0'), $dispoMap);
+    $dispoId  = forth_map_pb_status_to_disposition_id($status, $connectedFlag, $dispoMap);
     if ($dispoId === null && !empty($dispoMap)) {
         $dispoId = $dispoMap['no answer'] ?? reset($dispoMap);
     }
@@ -422,12 +427,14 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
         'notes'            => $noteText,
     ];
 
+    // Recording: PB only provides recording_url_public for connected calls, and
+    // the CTC payload has no `connected` flag to gate on — so send it whenever
+    // present + https (don't gate on a field the softphone payload lacks).
     $recordingUrl = trim((string)($payload['recording_url_public'] ?? ''));
     if ($recordingUrl !== '' && strpos($recordingUrl, 'http://') === 0) {
         $recordingUrl = 'https://' . substr($recordingUrl, 7);
     }
-    $connected = strtolower((string)($payload['connected'] ?? '0')) === '1';
-    if ($connected && $recordingUrl !== '' && strpos($recordingUrl, 'https://') === 0) {
+    if ($recordingUrl !== '' && strpos($recordingUrl, 'https://') === 0) {
         $callData['recording_url'] = $recordingUrl;
     }
 

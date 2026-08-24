@@ -52,10 +52,29 @@ final class CtcIntentTest extends TestCase
     #[Test]
     public function normalize_phone_strips_formatting(): void
     {
-        $this->assertSame('19012954326', ctc_normalize_phone('+1 (901) 295-4326'));
-        $this->assertSame('9012954326',  ctc_normalize_phone('9012954326'));
-        $this->assertSame('',            ctc_normalize_phone(''));
-        $this->assertSame('',            ctc_normalize_phone('--'));
+        // Canonicalizes to the 10-digit US number: strips formatting AND a
+        // leading country-code "1" so a CRM DOM number (which may omit +1, e.g.
+        // Forth's "615-265-0077") and PhoneBurner's E.164 webhook value
+        // ("+16152650077") produce the SAME intent key.
+        $this->assertSame('9012954326', ctc_normalize_phone('+1 (901) 295-4326'));
+        $this->assertSame('9012954326', ctc_normalize_phone('19012954326'));
+        $this->assertSame('9012954326', ctc_normalize_phone('9012954326'));
+        $this->assertSame('9012954326', ctc_normalize_phone('(901) 295-4326'));
+        $this->assertSame('',           ctc_normalize_phone(''));
+        $this->assertSame('',           ctc_normalize_phone('--'));
+        // An 11-digit number NOT starting with 1 is left intact (not a US +1).
+        $this->assertSame('44201234567', ctc_normalize_phone('44201234567'));
+    }
+
+    #[Test]
+    public function normalize_phone_matches_across_country_code(): void
+    {
+        // The whole point of the country-code strip: a pill number scraped
+        // without +1 and the webhook's E.164 value must hash to the SAME key.
+        $this->assertSame(
+            ctc_normalize_phone('615-265-0077'),
+            ctc_normalize_phone('+16152650077')
+        );
     }
 
     #[Test]
@@ -65,8 +84,9 @@ final class CtcIntentTest extends TestCase
         $this->assertNotNull($path);
         // Filename must NOT contain the raw pb_user_id.
         $this->assertStringNotContainsString('21791', basename($path));
-        // Filename MUST contain the normalized phone (public key material).
-        $this->assertStringContainsString('19012954326', basename($path));
+        // Filename MUST contain the normalized phone (public key material),
+        // canonicalized to 10 digits (country code stripped).
+        $this->assertStringContainsString('9012954326', basename($path));
     }
 
     #[Test]

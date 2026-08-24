@@ -712,6 +712,11 @@ if (!function_exists('redact_pii_recursive')) {
             '/^.*(paypal|credit|card).*$/i',
             '/^.*(first_name|last_name|full_name|contact_name)$/i',
             '/^.*crm_identifier.*$/i',
+            // Agent-typed call notes / note bodies — a provider that echoes the
+            // submitted field back in a 4xx error must not leak them to app.log.
+            '/^.*note.*$/i',
+            '/^.*content.*$/i',
+            '/^.*(ssn|social.?security).*$/i',
         ];
         $denyKeys = ['payload', 'contacts', 'response_body', 'request_body'];
 
@@ -1436,7 +1441,16 @@ function ctc_intents_dir(): string
  */
 function ctc_normalize_phone(string $phone): string
 {
-    return preg_replace('/\D/', '', $phone);
+    $digits = preg_replace('/\D/', '', (string)$phone);
+    // Canonicalize to the 10-digit US number so the intent key matches whether
+    // the source had a country code or not. The CTC pill's number is scraped
+    // from the CRM DOM (which may omit +1 — e.g. Forth shows "615-265-0077"),
+    // while PhoneBurner's call-done webhook returns E.164 ("+16152650077"). Both
+    // must produce the same key or the intent orphans and the call never logs.
+    if (strlen($digits) === 11 && $digits[0] === '1') {
+        $digits = substr($digits, 1);
+    }
+    return $digits;
 }
 
 /**
