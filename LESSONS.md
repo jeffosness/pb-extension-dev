@@ -6,6 +6,18 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-08-25 — Chrome Web Store rejected the Forth launch for "excessive keywords" (a repetitive CRM list)
+
+**What happened:** The v0.8.7 draft (Forth launch) was **rejected** by the Chrome Web Store under *Spam and Placement in the Store → "Having excessive keywords in the item's description."* The reviewer quoted our **Multi-CRM Compatibility** block — a bulleted list that repeated the same qualifier phrase for every CRM: "HubSpot — Advanced Level 3 integration (API-based) • Close — Advanced Level 3 integration (API-based) • Apollo.io — Advanced Level 3 integration (API-based) • Forth CRM — Advanced Level 3 integration (API-based) • …". Seven near-identical lines read as keyword stuffing.
+
+**Why we didn't catch it earlier:** The *same list* (minus Forth) shipped in v0.8.6 and was **approved** — so it was already latent, and adding Forth as one more identical line was the change that tipped a fresh reviewer over. CWS reviews are human and non-deterministic: a pattern that passed once is not a guarantee. Our own `crm-discoverability-check` CI enforces that each CRM's displayName *appears* in the listing, which quietly incentivized the exhaustive-list format that triggered this — the CI cares about presence, the store cares about it not looking spammy.
+
+**Fix (no code / no package change):** rewrote the Multi-CRM list as natural prose that names each CRM once ("full API integrations with HubSpot, Close, Apollo.io, and Forth CRM. AgencyZoom, Pipedrive, and Salesforce are supported through optimized page reading, and Zoho CRM, monday.com, and other CRM sites work through generic list scanning."), dropped the repeated "Advanced Level 3 integration (API-based)" / "Full API integration with X" / "(Level 3)" boilerplate (each ×4 → 0), and consolidated four per-CRM connect-requirement bullets into one. The store-listing description is **not** in the zip — the fix is edit the draft's Store Listing text and resubmit; the 0.8.7 package is unchanged.
+
+**Process change:** added a warning to [CRMS.md → Customer-facing surfaces checklist](CRMS.md#customer-facing-surfaces-shared-checklist) — when adding a CRM to STORE_LISTING.md, name it in prose, never extend a boilerplate-repeated bulleted "X — Level N integration" list. The discoverability CI only needs the displayName string present *somewhere*; it does not need (and the store punishes) a per-CRM keyword row. If a rejection recurs after prose cleanup, the raw CRM-name counts in feature sections (HubSpot ×18, Close ×15) are the next lever — but those live in genuinely descriptive copy, so trim only if forced.
+
+---
+
 ## 2026-08-24 — Copying the wrong template hid a whole capability's plumbing (Forth click-to-call)
 
 **What happened:** Adding click-to-call to Forth, the pill wouldn't render despite every gate passing (`showPills: true`, `CURRENT_ENV: 'dev'`, `supported: true`, detection returning Forth L3, and the target anchors confirmed present in the DOM). Live console debugging eventually surfaced `HOST GRANTED: false` — the extension held no *standing* host permission for `client.forthcrm.com`, so `maybeActivateCtcInTab` bailed at its `permissions.contains` gate and never injected the content script.
