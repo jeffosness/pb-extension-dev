@@ -14,117 +14,78 @@
 ## Full Description
 
 📞 PhoneBurner Dial Session Companion
-Launch PhoneBurner dial sessions directly from your CRM and follow calls in real time — no manual exports, no tab juggling, no hassle.
 
-The PhoneBurner Dial Session Companion bridges your CRM workflow with PhoneBurner's power dialer, making it faster and easier to start dialing and stay focused on the right record during every call.
+Dial faster. Stay in your CRM.
 
-🚀 Key Features
+Turn your CRM into a power-dialing machine. Install the free extension, pick your contacts, and reach up to 4x more people per hour — 60 to 80 dials an hour instead of a handful — without exporting a CSV or leaving your CRM tab.
 
-🔹 Launch Dial Sessions from Your CRM
-Three ways to start dialing:
+Trusted by 3,000+ sales teams. Built by PhoneBurner — 4.7 on G2, with badges for Best ROI, Easiest Setup, and Momentum Leader.
 
-• Select & Launch: Choose records from any CRM list view and launch instantly
-• List-Based Launch (HubSpot): Pick a saved HubSpot list from a dropdown and dial up to 500 contacts or companies
-• Task-Based Launch: Dial straight from your HubSpot Task Queue or your AgencyZoom task list — turn your task queue into a power-dialing session
+✅ Reach up to 4x more people per hour
+✅ Automatic call logging on supported CRMs — calls and notes write back to the record, so there's no after-call data entry
+✅ Follow every call live — your CRM auto-navigates to the record being dialed, so you're always looking at the right person
 
-✅ Automatically sends contacts to PhoneBurner
-✅ Eliminates manual CSV exports and imports
-✅ Works with contacts, companies, and deals
+🚀 What You Can Do
 
-🔹 Click-to-Call — Single Calls Without a Full Dial Session (HubSpot)
-A small PhoneBurner flame icon appears next to phone numbers on HubSpot contact records, company records, list views, and your tasks list. Click it to place a single call in seconds — perfect for one-off follow-ups when you don't need a whole dial session.
+🔹 Launch a dial session in one click
+Pick contacts from any list, saved segment, or task queue and start dialing instantly — no CSV exports, no imports. Works with contacts, companies, and deals.
 
-• Every phone field is dialable — Phone Number, Mobile, Home Phone, and any custom phone properties
-• Task rows auto-complete — click the flame on a task, disposition the call, and HubSpot marks the task done automatically
-• Icon-only design stays out of your way; hover for context
-• Toggle it off in Settings if you already use another dialer's click-to-call
+• Select records on any CRM list view and launch
+• Pick a saved HubSpot list and dial up to 500 contacts or companies at once
+• Dial straight from your HubSpot Task Queue or AgencyZoom task list — turn your to-do list into a power session
 
-🔹 Real-Time "Follow" Widget
-Stay in sync with your dialer:
+🔹 Click-to-call for one-off calls
+A PhoneBurner flame icon sits next to phone numbers on your records, lists, and tasks. Click it to place — and log — a single call in seconds, perfect for quick follow-ups when you don't need a full session.
 
-• Displays the current call and live statistics
-• Automatically navigates to the active CRM record being called
-• Compact, modern design with expand/minimize controls
-• Optional auto-collapse behavior (user configurable)
+• Every phone field is dialable — mobile, work, home, and custom properties
+• On HubSpot, calling a task row auto-completes the task; on Forth, click-to-call logs the call and your note to the contact
+• Icon-only and out of your way — toggle it off anytime in Settings
 
-🔹 Advanced HubSpot Support
-Connected through the HubSpot API:
+🔹 Never lose your place
+The real-time Follow widget rides along on your CRM tab, showing the current call and your live session stats, and auto-navigates to whoever's being dialed — so you're always on the right record.
 
-• Launch from selected records (contacts, companies, or deals)
-• Launch from saved HubSpot lists (up to 500 records per session)
-• Launch from the HubSpot Task Queue — dial through the contacts associated with your visible tasks, and have those tasks auto-complete in HubSpot as you finish each call
-• Automatically discovers all phone properties (mobile, work, custom fields)
-• Set a preferred primary phone field in Settings
-• OAuth authentication — secure, no scraping required
+⚙️ Works Where You Already Work
 
-🔹 Close CRM Support
-Connected through the Close API:
+PhoneBurner connects deepest through full API integrations with HubSpot, Close, Apollo.io, and Forth CRM — with automatic call logging on Close and Forth. AgencyZoom, Pipedrive, and Salesforce are supported through optimized page reading, and Zoho CRM, monday.com, and other CRM sites work through generic list scanning.
 
-• Launch dial sessions from Close contacts and leads
-• Automatic phone and email fetching via the Close API
-• Call activity logging — calls are recorded as activities in Close
-• Call notes sync — notes entered during calls appear in Close
-• OAuth authentication — connect securely with one click
+The essentials by CRM:
 
-🔹 Apollo.io Support
-Connected through the Apollo API:
+🔹 HubSpot — Launch from selected contacts, companies, or deals; from a saved list (up to 500 records); or from the Task Queue, where tasks auto-complete as you finish each call. Discovers every phone property and lets you set a preferred number. Secure OAuth, no scraping.
 
-• Launch dial sessions from Apollo People page — select contacts and dial
-• Dial from sequence call tasks — pick a sequence, filter by due tasks, and power-dial
-• Filter tasks by due today, overdue, or all open
-• Auto-navigate to Apollo contact profiles during calls
-• OAuth authentication — connect securely with one click
+🔹 Close — Launch from contacts or leads. Calls log as Close activities and your call notes sync to the lead, with custom outcomes matched automatically. One-click OAuth.
 
-🔹 Forth CRM Support
-Connected through the Forth API:
+🔹 Apollo.io — Launch from the People page, or straight from sequence call tasks (filter by due today, overdue, or all open), and auto-navigate to each profile as you dial. One-click OAuth.
 
-• Launch dial sessions from a Forth contact list or a single contact record
-• Automatic phone fetching via the Forth API — the cell number is dialed first, with home and work included
-• Call activity logging — calls are recorded in the contact's Call History, attributed to the rep who made the call
-• Call notes sync — notes entered during calls appear on the Forth contact
-• Click-to-call — a PhoneBurner button on every phone number dials and logs the call in one click
-• API-key authentication — connect with the Key ID and Secret your Forth admin generates for you
-
-🔹 Works With Your CRM
-
-PhoneBurner connects deepest through full API integrations with HubSpot, Close, Apollo.io, and Forth CRM. AgencyZoom, Pipedrive, and Salesforce are supported through optimized page reading, and Zoho CRM, monday.com, and other CRM sites work through generic list scanning.
+🔹 Forth CRM — Launch from a contact list or a single record, with the cell number dialed first. Calls and notes log to the contact's Call History, attributed to the rep who made the call, and click-to-call sits on every number. Connect with an API key from your Forth admin.
 
 ⚙️ How It Works
 
-1. Install the extension
-2. Connect your PhoneBurner account using a Personal Access Token
-3. Navigate to a CRM list page or open the extension popup
-4. Launch a dial session with one click (or select a list)
-5. Follow calls live as PhoneBurner dials through your contacts
+1. Install the free extension
+2. Connect your PhoneBurner account (Personal Access Token) — plus your CRM, for the deeper integrations
+3. Open a CRM list or record
+4. Launch a dial session, or click a number to place a single call
+5. Dial through your list while the Follow widget keeps your CRM in sync
 
 🔐 Security & Privacy
 
-✅ Your PhoneBurner Personal Access Token is stored server-side with strict owner-only file permissions — your browser keeps only an anonymous lookup key, never the token itself
-✅ HubSpot, Close, and Apollo authentication uses industry-standard OAuth
-✅ No data is sold or shared with third parties
-✅ The extension only reads CRM data when you initiate an action (clicking Launch)
-✅ All communication is encrypted over HTTPS
+✅ Your PhoneBurner token is stored server-side with strict owner-only permissions — your browser keeps only an anonymous lookup key, never the token itself
+✅ CRM connections use industry-standard OAuth (HubSpot, Close, Apollo) or a secure API key (Forth)
+✅ The extension only reads CRM data when you start an action — never silently in the background
+✅ Nothing is sold or shared with third parties, and all traffic is encrypted over HTTPS
 
 🧾 Requirements
 
-An active PhoneBurner account is required
-👉 Get one at: https://phoneburner.biz/
+An active PhoneBurner account is required. Start a free trial at https://phoneburner.biz/
 
 🛠️ Built For Sales Teams
-This extension is ideal for:
+Made for SDR and BDR teams, account executives, recruiters, and anyone making high volumes of calls out of HubSpot, Close, Apollo, Forth, or another CRM.
 
-• Sales reps and account executives
-• Recruiters and talent acquisition teams
-• SDR/BDR teams
-• Call-heavy CRM users
-• Teams using HubSpot or Close with large contact lists
+📌 Good To Know
 
-📌 Notes
-
-• The deeper integrations require connecting that CRM account first — via OAuth for HubSpot, Close, and Apollo, or an API Key ID + Secret (from your admin) for Forth
-• Some CRMs are supported via optimized page reading when an API isn't available
-• PhoneBurner dial sessions support up to 500 contacts
-• Features may vary slightly by CRM platform
+• The deeper integrations ask you to connect that CRM once — via OAuth (HubSpot, Close, Apollo) or an API Key ID + Secret from your admin (Forth)
+• Other CRMs are supported through optimized page reading when an API isn't available
+• Dial sessions support up to 500 contacts
+• Features vary slightly by CRM
 
 🆕 What's New in v0.8.7
 
