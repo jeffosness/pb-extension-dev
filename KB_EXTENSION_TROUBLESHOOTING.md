@@ -827,7 +827,7 @@ Ask for: URL of the task list (with any filter/sort visible), extension version,
 
 ## 27. Forth CRM
 
-**What it is:** A full Level 3 (API) integration for Forth CRM (`client.forthcrm.com`). Reps can launch a PhoneBurner dial session from a Forth **contact list** or from a **single contact record**, calls and notes log back into Forth automatically, and click-to-call adds a dial button next to every phone number.
+**What it is:** A full Level 3 (API) integration for Forth CRM. It works on any Forth host — Forth serves its app under more than one address (e.g. `client.forthcrm.com` and `login.forthcrm.com`), and the extension supports them all (v0.8.8+). Reps can launch a PhoneBurner dial session from a Forth **contact list** or from a **single contact record**, calls and notes log back into Forth automatically, and click-to-call adds a dial button next to every phone number.
 
 ### Connecting Forth (API key)
 
@@ -855,7 +855,8 @@ A PhoneBurner flame button appears next to every phone number on Forth contact-l
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| No "Connect Forth" card in the popup | Not on a Forth page, or on an older extension version | Confirm the URL is on `client.forthcrm.com` and the extension is v0.8.7 or newer. |
+| No "Connect Forth" card in the popup | Not on a Forth page, or on an older extension version | Confirm the URL is on a Forth host (e.g. `client.forthcrm.com` or `login.forthcrm.com`) and the extension is v0.8.8 or newer. |
+| Popup shows "Level 1 – Generic mode" / "Scan & Launch" on a Forth page, and follow-me keeps flashing to an add/edit page | Extension older than v0.8.8 on a non-`client.` Forth host (e.g. `login.forthcrm.com`) — it fell back to generic scanning | Update to v0.8.8+, which detects every Forth host as Level 3. |
 | "Connect Forth" fails / "invalid credentials" | Key ID and Secret swapped, or the key was disabled/deleted in Forth | Re-check which value is which (Key ID = short numeric, Secret = long UUID). Ask the admin to confirm the user's key is still active, or generate a new one. |
 | Connected, but launch says no dialable contacts | The selected rows have no phone number in Forth | Add a phone to the contact(s) in Forth. Cell is preferred. |
 | Click-to-call button dials the wrong number | (Fixed in v0.8.7) earlier internal builds could reclaim a sibling number's button when a contact had multiple phones | Confirm v0.8.7 or newer. |
