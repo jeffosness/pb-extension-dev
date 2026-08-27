@@ -57,6 +57,12 @@ const CRM_REGISTRY = [
     id: "forth",
     displayName: "Forth CRM",
     level: 3,
-    hostMatch: "client.forthcrm.com",
+    // Match ANY Forth host — orgs are served under multiple subdomains
+    // (client.forthcrm.com, login.forthcrm.com, …). This substring match keeps
+    // content.js detectCrmContext consistent with background.js
+    // detectCrmFromUrl, which already matches on "forthcrm.com". Matching only
+    // "client." silently dropped login.forthcrm.com users to generic L1 (the
+    // content script disagreed with background), which broke launch + follow-me.
+    hostMatch: "forthcrm.com",
   },
 ];

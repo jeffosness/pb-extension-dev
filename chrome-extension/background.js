@@ -1337,8 +1337,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           active: true,
           currentWindow: true,
         });
+        // Match ANY Forth host (client.forthcrm.com, login.forthcrm.com, …) —
+        // orgs land on different subdomains and we can't assume "client.".
         const forthTab = (tabs || []).find((t) =>
-          (t.url || "").includes("client.forthcrm.com"),
+          (t.url || "").includes("forthcrm.com"),
         );
         if (!forthTab || !forthTab.id) {
           return sendResponse({

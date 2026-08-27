@@ -85,6 +85,19 @@ $skipped      = 0;
 $sourceUrl   = (string)($context['url'] ?? '');
 $sourceLabel = (string)($context['title'] ?? '');
 
+// Follow-me navigates the user's own tab to each contact's record. Derive the
+// Forth host from the launch URL so we stay on whatever subdomain the org
+// actually uses (client.forthcrm.com, login.forthcrm.com, …) instead of
+// hardcoding "client." — a mismatch sends the tab to a host the user isn't
+// authenticated on, which bounces to an add/edit page (no cid) and makes
+// follow-me loop. Validate strictly: this URL is navigated to in the browser,
+// so accept ONLY a *.forthcrm.com host; fall back to client.forthcrm.com.
+$forthHost  = 'client.forthcrm.com';
+$launchHost = strtolower((string)(parse_url($sourceUrl, PHP_URL_HOST) ?? ''));
+if ($launchHost !== '' && preg_match('/(^|\.)forthcrm\.com$/', $launchHost)) {
+  $forthHost = $launchHost;
+}
+
 foreach ($forthContacts as $c) {
   $first   = trim((string)($c['first_name'] ?? ''));
   $last    = trim((string)($c['last_name'] ?? ''));
@@ -95,8 +108,9 @@ foreach ($forthContacts as $c) {
   if ($forthId === '') { $skipped++; continue; }
   if ($phone === '')   { $skipped++; continue; }
 
-  // Record URL → the contact's Forth dashboard (cid is the record identity).
-  $recordUrl = 'https://client.forthcrm.com/index.php?module=contacts&page=view2&cid=' . rawurlencode($forthId);
+  // Record URL → the contact's Forth dashboard (cid is the record identity),
+  // on the org's own Forth host (derived above).
+  $recordUrl = 'https://' . $forthHost . '/index.php?module=contacts&page=view2&cid=' . rawurlencode($forthId);
 
   $externalCrmData = [
     [

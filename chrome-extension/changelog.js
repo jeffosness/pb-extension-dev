@@ -16,6 +16,12 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.8": {
+    title: "What's New in v0.8.8",
+    items: [
+      "Forth CRM now works no matter which Forth web address you use — accounts on login.forthcrm.com are fully supported alongside client.forthcrm.com, so launching a dial session and the follow-me overlay work everywhere"
+    ]
+  },
   "0.8.7": {
     title: "What's New in v0.8.7",
     items: [
