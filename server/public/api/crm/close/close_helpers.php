@@ -150,6 +150,65 @@ function close_get_me($accessToken) {
 }
 
 /**
+ * Normalize a raw Close contact object into the shape the dial-session builder
+ * expects (close_id, lead_id, first/last name, primary phone/email, and any
+ * additional phones). Shared by both contact-fetch paths:
+ *   1. close_fetch_contacts_by_ids()   — per-contact GET /contact/{id}/
+ *   2. pb_dialsession_selection.php     — the GET /contact/?lead_id= LIST
+ *      response, which already returns FULL contact objects. Reusing this
+ *      helper there lets us skip a redundant second round-trip per contact.
+ *
+ * A Close contact object carries: id, name, phones[], emails[], lead_id.
+ */
+function close_normalize_contact(array $json): array {
+  // Split single name field into first/last
+  $fullName = trim((string)($json['name'] ?? ''));
+  $parts = preg_split('/\s+/', $fullName, 2);
+  $firstName = $parts[0] ?? '';
+  $lastName  = $parts[1] ?? '';
+
+  // Primary phone = first in phones array; the rest become additional_phone
+  $phones = is_array($json['phones'] ?? null) ? $json['phones'] : [];
+  $primaryPhone = '';
+  $additionalPhones = [];
+  foreach ($phones as $ph) {
+    $num = trim((string)($ph['phone'] ?? ''));
+    if ($num === '') continue;
+    if ($primaryPhone === '') {
+      $primaryPhone = $num;
+    } else {
+      $type = strtolower(trim((string)($ph['type'] ?? '')));
+      $phoneType = '2'; // default Work
+      if ($type === 'mobile') $phoneType = '3';
+      elseif ($type === 'home') $phoneType = '1';
+      $additionalPhones[] = [
+        'number'      => $num,
+        'phone_type'  => $phoneType,
+        'phone_label' => ucfirst($type ?: 'Phone'),
+      ];
+    }
+  }
+
+  // Primary email = first in emails array
+  $emails = is_array($json['emails'] ?? null) ? $json['emails'] : [];
+  $primaryEmail = '';
+  foreach ($emails as $em) {
+    $addr = trim((string)($em['email'] ?? ''));
+    if ($addr !== '') { $primaryEmail = $addr; break; }
+  }
+
+  return [
+    'close_id'          => (string)($json['id'] ?? ''),
+    'lead_id'           => (string)($json['lead_id'] ?? ''),
+    'first_name'        => $firstName,
+    'last_name'         => $lastName,
+    'email'             => $primaryEmail,
+    'phone'             => $primaryPhone,
+    'additional_phones' => $additionalPhones,
+  ];
+}
+
+/**
  * Fetch contacts by their Close contact IDs.
  * Close contacts have: id, name, phones[], emails[], lead_id
  *
@@ -176,53 +235,12 @@ function close_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [
       continue;
     }
 
-    // Split single name field into first/last
-    $fullName = trim((string)($json['name'] ?? ''));
-    $parts = preg_split('/\s+/', $fullName, 2);
-    $firstName = $parts[0] ?? '';
-    $lastName  = $parts[1] ?? '';
-
-    // Primary phone = first in phones array
-    $phones = is_array($json['phones'] ?? null) ? $json['phones'] : [];
-    $primaryPhone = '';
-    $additionalPhones = [];
-    foreach ($phones as $idx => $ph) {
-      $num = trim((string)($ph['phone'] ?? ''));
-      if ($num === '') continue;
-      if ($primaryPhone === '') {
-        $primaryPhone = $num;
-      } else {
-        $type = strtolower(trim((string)($ph['type'] ?? '')));
-        $phoneType = '2'; // default Work
-        if ($type === 'mobile') $phoneType = '3';
-        elseif ($type === 'home') $phoneType = '1';
-        $additionalPhones[] = [
-          'number'      => $num,
-          'phone_type'  => $phoneType,
-          'phone_label' => ucfirst($type ?: 'Phone'),
-        ];
-      }
-    }
-
-    // Primary email = first in emails array
-    $emails = is_array($json['emails'] ?? null) ? $json['emails'] : [];
-    $primaryEmail = '';
-    foreach ($emails as $em) {
-      $addr = trim((string)($em['email'] ?? ''));
-      if ($addr !== '') { $primaryEmail = $addr; break; }
-    }
-
-    $leadId = (string)($json['lead_id'] ?? '');
-
-    $contacts[] = [
-      'close_id'          => (string)$cid,
-      'lead_id'           => $leadId,
-      'first_name'        => $firstName,
-      'last_name'         => $lastName,
-      'email'             => $primaryEmail,
-      'phone'             => $primaryPhone,
-      'additional_phones' => $additionalPhones,
-    ];
+    $normalized = close_normalize_contact($json);
+    // Preserve the requested contact ID: the by-ID endpoint echoes it back in
+    // json['id'], but pin it explicitly so a missing/mismatched field can
+    // never silently drop the record from contacts_map.
+    $normalized['close_id'] = (string)$cid;
+    $contacts[] = $normalized;
     $diag['contacts_fetch']['ok']++;
   }
 
