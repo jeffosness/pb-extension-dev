@@ -8,6 +8,21 @@ require_once __DIR__ . '/../../core/bootstrap.php';
 require_once __DIR__ . '/../../../utils.php';
 require_once __DIR__ . '/close_helpers.php';
 
+// Gathering Close contact data (lead→contact resolution +, historically, a
+// per-contact detail fetch) runs serial cURL calls BEFORE we ever reach
+// pb_call_dialsession() — which raises its own limit but only from that point
+// on. On contact-heavy selections that pre-work alone could exceed a stock 30s
+// max_execution_time and kill the request mid-flight; the extension then shows
+// a generic "Could not reach the server" (the fetch rejects, no HTTP status).
+// Give the whole endpoint headroom. Mirror pb_call_dialsession's guard: only
+// raise when the current limit is a low positive value, so we never shrink a
+// higher allowance or downgrade "unlimited" (0). @-suppressed for hardened
+// setups that disable set_time_limit.
+$__pb_time_limit = (int) ini_get('max_execution_time');
+if ($__pb_time_limit > 0 && $__pb_time_limit < 120) {
+  @set_time_limit(120);
+}
+
 // -----------------------------------------------------------------------------
 // Input + tokens
 // -----------------------------------------------------------------------------
@@ -63,10 +78,17 @@ if (empty($contactIds) && empty($leadIds)) {
 // -----------------------------------------------------------------------------
 $leadResolveFail = 0;
 $leadResolveLastHttp = null;
+// cid => normalized contact. The GET /contact/?lead_id= list response already
+// returns FULL contact objects (name, phones, emails, lead_id), so we capture
+// them here and REUSE them below instead of issuing a second GET /contact/{id}/
+// per contact. That redundant re-fetch — one serial round-trip per contact on
+// top of one per lead — is what pushed contact-heavy selections past
+// max_execution_time and surfaced as "Could not reach the server". See
+// LESSONS.md.
+$resolvedContacts = [];
 if (!empty($leadIds) && empty($contactIds)) {
-  $resolvedContactIds = [];
   foreach ($leadIds as $lid) {
-    if (count($resolvedContactIds) >= 500) break;
+    if (count($resolvedContacts) >= 500) break;
 
     $url = 'https://api.close.com/api/v1/contact/?lead_id=' . rawurlencode($lid);
     list($code, $json, $raw) = close_api_get_json($accessToken, $url);
@@ -83,9 +105,9 @@ if (!empty($leadIds) && empty($contactIds)) {
     if ($code === 200 && is_array($json) && isset($json['data'])) {
       foreach ($json['data'] as $contact) {
         $cid = (string)($contact['id'] ?? '');
-        if ($cid !== '' && count($resolvedContactIds) < 500) {
-          $resolvedContactIds[] = $cid;
-        }
+        if ($cid === '' || isset($resolvedContacts[$cid])) continue;
+        if (count($resolvedContacts) >= 500) break;
+        $resolvedContacts[$cid] = close_normalize_contact($contact);
       }
     } else {
       // Log the first per-batch failure to capture Close's own error text;
@@ -100,11 +122,11 @@ if (!empty($leadIds) && empty($contactIds)) {
       $leadResolveFail++;
     }
   }
-  $contactIds = $resolvedContactIds;
+  $contactIds = array_keys($resolvedContacts);
 
   if ($leadResolveFail > 0) {
     _pb_write_api_log('close_lead_to_contact.batch_summary', [
-      'ok'        => count($resolvedContactIds),
+      'ok'        => count($resolvedContacts),
       'fail'      => $leadResolveFail,
       'last_http' => $leadResolveLastHttp,
       'total'     => count($leadIds),
@@ -133,9 +155,18 @@ $diag = [
   'lead_ids_resolved' => !empty($leadIds) ? count($leadIds) : 0,
 ];
 
-$closeContacts = close_fetch_contacts_with_refresh_retry(
-  $client_id, $closeTokens, $accessToken, $contactIds, $diag
-);
+if (!empty($resolvedContacts)) {
+  // Leads-page launch: contacts were already fully fetched during lead
+  // resolution above — reuse them directly, no per-contact API calls.
+  // ($resolvedContacts is already capped at 500 during resolution.)
+  $closeContacts = array_values($resolvedContacts);
+  $diag['contacts_from_lead_resolution'] = count($closeContacts);
+} else {
+  // Contacts-page launch: IDs came straight from the DOM, so fetch details.
+  $closeContacts = close_fetch_contacts_with_refresh_retry(
+    $client_id, $closeTokens, $accessToken, $contactIds, $diag
+  );
+}
 
 if (empty($closeContacts)) {
   api_error('No contacts returned from Close API', 'bad_request', 400, $diag);
