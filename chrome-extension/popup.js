@@ -714,9 +714,11 @@ function isApolloL3(ctx) {
   return !!(ctx && ctx.crmId === "apollo" && ctx.level === 3);
 }
 
-// Forth is dev-gated in background.js's detectCrmFromUrl — in prod it resolves
-// as generic (level 1), so this returns false and no Forth UI renders. No
-// separate popup-side env check is needed.
+// True only when the active-tab context resolved to Forth L3. Relies on the
+// background + content-script detectors agreeing on the host; both match any
+// *.forthcrm.com (see crm_config.js hostMatch). If they disagree — as they did
+// before the login.forthcrm.com fix — the popup can show Forth L3 while the
+// content script scrapes generically, so keep those host matches in sync.
 function isForthL3(ctx) {
   return !!(ctx && ctx.crmId === "forth" && ctx.level === 3);
 }
