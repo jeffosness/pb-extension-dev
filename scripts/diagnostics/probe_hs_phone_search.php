@@ -45,8 +45,34 @@ if (PHP_SAPI !== 'cli') {
 
 $opts = getopt('', [
     'root::', 'member_user_id::', 'numbers::', 'numbers_file::',
-    'sample::', 'props::', 'access_token::', 'verbose',
+    'sample::', 'props::', 'access_token::', 'cacert::', 'verbose',
 ]);
+
+// Resolve a CA bundle for PHP curl. On Windows, PHP often ships without one
+// configured (curl.cainfo empty), so HTTPS verification fails with errno 60.
+// Auto-detect a bundle so we keep verification ON (never disable it). On Linux
+// servers this returns '' and curl uses the system store by default — no-op.
+$GLOBALS['PROBE_CACERT'] = (function () use ($opts) {
+    $cands = [];
+    if (!empty($opts['cacert'])) $cands[] = (string)$opts['cacert'];
+    foreach (['CURL_CA_BUNDLE', 'SSL_CERT_FILE'] as $e) {
+        $v = getenv($e);
+        if ($v !== false && $v !== '') $cands[] = $v;
+    }
+    foreach (['curl.cainfo', 'openssl.cafile'] as $k) {
+        $v = ini_get($k);
+        if ($v) $cands[] = $v;
+    }
+    $cands[] = 'C:\\Program Files\\Git\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt';
+    $cands[] = 'C:\\Program Files\\Git\\usr\\ssl\\certs\\ca-bundle.crt';
+    foreach ($cands as $c) {
+        if (is_file($c)) return $c;
+    }
+    return '';
+})();
+if ($GLOBALS['PROBE_CACERT'] !== '') {
+    fwrite(STDERR, "Using CA bundle: {$GLOBALS['PROBE_CACERT']}\n");
+}
 
 $accessTokenDirect = trim((string)($opts['access_token'] ?? ''));
 if ($accessTokenDirect === '') {
@@ -85,6 +111,9 @@ function probe_http($token, string $method, string $url, ?array $body = null): a
         $headers[] = 'Content-Type: application/json';
     }
     $optArr[CURLOPT_HTTPHEADER] = $headers;
+    if (!empty($GLOBALS['PROBE_CACERT'])) {
+        $optArr[CURLOPT_CAINFO] = $GLOBALS['PROBE_CACERT'];
+    }
     curl_setopt_array($ch, $optArr);
     $raw  = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
