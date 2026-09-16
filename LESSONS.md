@@ -6,6 +6,59 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-09-16 — A mystery 500 exposed that we had no PHP error log AND two parallel general-purpose logs
+
+**What happened:** Jeff hit an HTTP 500 while going through the HubSpot OAuth callback on prod (`/api/crm/hubspot/oauth_hs_finish.php`). Popup showed connected — so the underlying token-save actually succeeded — but something later in the same request threw a 500 to the browser. Went to diagnose. Tailed `/opt/pb-extension/var/log/app.log` — full of webhook activity, but zero entries for `oauth_hs_finish`. Tailed Apache's `/var/log/apache2/error.log` — full of unrelated proxy noise, no PHP fatals visible. Started to feel like the error was invisible.
+
+Two structural gaps surfaced during the dig:
+
+1. **PHP's `error_log` directive was unset on prod.** With `log_errors = On` but no `error_log =` path, PHP's fatal/warning/notice output was falling into Apache's default error log stream where it was drowned by proxy-error noise from unrelated vhosts (`hooks.phoneburner.biz` port 8083 refusals). For any 500 that fatals BEFORE our own `api_log()` pipeline runs (parse errors, missing includes, bootstrap failures), we had zero usable trace.
+2. **We had two parallel general-purpose log files silently running.** `app.log` (written by `log_msg()`, plain text `[ts] message`) contained webhook + SSE traffic. `api.log` (written by `api_log()`, structured JSON) contained everything else. 203 total call sites across 54 files split roughly evenly between them. Every prior debug session had tailed whichever file the person remembered and assumed a missing entry meant "the event didn't happen" when really it meant "the event's in the other file with a different format." Nobody realized the split existed because the two functions had accumulated organically over time — neither one was ever removed when the other was added.
+
+**Why we didn't catch it earlier:** No incident had ever forced us to actually reconcile the two logging streams. Support-triage grep sessions had always eventually found what they needed by trying both files, but nobody had systematically audited "where does every kind of failure land." The OAuth 500 was the first case where BOTH streams missed the event (the failure was silent PHP, not our own code), which forced us to look at the whole logging landscape at once.
+
+**Fix (all shipped 2026-09-16):**
+
+1. **Per-vhost PHP error log path** (#225 shipped). Added `php_admin_value error_log "/opt/pb-extension*/var/log/php_errors.log"` to each SSL vhost — dev and prod stay cleanly separated. `/etc/php/8.3/apache2/php.ini` untouched, so the change is scoped and revertable per-vhost. Verified with a controlled test file that triggered `error_log("test")` — prod's entry landed only in prod's log, dev's only in dev's, no cross-contamination.
+2. **Logrotate for all `var/log/*.log` files.** Discovered during the dig that NOTHING was rotating our logs — `app.log` was 108MB, `api.log` was 317MB, and both were growing unbounded since day one. Added `/etc/logrotate.d/pb-extension` with two blocks: token-audit gets 365 days for security investigations, everything else gets 90. Forced a first rotation manually to shrink the giants immediately. Cron picks up daily from here.
+3. **Follow-up issues filed** (#226, #228) for the deeper architecture fixes:
+   - #226: install a global PHP error/exception handler in `bootstrap.php` that funnels PHP errors through `api_log()` — one file, one format for support triage
+   - #228: migrate all `log_msg()` calls to `api_log()` and delete `log_msg()`, killing the `app.log`/`api.log` split entirely
+
+**Process change:** SERVER_SETUP.md now covers the vhost `php_admin_value` line and the logrotate config so a fresh server rebuild doesn't lose either. SUPPORT_RUNBOOK.md now names all four log files and what content lands in each, plus the pre-existing "prod path was actually dev path" table bug that hid the split from anyone using the runbook.
+
+**Broader lesson — audit your logging infrastructure BEFORE you need it, not after.** Every debug session before this one had "worked" (eventually found what it needed) so nobody stopped to ask "does the total landscape make sense." The class-of-failure lesson: whenever multiple logging destinations accumulate over time (which happens naturally as a codebase grows), the marginal cost of "tail two files instead of one" hides the underlying structural gap. Force yourself to answer the meta-question periodically: **if a 500 hit right now with no obvious trace, could I find it in one grep?** If not, you have a logging debt to pay before the next mystery hits — and every mystery you don't pay it against is one that took longer than it needed to.
+
+**Non-code artifact worth naming:** the `.log` files themselves were 448MB combined on prod. Logrotate wasn't wired at all. When you add the first logging line to any new deployment, wire logrotate at the same time — it's a five-line config in `/etc/logrotate.d/` and it's the difference between "logs are useful" and "logs will eventually eat the disk."
+
+---
+
+## 2026-08-25b — Natural-prose CRM listings still got flagged (comma-lists are the actual trigger)
+
+**What happened:** After the earlier 2026-08-25 fix (rewriting the Multi-CRM Compatibility bulleted list as natural prose that names each CRM once), the v0.8.7 draft was **rejected again** with the same "excessive keywords" violation. Same violation reference (Yellow Argon), same policy section (Spam and Placement in the Store). This time the reviewer cited three specific phrases:
+
+- "HubSpot, Close, Apollo.io, and Forth CRM"
+- "AgencyZoom, Pipedrive, and Salesforce"
+- "Zoho CRM, monday.com"
+
+These are the exact comma-aggregated CRM lists from the "natural prose" rewrite. So the reviewer's rule is narrower than "don't repeat qualifier phrases in a bulleted list" — it's **any comma-aggregation of 3+ CRM names in the same sentence** that reads as keyword stuffing, regardless of whether the surrounding prose is natural or the descriptions differ.
+
+**Why the earlier fix wasn't enough:** the 2026-08-25 lesson named the SURFACE trigger (repeated qualifier phrase per CRM). The natural-prose replacement removed the qualifier repetition but preserved the underlying pattern the reviewer actually objects to — the presence of aggregated proper-noun CRM lists at all. A single citation from one reviewer surfaced part of the heuristic; a second rejection with more literal citations revealed the rest.
+
+**Fix (STORE_LISTING.md updated 2026-08-25b):**
+
+1. **Tightened rule: at most one CRM name per sentence in the CWS description body.** No "X, Y, and Z" formations of CRM names anywhere.
+2. Deleted the summary CRM lists from the opener, the Works Where preamble, the Security bullet, the Good To Know bullet, the FAQ "Which CRMs" answer, and the FAQ "Does it log calls" answer. Each summary spot now either points readers to the per-CRM detail sections below or uses a category term ("primary integrations", "several major sales CRMs") rather than listing names.
+3. **Added per-CRM detail paragraphs for the mid-tier CRMs** (Salesforce, Pipedrive, AgencyZoom) so each mid-tier CRM is named once in its own descriptive line, matching the pattern of the top-tier detail paragraphs (each CRM appears exactly once, in its own paragraph, with unique descriptive text).
+4. **Removed monday.com and Zoho from the description entirely.** Per Jeff — we haven't built CRM-specific handling for either. Generic scanning covers them but naming them was inaccurate anyway. This also reduced total CRM name count in the listing.
+5. Adjusted the Store Review Form "Single purpose description" to not enumerate every CRM by name — instead points to the description's per-CRM breakdown. Reviewer copy now matches customer copy.
+
+**Process change:** the CRMS.md warning added on 2026-08-25 needs to be tightened to the sharper rule: **NEVER list 3+ CRM names as a comma-separated aggregation in the same sentence, in prose OR in a bulleted summary line.** If you need a "CRMs supported" summary, use per-CRM headers with unique descriptive content per CRM. Each CRM name should appear exactly once in the description, in its own paragraph. Also — **remove any CRM from the STORE_LISTING description if we haven't built CRM-specific handling for it.** Generic scanning is a general feature, not a per-CRM claim. Listing generic-only CRMs by name inflates the CRM-name count in the description and (per this incident) increases rejection risk without adding real value.
+
+**Broader lesson — treat store rejections as source signal on their heuristic, not as random reviewer variance.** The first-cut 2026-08-25 diagnosis was "repeated qualifier phrase = keyword stuffing." That was PART of the reviewer's heuristic but not all of it. When the second rejection cited the actual phrases they objected to, the citations pointed at a different (and narrower) pattern than our first-cut theory. Rule for the next contributor: **read the reviewer's cited passages LITERALLY when defining the fix.** Their citations are the ground truth for what tripped the heuristic; our diagnosis should stay narrow to what those exact phrases share, not expand into an explanatory theory the citations don't support. If a rejection recurs on a fix, look at the new citations for what's mechanically COMMON with the first set — the intersection is the actual rule.
+
+---
+
 ## 2026-08-25 — Chrome Web Store rejected the Forth launch for "excessive keywords" (a repetitive CRM list)
 
 **What happened:** The v0.8.7 draft (Forth launch) was **rejected** by the Chrome Web Store under *Spam and Placement in the Store → "Having excessive keywords in the item's description."* The reviewer quoted our **Multi-CRM Compatibility** block — a bulleted list that repeated the same qualifier phrase for every CRM: "HubSpot — Advanced Level 3 integration (API-based) • Close — Advanced Level 3 integration (API-based) • Apollo.io — Advanced Level 3 integration (API-based) • Forth CRM — Advanced Level 3 integration (API-based) • …". Seven near-identical lines read as keyword stuffing.
