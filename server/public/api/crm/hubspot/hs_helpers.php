@@ -1044,3 +1044,140 @@ function hs_ensure_owner_cached(string $client_id, array $hs, string $endpointLa
 
     return $hs;
 }
+
+// -----------------------------------------------------------------------------
+// Phone-number → contact resolution (dial-pad feature)
+// -----------------------------------------------------------------------------
+//
+// Goal: given a phone number typed into a dial pad, find the HubSpot contact it
+// belongs to (so PB logs the call to the right record via external_crm_data),
+// or determine that none exists (so we can offer to create one).
+//
+// The hard part is SEARCH RELIABILITY: HubSpot's search matches on the stored
+// property STRING, which may be formatted "+1 (555) 123-4567", "555.123.4567",
+// bare "5551234567", or E.164 "+15551234567". A search that misses an existing
+// contact would make the resolver create a DUPLICATE — worse than not matching.
+// So before we commit to one strategy in the shippable resolver, we probe
+// several against a real portal via scripts/diagnostics/probe_hs_phone_search.php
+// and keep whichever reliably finds known contacts.
+
+/**
+ * Canonicalize a raw phone string to its US 10-digit form for searching.
+ * Delegates to ctc_normalize_phone() (utils.php) so the dial-pad resolver and
+ * the click-to-call intent key normalize identically (strip non-digits, drop a
+ * leading US "1"). Returns "" if there are no usable digits.
+ */
+function hs_phone_search_digits(string $raw): string {
+  return ctc_normalize_phone($raw);
+}
+
+/**
+ * Search HubSpot contacts for a phone number using a named strategy.
+ *
+ * Strategies (the reliability experiment — see the probe script):
+ *   'contains_last10' — CONTAINS_TOKEN *<10 digits>*  (unformatted / bare-10 storage)
+ *   'contains_last7'  — CONTAINS_TOKEN *<7 digits>*   (looser: local number only)
+ *   'contains_last4'  — CONTAINS_TOKEN *<4 digits>*   (loosest: high over-match risk)
+ *   'eq_e164'         — EQ +1<10 digits>              (E.164 storage)
+ *   'eq_last10'       — EQ <10 digits>                (bare-10 storage)
+ *   'eq_raw'          — EQ <raw as typed>             (exact stored-string match)
+ *
+ * Searches every discovered phone property (one filterGroup per property = OR
+ * semantics), capped at HubSpot's 5-filterGroup limit. Falls back to
+ * phone+mobilephone if no properties were discovered.
+ *
+ * Returns:
+ *   [
+ *     'ok'       => bool,     // HTTP 2xx
+ *     'http'     => int,      // status code
+ *     'strategy' => string,
+ *     'query'    => string,   // the operator:value actually sent (for probe output)
+ *     'count'    => int,
+ *     'matches'  => [ ['id'=>..., 'firstname'=>..., 'lastname'=>..., 'company'=>..., 'phones'=>[prop=>value,...]], ... ],
+ *     'error'    => ?string,  // provider error text on failure
+ *   ]
+ */
+function hs_search_contacts_by_phone(string $accessToken, string $rawNumber, array $phoneProperties, string $strategy = 'contains_last10', array &$diag = []): array {
+  $digits = hs_phone_search_digits($rawNumber);
+  $fail = function (string $msg) use ($strategy): array {
+    return ['ok' => false, 'http' => 0, 'strategy' => $strategy, 'query' => '', 'count' => 0, 'matches' => [], 'error' => $msg];
+  };
+  if ($digits === '' && $strategy !== 'eq_raw') {
+    return $fail('no digits in input');
+  }
+
+  switch ($strategy) {
+    case 'contains_last10': $op = 'CONTAINS_TOKEN'; $val = '*' . $digits . '*'; break;
+    case 'contains_last7':  $op = 'CONTAINS_TOKEN'; $val = '*' . substr($digits, -7) . '*'; break;
+    case 'contains_last4':  $op = 'CONTAINS_TOKEN'; $val = '*' . substr($digits, -4) . '*'; break;
+    case 'eq_e164':         $op = 'EQ'; $val = '+1' . $digits; break;
+    case 'eq_last10':       $op = 'EQ'; $val = $digits; break;
+    case 'eq_raw':          $op = 'EQ'; $val = trim($rawNumber); break;
+    default: return $fail('unknown strategy: ' . $strategy);
+  }
+
+  // Which phone properties to search across.
+  $propNames = [];
+  foreach ($phoneProperties as $p) {
+    $n = trim((string)($p['name'] ?? ''));
+    if ($n !== '') $propNames[] = $n;
+  }
+  if (empty($propNames)) $propNames = ['phone', 'mobilephone'];
+  // HubSpot search allows at most 5 filterGroups; one property per group (OR).
+  $propNames = array_slice(array_values(array_unique($propNames)), 0, 5);
+
+  $filterGroups = [];
+  foreach ($propNames as $pn) {
+    $filterGroups[] = ['filters' => [['propertyName' => $pn, 'operator' => $op, 'value' => $val]]];
+  }
+
+  $returnProps = array_values(array_unique(array_merge(['firstname', 'lastname', 'company', 'createdate'], $propNames)));
+  $body = [
+    'filterGroups' => $filterGroups,
+    'properties'   => $returnProps,
+    'limit'        => 20,
+    'sorts'        => [['propertyName' => 'lastmodifieddate', 'direction' => 'DESCENDING']],
+  ];
+
+  [$code, $json, $raw] = hs_api_post_json($accessToken, 'https://api.hubapi.com/crm/v3/objects/contacts/search', $body);
+  $ok = ($code >= 200 && $code < 300);
+  if (!$ok) {
+    // Per CLAUDE.md: external-API failure paths log the provider's own error text.
+    if (function_exists('log_api_failure_from_tuple')) {
+      log_api_failure_from_tuple($code, $json, $raw, 'hs_search_contacts_by_phone.failed', [
+        'strategy' => $strategy,
+      ]);
+    }
+    $errText = '';
+    if (is_array($json) && isset($json['message'])) $errText = (string)$json['message'];
+    elseif (is_string($raw)) $errText = substr($raw, 0, 300);
+    return ['ok' => false, 'http' => $code, 'strategy' => $strategy, 'query' => $op . ':' . $val, 'count' => 0, 'matches' => [], 'error' => $errText];
+  }
+
+  $matches = [];
+  $results = (is_array($json) && isset($json['results']) && is_array($json['results'])) ? $json['results'] : [];
+  foreach ($results as $r) {
+    $props = (isset($r['properties']) && is_array($r['properties'])) ? $r['properties'] : [];
+    $phones = [];
+    foreach ($propNames as $pn) {
+      $pv = trim((string)($props[$pn] ?? ''));
+      if ($pv !== '') $phones[$pn] = $pv;
+    }
+    $matches[] = [
+      'id'        => (string)($r['id'] ?? ''),
+      'firstname' => trim((string)($props['firstname'] ?? '')),
+      'lastname'  => trim((string)($props['lastname'] ?? '')),
+      'company'   => trim((string)($props['company'] ?? '')),
+      'phones'    => $phones,
+    ];
+  }
+
+  return [
+    'ok'       => true,
+    'http'     => $code,
+    'strategy' => $strategy,
+    'query'    => $op . ':' . $val,
+    'count'    => count($matches),
+    'matches'  => $matches,
+  ];
+}
