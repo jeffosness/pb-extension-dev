@@ -22,16 +22,29 @@ The 12-hex-char string after "Support ID:" is what you need. If they can't scree
 
 ## Step 2 — SSH to the right VPS
 
-| Environment | Host | Log file path |
+Dev and prod live on the same VPS as separate installations. Which log file to grep depends on where the customer's request landed. If the popup shows a `DEV` chip near the version, they're on dev; otherwise prod.
+
+| Environment | Host | Primary log path (api.log — structured JSON, most endpoints) |
 |---|---|---|
-| **Prod** (customer report) | `extension.phoneburner.biz` | `/opt/pb-extension-dev/var/log/api.log` |
+| **Prod** (customer report) | `extension.phoneburner.biz` | `/opt/pb-extension/var/log/api.log` |
 | **Dev** (internal testing) | `extension-dev.phoneburner.biz` | `/opt/pb-extension-dev/var/log/api.log` |
 
-Both use the same on-disk path. If the customer's popup DEV badge is red/absent, they're on prod. If it shows a `DEV` chip near the version, they're on dev.
+**Also worth grepping** — same env's log directory has three other files, each with different content:
+
+| File | What lands there |
+|---|---|
+| `api.log` | Structured JSON from `api_log()` — most modern API endpoints, OAuth flows, call-loggers, dial-session builders. **First stop for most triage.** |
+| `app.log` | Plain-text lines from `log_msg()` — webhooks (`call_done`, `contact_displayed`, `softphone_call_done`), SSE lifecycle, some legacy paths |
+| `php_errors.log` | PHP-level errors (fatals, warnings, uncaught exceptions). Grep here when the customer hit a 500 with no `api.log` trace — that means the failure was before our logging pipeline ran |
+| `token-audit.log` | Every token read/write/delete. Security-scope only — not part of routine triage |
+
+(Long-term plan: `app.log` and `api.log` will be consolidated into one file — see GH issue #228. Until then, grep both when in doubt.)
 
 ```bash
 ssh jeff@extension.phoneburner.biz
 ```
+
+**The command examples below use the dev path for readability.** If you're triaging a customer report, swap `/opt/pb-extension-dev/` for `/opt/pb-extension/` in every path.
 
 ---
 

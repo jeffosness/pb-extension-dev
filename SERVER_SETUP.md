@@ -85,6 +85,15 @@ sudo mkdir -p /opt/pb-extension-dev /opt/pb-extension
 # Per-env log dirs
 sudo mkdir -p /opt/pb-extension-dev/var/log /opt/pb-extension/var/log
 
+# Pre-create the PHP error log files so php_admin_value error_log (Section 5)
+# has a writable target the moment Apache reloads. Without these, PHP fails to
+# open the file and errors go into the void — the exact "silent 500" class we
+# hit in the LESSONS.md 2026-09-16 arc.
+sudo touch /opt/pb-extension-dev/var/log/php_errors.log
+sudo touch /opt/pb-extension/var/log/php_errors.log
+sudo chmod 640 /opt/pb-extension-dev/var/log/php_errors.log
+sudo chmod 640 /opt/pb-extension/var/log/php_errors.log
+
 # Token storage — keep outside the webroot, mode 0700
 sudo mkdir -p /var/lib/pb-extension-dev/tokens/{pb,hubspot,close,apollo}
 sudo mkdir -p /var/lib/pb-extension/tokens/{pb,hubspot,close,apollo}
@@ -275,6 +284,30 @@ sudo apache2ctl configtest && sudo systemctl reload apache2
 
 The `-le-ssl.conf` companions get generated automatically by certbot in Step 6 and inherit the same `<Location>` and `<LocationMatch>` blocks. **If you ever edit one vhost file, edit both** — certbot can't merge upstream changes back into the HTTPS variant.
 
+### Per-env PHP error log (post-certbot)
+
+After Step 6 generates the `*-le-ssl.conf` files, add one line to each SSL vhost so PHP writes its errors into that env's own `var/log/` directory instead of Apache's global error log. Without this line, PHP errors from BOTH envs land in `/var/log/apache2/error.log` mixed together — which is what caused the LESSONS.md 2026-09-16 debug arc.
+
+Add inside each `<VirtualHost *:443>` block (below the `CustomLog` line):
+
+**`/etc/apache2/sites-available/extension-dev.phoneburner.biz-le-ssl.conf`:**
+```apache
+    php_admin_value error_log "/opt/pb-extension-dev/var/log/php_errors.log"
+```
+
+**`/etc/apache2/sites-available/extension.phoneburner.biz-le-ssl.conf`:**
+```apache
+    php_admin_value error_log "/opt/pb-extension/var/log/php_errors.log"
+```
+
+Then:
+
+```bash
+sudo apache2ctl configtest && sudo systemctl reload apache2
+```
+
+The `php_errors.log` files themselves were created in Section 2 with `www-data` ownership. Verify PHP is writing to them by creating a temp file in the docroot that calls `error_log("test")`, hitting it via HTTPS, and checking the file — see the LESSONS.md 2026-09-16 entry for the exact commands.
+
 ---
 
 ## 6. SSL certificates (Let's Encrypt via certbot)
@@ -408,17 +441,63 @@ PHP doesn't reap its own stale files. Add to `$DEPLOY_USER`'s crontab (`crontab 
 */15 * * * * find /opt/pb-extension/server/public/cache -name 'temp_code_*.json' -mmin +10 -delete 2>/dev/null
 ```
 
-Add log rotation (`/etc/logrotate.d/pb-extension`):
+Add log rotation (`/etc/logrotate.d/pb-extension`). Two blocks — token audit logs get 365 days for security investigations, everything else gets 90:
 
 ```
-/opt/pb-extension-dev/var/log/*.log /opt/pb-extension/var/log/*.log {
+# Token audit logs — longer retention for security investigations.
+# Listed explicitly (not part of the general glob below) so they get 365 days
+# of retention instead of the standard 90.
+/opt/pb-extension/var/log/token-audit.log
+/opt/pb-extension-dev/var/log/token-audit.log
+{
     daily
-    rotate 90
-    compress
+    rotate 365
     missingok
     notifempty
-    create 0664 www-data www-data
+    compress
+    delaycompress
+    copytruncate
+    su www-data www-data
+    create 640 www-data www-data
 }
+
+# General application logs — 90-day retention.
+# Explicitly listed (not a glob) to avoid overlap with the token-audit block
+# above. If you add a new *.log file under either env's var/log directory,
+# add it here too.
+/opt/pb-extension/var/log/app.log
+/opt/pb-extension/var/log/api.log
+/opt/pb-extension/var/log/php_errors.log
+/opt/pb-extension-dev/var/log/app.log
+/opt/pb-extension-dev/var/log/api.log
+/opt/pb-extension-dev/var/log/php_errors.log
+{
+    daily
+    rotate 90
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su www-data www-data
+    create 640 www-data www-data
+}
+```
+
+**Why the two blocks + explicit file lists:** logrotate treats duplicate file entries as a hard error, so you can't use `*.log` in the general block and ALSO list token-audit.log separately in a longer-retention block. The workaround is to list every file explicitly in the general block. Downside: if you add a new `.log` file (e.g., in a future feature), you have to remember to add it here too. Verified via `sudo logrotate -d /etc/logrotate.d/pb-extension` before enabling.
+
+**`copytruncate` is important:** PHP + Apache hold the log file handles open. Without `copytruncate`, after a rotation PHP would keep writing to the (renamed) old file while the new empty file just sits there. `copytruncate` sidesteps that by copying the file first, then truncating the original in place — same inode, PHP keeps writing to what is now the fresh empty file.
+
+Test without touching the actual logs:
+
+```bash
+sudo logrotate -d /etc/logrotate.d/pb-extension
+```
+
+Should show no `error:` lines. If everything looks clean, cron picks it up automatically on the next daily run via `/etc/cron.daily/logrotate`. To force a first rotation immediately (useful when installing on an existing system with large accumulated log files):
+
+```bash
+sudo logrotate -vf /etc/logrotate.d/pb-extension
 ```
 
 ---
