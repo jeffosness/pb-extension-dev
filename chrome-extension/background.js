@@ -74,17 +74,6 @@ function forthEnabled() {
   return true;
 }
 
-// Dial-pad feature gate (type a number → resolve to a HubSpot contact → call).
-// SOAK-GATED to dev while we validate the resolve/create/picker flow end-to-end.
-// TO LAUNCH: flip to `return true;` once hs_resolve_by_phone.php +
-// hs_create_contact.php are deployed to prod AND the picker/create UX is proven.
-// Kept as a named gate so every gate point stays greppable (see CLAUDE.md
-// "Feature Gating for Soak-Testing"). Feature is also HubSpot-only — the popup
-// only shows the dial pad when HubSpot is connected.
-function dialPadEnabled() {
-  return CURRENT_ENV === "dev";
-}
-
 // Per-user toggle for the in-page pill. Default true. The popup writes this
 // via the Click-to-Call settings card. Distinct from clickToCallEnabled()
 // (which is the env-level feature flag) so the user pref persists across
@@ -607,42 +596,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         level: ctx.level || 3,
         object_type: objType,
         launch_source: msg.recordId ? "list" : "record",
-        selected_count: 1,
-      }).catch(function () {});
-    } catch (e) {}
-
-    sendResponse({ ok: true });
-    return true;
-  }
-
-  // Dial-pad: the popup resolved a typed number to a HubSpot contact (or created
-  // one) and now wants to place the call. Identity is supplied explicitly by the
-  // popup (recordId = the resolved HubSpot contact id) rather than scraped from a
-  // tab URL like CLICK_TO_CALL — otherwise this reuses the exact same hosted
-  // softphone path, so PB logs the call to that contact via external_crm_data.
-  if (msg.type === "DIALPAD_DIAL") {
-    if (!dialPadEnabled()) {
-      sendResponse({ ok: false, error: "dialpad_disabled" });
-      return true;
-    }
-    const dial = {
-      number: msg.number,
-      // Resolved HubSpot contact id becomes crm_id. crm_name is the contact
-      // namespace "hubspot" so HubSpot's native integration logs the call.
-      // If no id (caller chose to dial unlinked), leave both null → the call
-      // still places, it just won't attach to a CRM record.
-      recordId: msg.recordId || null,
-      crmName: msg.recordId ? "hubspot" : null,
-    };
-    openSoftphoneWindow(dial);
-
-    try {
-      api("core/track_crm_usage.php", {
-        event_type: "click_to_call",
-        crm_id: "hubspot",
-        level: 3,
-        object_type: "contact",
-        launch_source: "dialpad",
         selected_count: 1,
       }).catch(function () {});
     } catch (e) {}

@@ -2384,168 +2384,6 @@ function activateTab(tabName) {
 // Init
 // ---------------------------
 
-// ─────────────────────────────────────────────────────────────────────────
-// Dial Pad (DEV ONLY, HubSpot). Type a number → resolve to a HubSpot contact
-// (picker on multi-match, prompt-to-create on no-match) → place a click-to-call
-// so PhoneBurner logs against that record. Gated in initDialPad() on dev env +
-// HubSpot connection. Server: hs_resolve_by_phone.php / hs_create_contact.php.
-// Background: dialPadEnabled() / DIALPAD_DIAL.
-// ─────────────────────────────────────────────────────────────────────────
-
-function dialPadDigitCount(s) {
-  return String(s || "").replace(/\D/g, "").length;
-}
-
-async function initDialPad() {
-  const card = $("dialpad-card");
-  if (!card) return;
-
-  // Env gate: dev only (mirrors initDevOptions()'s storage read).
-  const env = await new Promise((resolve) => {
-    chrome.storage.local.get(["pb_env_override"], (res) => {
-      const e = res?.pb_env_override;
-      resolve(e === "dev" || e === "prod" ? e : DEFAULT_ENV);
-    });
-  });
-  if (env !== "dev" || !HS_STATE.connected) {
-    setVisible(card, false);
-    return;
-  }
-  setVisible(card, true);
-
-  const input = $("dialpad-input");
-  card.querySelectorAll(".dialpad-key").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (input) { input.value += btn.dataset.key || ""; input.focus(); }
-    });
-  });
-  $("dialpad-back")?.addEventListener("click", () => {
-    if (input) { input.value = input.value.slice(0, -1); input.focus(); }
-  });
-  $("dialpad-find")?.addEventListener("click", dialPadFindAndCall);
-  input?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); dialPadFindAndCall(); }
-  });
-}
-
-async function dialPadFindAndCall() {
-  const input = $("dialpad-input");
-  const status = $("dialpad-status");
-  const results = $("dialpad-results");
-  const findBtn = $("dialpad-find");
-
-  const raw = input ? input.value.trim() : "";
-  if (dialPadDigitCount(raw) < 10) {
-    if (status) status.textContent = "Enter a 10-digit number.";
-    return;
-  }
-
-  if (results) { results.classList.add("hidden"); results.replaceChildren(); }
-  if (findBtn) findBtn.disabled = true;
-  if (status) { status.textContent = "Searching HubSpot…"; status.classList.add("loading"); }
-
-  const resp = await hsPost("crm/hubspot/hs_resolve_by_phone.php", { number: raw });
-
-  if (status) status.classList.remove("loading");
-  if (findBtn) findBtn.disabled = false;
-
-  if (!resp || !resp.ok) {
-    if (status) status.textContent = getErrorMessage(resp, "HubSpot search failed.");
-    return;
-  }
-
-  const data = resp.data || resp;
-  const matches = Array.isArray(data.matches) ? data.matches : [];
-
-  if (matches.length === 0) {
-    if (status) status.textContent = "";
-    const ok = await showConfirm(
-      "No HubSpot contact found for " + raw + ".\n\nCreate a new contact and call?",
-      "No match found",
-    );
-    if (ok) return dialPadCreateAndCall(raw);
-    if (status) status.textContent = "Cancelled.";
-    return;
-  }
-
-  if (matches.length === 1) return dialPadDial(raw, matches[0]);
-
-  // Multiple matches → picker. Never auto-pick: logging the wrong contact is the
-  // exact failure this feature is meant to prevent.
-  if (status) status.textContent = matches.length + " contacts share this number — pick one:";
-  dialPadRenderMatches(raw, matches);
-}
-
-function dialPadRenderMatches(raw, matches) {
-  const results = $("dialpad-results");
-  if (!results) return;
-  results.replaceChildren();
-
-  matches.forEach((m) => {
-    const name = ((m.firstname || "") + " " + (m.lastname || "")).trim() || "(no name)";
-    const sub = [m.company, m.phone || m.mobilephone].filter(Boolean).join(" · ");
-    const row = document.createElement("div");
-    row.className = "dialpad-match";
-    row.innerHTML = '<span><span class="who"></span><br><span class="num"></span></span><span>Call ›</span>';
-    row.querySelector(".who").textContent = name;
-    row.querySelector(".num").textContent = sub;
-    row.addEventListener("click", () => dialPadDial(raw, m));
-    results.appendChild(row);
-  });
-
-  const createRow = document.createElement("div");
-  createRow.className = "dialpad-match";
-  createRow.innerHTML = '<span class="who">None of these — create a new contact</span><span>+</span>';
-  createRow.addEventListener("click", () => dialPadCreateAndCall(raw));
-  results.appendChild(createRow);
-
-  results.classList.remove("hidden");
-}
-
-async function dialPadCreateAndCall(raw) {
-  const status = $("dialpad-status");
-  const results = $("dialpad-results");
-  if (results) { results.classList.add("hidden"); results.replaceChildren(); }
-  if (status) { status.textContent = "Creating contact…"; status.classList.add("loading"); }
-
-  const resp = await hsPost("crm/hubspot/hs_create_contact.php", { number: raw });
-
-  if (status) status.classList.remove("loading");
-  if (!resp || !resp.ok) {
-    if (status) status.textContent = getErrorMessage(resp, "Could not create the contact.");
-    return;
-  }
-  const data = resp.data || resp;
-  if (!data.id) {
-    if (status) status.textContent = "Contact created but no id returned.";
-    return;
-  }
-  return dialPadDial(raw, { id: data.id });
-}
-
-async function dialPadDial(raw, contact) {
-  const status = $("dialpad-status");
-  const results = $("dialpad-results");
-  if (results) results.classList.add("hidden");
-  if (status) { status.textContent = "Starting call…"; status.classList.add("loading"); }
-
-  const resp = await sendToBackground({
-    type: "DIALPAD_DIAL",
-    number: raw,
-    recordId: contact && contact.id ? String(contact.id) : null,
-  });
-
-  if (status) status.classList.remove("loading");
-  if (!resp || !resp.ok) {
-    if (status) status.textContent = getErrorMessage(resp, "Could not start the call.");
-    return;
-  }
-  const who = contact && (contact.firstname || contact.lastname)
-    ? ((contact.firstname || "") + " " + (contact.lastname || "")).trim()
-    : "";
-  if (status) status.textContent = "Calling" + (who ? " " + who : "") + " — check the softphone window ✔";
-}
-
 document.addEventListener("DOMContentLoaded", async () => {
   $("save-pat")?.addEventListener("click", savePAT);
   $("disconnect-pat")?.addEventListener("click", disconnectPAT);
@@ -2658,11 +2496,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const versionEl = $("ext-version");
   if (versionEl) {
     const manifest = chrome.runtime.getManifest();
-    // Prefer version_name when present so a flagged test build (e.g. the
-    // dev-only dial pad) is visibly not-for-production right in the popup.
-    versionEl.textContent = manifest.version_name
-      ? manifest.version_name
-      : `v${manifest.version}`;
+    versionEl.textContent = `v${manifest.version}`;
   }
 
   // 0. Show welcome or what's-new modal (first install or version upgrade)
@@ -2682,10 +2516,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3. Check HS connection (always, even on non-HS pages — needed for list card)
   await checkHubSpotConnectionState();
-
-  // 3a. Dial pad (dev-only, HubSpot). Shown independently of the current page's
-  // CRM — you can dial any number as long as HubSpot is connected.
-  await initDialPad();
 
   // 3b. Check Close connection
   await checkCloseConnectionState();
