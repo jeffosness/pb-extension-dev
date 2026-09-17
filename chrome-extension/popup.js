@@ -2407,11 +2407,28 @@ async function initDialPad() {
       resolve(e === "dev" || e === "prod" ? e : DEFAULT_ENV);
     });
   });
-  if (env !== "dev" || !HS_STATE.connected) {
+  if (env !== "dev") {
     setVisible(card, false);
     return;
   }
   setVisible(card, true);
+
+  // HubSpot-only: the card shows in dev regardless, but resolve/create need a
+  // HubSpot connection. Hint when it's missing rather than hiding the card.
+  const hintStatus = $("dialpad-status");
+  if (!HS_STATE.connected && hintStatus) {
+    hintStatus.textContent = "Connect HubSpot to search and create contacts.";
+  }
+
+  // Collapsible: default collapsed so it never crowds the HubSpot cards above it.
+  const toggle = $("dialpad-toggle");
+  const body = $("dialpad-body");
+  toggle?.addEventListener("click", () => {
+    const open = card.classList.toggle("open");
+    setVisible(body, open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) $("dialpad-input")?.focus();
+  });
 
   const input = $("dialpad-input");
   card.querySelectorAll(".dialpad-key").forEach((btn) => {

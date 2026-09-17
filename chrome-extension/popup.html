@@ -364,13 +364,45 @@
         gap: 6px;
         margin-bottom: 8px;
       }
+      .dialpad-toggle {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        cursor: pointer;
+      }
+      .dialpad-heading { margin: 0; }
+      .dialpad-chevron {
+        color: var(--muted, #667085);
+        font-size: 12px;
+        transition: transform 0.15s;
+      }
+      #dialpad-card.open .dialpad-chevron { transform: rotate(90deg); }
+      .dialpad-body { margin-top: 10px; }
       .dialpad-key {
-        font-size: 18px;
-        padding: 10px 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1px;
+        padding: 8px 0;
         border: 1px solid var(--border, #d0d5dd);
         border-radius: 8px;
         background: #fff;
+        color: #1f2933;
         cursor: pointer;
+      }
+      .dialpad-key .k-digit { font-size: 18px; font-weight: 600; line-height: 1; }
+      .dialpad-key .k-sub {
+        font-size: 9px;
+        letter-spacing: 1px;
+        color: #8a94a6;
+        line-height: 1;
       }
       .dialpad-key:hover { background: #f4f6fa; }
       .dialpad-key:active { background: #e9edf5; }
@@ -530,47 +562,6 @@
           <div id="scan-status" class="status"></div>
         </div>
 
-        <!-- Dial Pad (DEV ONLY — HubSpot). Type a number → resolve to a HubSpot
-             contact (or create) → call. Shown only in dev + when HubSpot is
-             connected; see initDialPad() in popup.js. -->
-        <div id="dialpad-card" class="card hidden">
-          <div class="card-title">
-            Dial a Number <span class="pill">HubSpot · DEV</span>
-          </div>
-          <div class="help-text">
-            Type a number. We'll find the matching HubSpot contact (or offer to
-            create one) so the call logs correctly.
-          </div>
-          <input
-            id="dialpad-input"
-            class="dialpad-input"
-            type="tel"
-            inputmode="tel"
-            placeholder="(555) 123-4567"
-            autocomplete="off"
-          />
-          <div class="dialpad-grid">
-            <button class="dialpad-key" data-key="1">1</button>
-            <button class="dialpad-key" data-key="2">2</button>
-            <button class="dialpad-key" data-key="3">3</button>
-            <button class="dialpad-key" data-key="4">4</button>
-            <button class="dialpad-key" data-key="5">5</button>
-            <button class="dialpad-key" data-key="6">6</button>
-            <button class="dialpad-key" data-key="7">7</button>
-            <button class="dialpad-key" data-key="8">8</button>
-            <button class="dialpad-key" data-key="9">9</button>
-            <button class="dialpad-key" data-key="*">&#42;</button>
-            <button class="dialpad-key" data-key="0">0</button>
-            <button class="dialpad-key" data-key="#">#</button>
-          </div>
-          <div class="dialpad-actions">
-            <button id="dialpad-find" class="primary">Find &amp; Call</button>
-            <button id="dialpad-back" class="secondary" title="Backspace">&#9003;</button>
-          </div>
-          <div id="dialpad-status" class="status"></div>
-          <div id="dialpad-results" class="dialpad-results hidden"></div>
-        </div>
-
         <!-- HubSpot Selection (Level 3, list pages only) -->
         <div id="hubspot-dial-card" class="card hidden">
           <div class="card-title">
@@ -723,6 +714,50 @@
           </div>
 
           <div id="hs-tasks-status" class="status mt-4"></div>
+        </div>
+
+        <!-- Dial Pad (DEV ONLY — HubSpot). Collapsible; sits below the HubSpot
+             cards so it never hides them. Type a number → resolve to a HubSpot
+             contact (or create) → call. Shown only in dev; see initDialPad(). -->
+        <div id="dialpad-card" class="card hidden">
+          <button id="dialpad-toggle" class="dialpad-toggle" aria-expanded="false">
+            <span class="card-title dialpad-heading">Dial a Number <span class="pill">HubSpot · DEV</span></span>
+            <span id="dialpad-chevron" class="dialpad-chevron">&#9656;</span>
+          </button>
+          <div id="dialpad-body" class="dialpad-body hidden">
+            <div class="help-text">
+              Type a number — we'll find the matching HubSpot contact (or offer to
+              create one) so the call logs correctly.
+            </div>
+            <input
+              id="dialpad-input"
+              class="dialpad-input"
+              type="tel"
+              inputmode="tel"
+              placeholder="(555) 123-4567"
+              autocomplete="off"
+            />
+            <div class="dialpad-grid">
+              <button class="dialpad-key" data-key="1"><span class="k-digit">1</span></button>
+              <button class="dialpad-key" data-key="2"><span class="k-digit">2</span><span class="k-sub">ABC</span></button>
+              <button class="dialpad-key" data-key="3"><span class="k-digit">3</span><span class="k-sub">DEF</span></button>
+              <button class="dialpad-key" data-key="4"><span class="k-digit">4</span><span class="k-sub">GHI</span></button>
+              <button class="dialpad-key" data-key="5"><span class="k-digit">5</span><span class="k-sub">JKL</span></button>
+              <button class="dialpad-key" data-key="6"><span class="k-digit">6</span><span class="k-sub">MNO</span></button>
+              <button class="dialpad-key" data-key="7"><span class="k-digit">7</span><span class="k-sub">PQRS</span></button>
+              <button class="dialpad-key" data-key="8"><span class="k-digit">8</span><span class="k-sub">TUV</span></button>
+              <button class="dialpad-key" data-key="9"><span class="k-digit">9</span><span class="k-sub">WXYZ</span></button>
+              <button class="dialpad-key" data-key="*"><span class="k-digit">&#42;</span></button>
+              <button class="dialpad-key" data-key="0"><span class="k-digit">0</span><span class="k-sub">+</span></button>
+              <button class="dialpad-key" data-key="#"><span class="k-digit">#</span></button>
+            </div>
+            <div class="dialpad-actions">
+              <button id="dialpad-find" class="primary">Find &amp; Call</button>
+              <button id="dialpad-back" class="secondary" title="Backspace">&#9003;</button>
+            </div>
+            <div id="dialpad-status" class="status"></div>
+            <div id="dialpad-results" class="dialpad-results hidden"></div>
+          </div>
         </div>
       </div>
     </div>
