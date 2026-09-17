@@ -60,6 +60,10 @@ function token_read_whitelist(): array
             // v0.8.2 CTC-completes-task flow (PR #172) added HubSpot token
             // reads on both softphone endpoints. See LESSONS.md 2026-07-09.
             'softphone_auth_code', 'softphone_call_done',
+            // Dial-pad feature (phone → contact resolver). Both read HS tokens.
+            // Listed ahead of the prod launch so the first prod deploy doesn't
+            // trip a false-positive anomaly (LESSONS.md 2026-07-03 / 2026-07-09).
+            'hs_resolve_by_phone', 'hs_create_contact',
         ],
         'close' => [
             'state', 'oauth_close_finish', 'oauth_disconnect',

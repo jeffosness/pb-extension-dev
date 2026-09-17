@@ -1155,3 +1155,41 @@ function hs_search_contacts_by_phone(string $accessToken, string $rawNumber, arr
 
   return ['ok' => true, 'http' => $code, 'digits' => $digits, 'count' => count($matches), 'matches' => $matches];
 }
+
+/**
+ * Create a HubSpot contact for the dial-pad "no match → create & dial" path.
+ *
+ * Writes the number as-typed into `phone` (HubSpot auto-populates the calculated
+ * searchable fields, so a later phone search will find this contact). Sets
+ * hubspot_owner_id when an owner id is known so the contact isn't ownerless.
+ *
+ * The CALLER must guard against duplicates by searching first (see
+ * hs_create_contact.php, which re-searches immediately before creating to close
+ * the double-submit / race window). This helper just creates.
+ *
+ * Returns ['ok'=>bool, 'http'=>int, 'id'=>?string, 'error'=>?string].
+ */
+function hs_create_contact_record(string $accessToken, string $rawNumber, string $firstname = '', string $lastname = '', string $ownerId = ''): array {
+  $number = trim($rawNumber);
+  if ($number === '') {
+    return ['ok' => false, 'http' => 0, 'id' => null, 'error' => 'number is required'];
+  }
+
+  $props = ['phone' => $number];
+  if ($firstname !== '') $props['firstname'] = $firstname;
+  if ($lastname !== '')  $props['lastname']  = $lastname;
+  if ($ownerId !== '')   $props['hubspot_owner_id'] = $ownerId;
+
+  [$code, $json, $raw] = hs_api_post_json($accessToken, 'https://api.hubapi.com/crm/v3/objects/contacts', ['properties' => $props]);
+  if ($code < 200 || $code >= 300) {
+    if (function_exists('log_api_failure_from_tuple')) {
+      log_api_failure_from_tuple($code, $json, $raw, 'hs_create_contact_record.failed', ['has_owner' => $ownerId !== '']);
+    }
+    $errText = '';
+    if (is_array($json) && isset($json['message'])) $errText = (string)$json['message'];
+    elseif (is_string($raw)) $errText = substr($raw, 0, 300);
+    return ['ok' => false, 'http' => $code, 'id' => null, 'error' => $errText];
+  }
+
+  return ['ok' => true, 'http' => $code, 'id' => (string)($json['id'] ?? ''), 'error' => null];
+}
