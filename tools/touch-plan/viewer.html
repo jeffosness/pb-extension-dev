@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Touch Plan</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --card:#fff; --ink:#1f2933; --muted:#647089; --line:#e3e7ee;
+    --c0-bg:#e8f5e9; --c0-bd:#43a047; --c0-ink:#1b5e20;
+    --c1-bg:#fff8e1; --c1-bd:#f9a825; --c1-ink:#e65100;
+    --c2-bg:#ffebee; --c2-bd:#e53935; --c2-ink:#b71c1c;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:1080px; margin:0 auto; padding:28px 22px 80px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:15px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+    margin:34px 0 12px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+  .change { color:var(--ink); background:var(--card); border:1px solid var(--line);
+    border-radius:10px; padding:14px 16px; margin:14px 0 0; }
+  .sub { color:var(--muted); font-size:13px; margin-top:6px; }
+  .badges { display:flex; gap:12px; margin-top:16px; flex-wrap:wrap; }
+  .badge { border-radius:10px; padding:10px 14px; border:1px solid var(--line); background:var(--card);
+    display:flex; flex-direction:column; gap:2px; min-width:150px; }
+  .badge .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .badge .val { font-size:20px; font-weight:700; }
+  .pill { display:inline-block; border-radius:999px; padding:1px 9px; font-size:12px; font-weight:700;
+    border:1px solid; }
+  .c0 { background:var(--c0-bg); border-color:var(--c0-bd); color:var(--c0-ink); }
+  .c1 { background:var(--c1-bg); border-color:var(--c1-bd); color:var(--c1-ink); }
+  .c2 { background:var(--c2-bg); border-color:var(--c2-bd); color:var(--c2-ink); }
+  .dims { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }
+  .dim { background:var(--card); border:1px solid var(--line); border-left-width:5px; border-radius:8px; padding:10px 12px; }
+  .dim.c0 { border-left-color:var(--c0-bd); } .dim.c1 { border-left-color:var(--c1-bd); } .dim.c2 { border-left-color:var(--c2-bd); }
+  .dim .top { display:flex; justify-content:space-between; align-items:center; }
+  .dim .name { font-weight:600; }
+  .dim .note { color:var(--muted); font-size:12.5px; margin-top:5px; }
+  .graphwrap { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px; overflow-x:auto; }
+  svg { display:block; }
+  .node rect { cursor:pointer; transition:filter .12s; }
+  .node:hover rect { filter:brightness(.96); }
+  .node.sel rect { stroke-width:3px; }
+  .node text { pointer-events:none; }
+  .node .nl { font-weight:700; font-size:12.5px; }
+  .node .ns { font-size:10.5px; }
+  .edge { fill:none; stroke:#b7c0d0; stroke-width:1.6px; }
+  .legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin:10px 2px 0; flex-wrap:wrap; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13.5px; }
+  th { background:#eef1f6; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  tr.file { cursor:pointer; } tr.file:hover td { background:#f9fafc; }
+  tr.file.sel td { background:#eef4ff; }
+  tr.detail td { background:#fbfcfe; color:var(--muted); font-size:13px; }
+  tr.detail.hidden { display:none; }
+  .path { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; }
+  .tag { display:inline-block; background:#eef1f6; border:1px solid var(--line); border-radius:6px; padding:0 6px; font-size:11px; color:var(--muted); margin-right:4px; }
+  .new { background:#e7f0ff; border-color:#7aa7ff; color:#1a4fbf; }
+  ol.fm { padding-left:20px; } ol.fm li { margin:8px 0; }
+  .prec { color:var(--muted); font-size:12.5px; font-style:italic; }
+  .alt { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:8px 0; }
+  .alt .t { font-weight:600; }
+  .dec { font-size:11px; font-weight:700; border-radius:999px; padding:1px 8px; margin-left:6px; }
+  .dec.chosen,.dec.recommended { background:var(--c0-bg); color:var(--c0-ink); border:1px solid var(--c0-bd); }
+  .dec.deferred { background:var(--c1-bg); color:var(--c1-ink); border:1px solid var(--c1-bd); }
+  .dec.rejected { background:#eceff3; color:var(--muted); border:1px solid var(--line); }
+  .rec { background:#eef4ff; border:1px solid #b9cdfb; border-radius:10px; padding:14px 16px; }
+  .rollback-hard { color:var(--c2-ink); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="app"></div>
+  <p class="sub" style="margin-top:40px">
+    Touch Plan viewer · concern scale <span class="pill c0">0 de&nbsp;minimis</span>
+    <span class="pill c1">1 moderate</span> <span class="pill c2">2 significant</span> ·
+    a pre-work artifact — human review + local testing remain the real gates.
+  </p>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  var D = window.TOUCH_PLAN;
+  var app = document.getElementById("app");
+  if (!D) { app.innerHTML = "<p>No data.js loaded.</p>"; return; }
+  function cls(n){ return "c" + Math.max(0, Math.min(2, n|0)); }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); }
+
+  var html = "";
+  html += '<h1>' + esc(D.title || "Touch Plan") + '</h1>';
+  html += '<div class="change">' + esc(D.change) + (D.branch ? '<div class="sub">branch: <span class="path">'+esc(D.branch)+'</span></div>' : '') + '</div>';
+
+  html += '<div class="badges">';
+  html += '<div class="badge"><span class="lbl">Overall concern</span><span class="val"><span class="pill '+cls(D.overallConcern)+'">'+D.overallConcern+'</span></span></div>';
+  html += '<div class="badge"><span class="lbl">CI risk tier</span><span class="val"><span class="pill '+cls(D.ciRiskTier)+'">'+D.ciRiskTier+'</span></span></div>';
+  html += '</div>';
+
+  // Dimensions
+  html += '<h2>Concern by dimension</h2><div class="dims">';
+  (D.dimensions||[]).forEach(function(d){
+    html += '<div class="dim '+cls(d.score)+'"><div class="top"><span class="name">'+esc(d.key)+'</span><span class="pill '+cls(d.score)+'">'+d.score+'</span></div><div class="note">'+esc(d.note)+'</div></div>';
+  });
+  html += '</div>';
+
+  // Blast-radius graph
+  html += '<h2>Blast-radius map</h2><div class="graphwrap"><div id="graph"></div></div>';
+  html += '<div class="legend"><span>click a node to jump to its file</span></div>';
+
+  // Files
+  html += '<h2>Files touched</h2><table><thead><tr><th>File</th><th>Why</th><th>Dims</th><th>Concern</th><th>Rollback</th></tr></thead><tbody id="files"></tbody></table>';
+
+  // Failure modes
+  html += '<h2>What could go wrong</h2><ol class="fm">';
+  (D.failureModes||[]).forEach(function(f){
+    html += '<li>'+esc(f.text)+(f.precedent?' <span class="prec">('+esc(f.precedent)+')</span>':'')+'</li>';
+  });
+  html += '</ol>';
+
+  // Alternatives
+  html += '<h2>Alternatives considered</h2>';
+  (D.alternatives||[]).forEach(function(a){
+    var dc = (a.decision||"").toLowerCase();
+    html += '<div class="alt"><span class="t">'+esc(a.title)+'</span><span class="dec '+esc(dc)+'">'+esc((a.decision||"").toUpperCase())+'</span><div class="sub">'+esc(a.trade)+'</div></div>';
+  });
+
+  html += '<h2>Recommendation</h2><div class="rec">'+esc(D.recommendation)+'</div>';
+
+  app.innerHTML = html;
+
+  // ---- Files table (expandable) ----
+  var tb = document.getElementById("files");
+  (D.files||[]).forEach(function(f, i){
+    var tr = document.createElement("tr");
+    tr.className = "file"; tr.dataset.path = f.path;
+    var name = esc(f.path) + (f.isNew ? ' <span class="tag new">NEW</span>' : '');
+    var dims = (f.dims||[]).map(function(x){ return '<span class="tag">'+esc(x)+'</span>'; }).join('');
+    var rb = /hard/i.test(f.rollback) ? '<span class="rollback-hard">'+esc(f.rollback)+'</span>' : esc(f.rollback);
+    tr.innerHTML = '<td class="path">'+name+'</td><td>'+esc(f.why)+'</td><td>'+dims+'</td><td><span class="pill '+cls(f.impact)+'">'+f.impact+'</span></td><td>'+rb+'</td>';
+    var det = document.createElement("tr");
+    det.className = "detail hidden";
+    det.innerHTML = '<td colspan="5"><b>What changes:</b> '+esc(f.what)+'<br><b>Blast radius:</b> '+esc(f.blast)+'</td>';
+    tr.addEventListener("click", function(){ det.classList.toggle("hidden"); });
+    tb.appendChild(tr); tb.appendChild(det);
+  });
+
+  function selectFile(path){
+    if(!path) return;
+    var rows = tb.querySelectorAll("tr.file");
+    rows.forEach(function(r){
+      var on = r.dataset.path === path || r.dataset.path.indexOf(path) === 0;
+      r.classList.toggle("sel", on);
+      if(on){
+        var det = r.nextElementSibling; if(det) det.classList.remove("hidden");
+        r.scrollIntoView({behavior:"smooth", block:"center"});
+      }
+    });
+  }
+
+  // ---- Blast-radius SVG (layered DAG) ----
+  var g = D.graph || {nodes:[],edges:[]};
+  var incoming = {}, layer = {};
+  g.nodes.forEach(function(n){ incoming[n.id] = []; });
+  g.edges.forEach(function(e){ incoming[e[1]].push(e[0]); });
+  g.nodes.forEach(function(n){ layer[n.id] = incoming[n.id].length ? -1 : 0; });
+  for(var pass=0; pass<50; pass++){
+    var changed=false;
+    g.nodes.forEach(function(n){
+      if(!incoming[n.id].length) return;
+      var pls = incoming[n.id].map(function(p){ return layer[p]; });
+      if(pls.some(function(l){ return l<0; })) return;
+      var nl = Math.max.apply(null, pls)+1;
+      if(nl!==layer[n.id]){ layer[n.id]=nl; changed=true; }
+    });
+    if(!changed) break;
+  }
+  var byLayer = {};
+  g.nodes.forEach(function(n){ (byLayer[layer[n.id]] = byLayer[layer[n.id]]||[]).push(n); });
+  var layers = Object.keys(byLayer).map(Number).sort(function(a,b){return a-b;});
+  var NW=210, NH=54, COLGAP=270, ROWGAP=76, MX=20, MY=20;
+  var maxRows = Math.max.apply(null, layers.map(function(l){ return byLayer[l].length; }));
+  var W = MX*2 + (layers.length-1)*COLGAP + NW;
+  var H = MY*2 + (maxRows-1)*ROWGAP + NH;
+  var pos = {};
+  layers.forEach(function(l, li){
+    var col = byLayer[l];
+    var offset = (maxRows - col.length) * ROWGAP / 2; // vertically center each column
+    col.forEach(function(n, ri){
+      pos[n.id] = { x: MX + li*COLGAP, y: MY + offset + ri*ROWGAP };
+    });
+  });
+  function nodeColor(c){ return c>=2 ? ["#ffebee","#e53935"] : c===1 ? ["#fff8e1","#f9a825"] : ["#e8f5e9","#43a047"]; }
+  var svg = '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
+  g.edges.forEach(function(e){
+    var a=pos[e[0]], b=pos[e[1]]; if(!a||!b) return;
+    var x1=a.x+NW, y1=a.y+NH/2, x2=b.x, y2=b.y+NH/2, mx=(x1+x2)/2;
+    svg += '<path class="edge" d="M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2+'"/>';
+  });
+  g.nodes.forEach(function(n){
+    var p=pos[n.id], col=nodeColor(n.concern);
+    svg += '<g class="node" data-file="'+esc(n.file||"")+'">'
+      + '<rect x="'+p.x+'" y="'+p.y+'" width="'+NW+'" height="'+NH+'" rx="9" fill="'+col[0]+'" stroke="'+col[1]+'" stroke-width="1.6"/>'
+      + '<text class="nl" x="'+(p.x+12)+'" y="'+(p.y+22)+'" fill="#1f2933">'+esc(n.label)+'</text>'
+      + '<text class="ns" x="'+(p.x+12)+'" y="'+(p.y+39)+'" fill="#647089">'+esc(n.sub||"")+'</text>'
+      + '<text x="'+(p.x+NW-16)+'" y="'+(p.y+22)+'" text-anchor="middle" font-weight="700" font-size="13" fill="'+col[1]+'">'+n.concern+'</text>'
+      + '</g>';
+  });
+  svg += '</svg>';
+  document.getElementById("graph").innerHTML = svg;
+  Array.prototype.forEach.call(document.querySelectorAll(".node"), function(el){
+    el.addEventListener("click", function(){
+      document.querySelectorAll(".node.sel").forEach(function(s){ s.classList.remove("sel"); });
+      el.classList.add("sel");
+      selectFile(el.getAttribute("data-file"));
+    });
+  });
+})();
+</script>
+</body>
+</html>
