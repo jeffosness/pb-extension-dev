@@ -345,59 +345,6 @@
         margin: 0;
         flex: 1;
       }
-
-      /* ── Dial pad (dev feature) ─────────────────────────────────────── */
-      .dialpad-input {
-        width: 100%;
-        box-sizing: border-box;
-        font-size: 20px;
-        letter-spacing: 1px;
-        text-align: center;
-        padding: 10px 12px;
-        border: 1px solid var(--border, #d0d5dd);
-        border-radius: 8px;
-        margin-bottom: 8px;
-      }
-      .dialpad-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 6px;
-        margin-bottom: 8px;
-      }
-      .dialpad-key {
-        font-size: 18px;
-        padding: 10px 0;
-        border: 1px solid var(--border, #d0d5dd);
-        border-radius: 8px;
-        background: #fff;
-        cursor: pointer;
-      }
-      .dialpad-key:hover { background: #f4f6fa; }
-      .dialpad-key:active { background: #e9edf5; }
-      .dialpad-actions { display: flex; gap: 6px; }
-      .dialpad-actions .primary { flex: 2; }
-      .dialpad-actions .secondary {
-        flex: 1;
-        border: 1px solid var(--border, #d0d5dd);
-        background: #fff;
-        border-radius: 8px;
-        cursor: pointer;
-      }
-      .dialpad-results { margin-top: 8px; }
-      .dialpad-match {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 10px;
-        border: 1px solid var(--border, #d0d5dd);
-        border-radius: 8px;
-        margin-bottom: 6px;
-        cursor: pointer;
-      }
-      .dialpad-match:hover { background: #f4f6fa; }
-      .dialpad-match .who { font-weight: 600; }
-      .dialpad-match .num { color: var(--muted, #667085); font-size: 12px; }
     </style>
   </head>
 
@@ -528,47 +475,6 @@
             Scan &amp; Launch Dial Session
           </button>
           <div id="scan-status" class="status"></div>
-        </div>
-
-        <!-- Dial Pad (DEV ONLY — HubSpot). Type a number → resolve to a HubSpot
-             contact (or create) → call. Shown only in dev + when HubSpot is
-             connected; see initDialPad() in popup.js. -->
-        <div id="dialpad-card" class="card hidden">
-          <div class="card-title">
-            Dial a Number <span class="pill">HubSpot · DEV</span>
-          </div>
-          <div class="help-text">
-            Type a number. We'll find the matching HubSpot contact (or offer to
-            create one) so the call logs correctly.
-          </div>
-          <input
-            id="dialpad-input"
-            class="dialpad-input"
-            type="tel"
-            inputmode="tel"
-            placeholder="(555) 123-4567"
-            autocomplete="off"
-          />
-          <div class="dialpad-grid">
-            <button class="dialpad-key" data-key="1">1</button>
-            <button class="dialpad-key" data-key="2">2</button>
-            <button class="dialpad-key" data-key="3">3</button>
-            <button class="dialpad-key" data-key="4">4</button>
-            <button class="dialpad-key" data-key="5">5</button>
-            <button class="dialpad-key" data-key="6">6</button>
-            <button class="dialpad-key" data-key="7">7</button>
-            <button class="dialpad-key" data-key="8">8</button>
-            <button class="dialpad-key" data-key="9">9</button>
-            <button class="dialpad-key" data-key="*">&#42;</button>
-            <button class="dialpad-key" data-key="0">0</button>
-            <button class="dialpad-key" data-key="#">#</button>
-          </div>
-          <div class="dialpad-actions">
-            <button id="dialpad-find" class="primary">Find &amp; Call</button>
-            <button id="dialpad-back" class="secondary" title="Backspace">&#9003;</button>
-          </div>
-          <div id="dialpad-status" class="status"></div>
-          <div id="dialpad-results" class="dialpad-results hidden"></div>
         </div>
 
         <!-- HubSpot Selection (Level 3, list pages only) -->
