@@ -1044,3 +1044,152 @@ function hs_ensure_owner_cached(string $client_id, array $hs, string $endpointLa
 
     return $hs;
 }
+
+// -----------------------------------------------------------------------------
+// Phone-number → contact resolution (dial-pad feature)
+// -----------------------------------------------------------------------------
+//
+// Goal: given a phone number typed into a dial pad, find the HubSpot contact it
+// belongs to (so PB logs the call to the right record via external_crm_data),
+// or determine that none exists (so we can offer to create one).
+//
+// SEARCH STRATEGY — settled empirically against a real portal on 2026-09-16 via
+// scripts/diagnostics/probe_hs_phone_search.php (see that script to re-run it):
+//
+//   HubSpot stores the raw `phone`/`mobilephone` values *formatted*
+//   ("(615) 265-0077"), so matching those fields directly is unreliable. But
+//   HubSpot auto-maintains CALCULATED, normalized copies expressly for search:
+//     - hs_searchable_calculated_phone_number   (bare 10-digit, no country code)
+//     - hs_searchable_calculated_mobile_number  (same, for the mobile field)
+//   An EQ against those two, with the number normalized to its US 10-digit form,
+//   matched every input format we tried (bare, dashed, dotted, +1, 1-) and
+//   returned clean misses for numbers not in the portal. Everything else failed:
+//   CONTAINS_TOKEN only matched the *whole* token (partial last-7/last-4 → 0),
+//   EQ against the raw field only matched when the input was already normalized,
+//   and EQ +1<digits> never matched (the calculated intl field stores "1…", no "+").
+//
+// Multiple matches are normal (the same number can be on several contacts) —
+// callers MUST disambiguate and never assume a single result.
+
+/**
+ * Canonicalize a raw phone string to its US 10-digit form for searching.
+ * Delegates to ctc_normalize_phone() (utils.php) so the dial-pad resolver and
+ * the click-to-call intent key normalize identically (strip non-digits, drop a
+ * leading US "1"). Returns "" if there are no usable digits.
+ */
+function hs_phone_search_digits(string $raw): string {
+  return ctc_normalize_phone($raw);
+}
+
+/**
+ * HubSpot's calculated, normalized (no-country-code) searchable phone properties.
+ * These are system-maintained on every portal's contacts object and are the
+ * reliable target for phone search (see the strategy note above).
+ */
+const HS_PHONE_SEARCH_PROPS = [
+  'hs_searchable_calculated_phone_number',
+  'hs_searchable_calculated_mobile_number',
+];
+
+/**
+ * Find HubSpot contacts whose phone (or mobile) matches $rawNumber.
+ *
+ * Normalizes to the US 10-digit form and runs an EQ against the calculated
+ * searchable phone properties (OR semantics via one filterGroup per property).
+ * Returns the raw `phone`/`mobilephone` for display so callers can show a
+ * human-readable number in a disambiguation picker.
+ *
+ * Returns:
+ *   [
+ *     'ok'      => bool,   // HTTP 2xx
+ *     'http'    => int,    // status code
+ *     'digits'  => string, // the normalized value searched
+ *     'count'   => int,
+ *     'matches' => [ ['id','firstname','lastname','company','phone','mobilephone'], ... ],
+ *     'error'   => ?string,// provider error text on failure
+ *   ]
+ */
+function hs_search_contacts_by_phone(string $accessToken, string $rawNumber, array &$diag = []): array {
+  $digits = hs_phone_search_digits($rawNumber);
+  if ($digits === '') {
+    return ['ok' => false, 'http' => 0, 'digits' => '', 'count' => 0, 'matches' => [], 'error' => 'no digits in input'];
+  }
+
+  $filterGroups = [];
+  foreach (HS_PHONE_SEARCH_PROPS as $pn) {
+    $filterGroups[] = ['filters' => [['propertyName' => $pn, 'operator' => 'EQ', 'value' => $digits]]];
+  }
+
+  $body = [
+    'filterGroups' => $filterGroups,
+    'properties'   => ['firstname', 'lastname', 'company', 'phone', 'mobilephone'],
+    'limit'        => 100,
+    'sorts'        => [['propertyName' => 'lastmodifieddate', 'direction' => 'DESCENDING']],
+  ];
+
+  [$code, $json, $raw] = hs_api_post_json($accessToken, 'https://api.hubapi.com/crm/v3/objects/contacts/search', $body);
+  if ($code < 200 || $code >= 300) {
+    // Per CLAUDE.md: external-API failure paths log the provider's own error text.
+    if (function_exists('log_api_failure_from_tuple')) {
+      log_api_failure_from_tuple($code, $json, $raw, 'hs_search_contacts_by_phone.failed', ['digits_len' => strlen($digits)]);
+    }
+    $errText = '';
+    if (is_array($json) && isset($json['message'])) $errText = (string)$json['message'];
+    elseif (is_string($raw)) $errText = substr($raw, 0, 300);
+    return ['ok' => false, 'http' => $code, 'digits' => $digits, 'count' => 0, 'matches' => [], 'error' => $errText];
+  }
+
+  $matches = [];
+  $results = (is_array($json) && isset($json['results']) && is_array($json['results'])) ? $json['results'] : [];
+  foreach ($results as $r) {
+    $props = (isset($r['properties']) && is_array($r['properties'])) ? $r['properties'] : [];
+    $matches[] = [
+      'id'          => (string)($r['id'] ?? ''),
+      'firstname'   => trim((string)($props['firstname'] ?? '')),
+      'lastname'    => trim((string)($props['lastname'] ?? '')),
+      'company'     => trim((string)($props['company'] ?? '')),
+      'phone'       => trim((string)($props['phone'] ?? '')),
+      'mobilephone' => trim((string)($props['mobilephone'] ?? '')),
+    ];
+  }
+
+  return ['ok' => true, 'http' => $code, 'digits' => $digits, 'count' => count($matches), 'matches' => $matches];
+}
+
+/**
+ * Create a HubSpot contact for the dial-pad "no match → create & dial" path.
+ *
+ * Writes the number as-typed into `phone` (HubSpot auto-populates the calculated
+ * searchable fields, so a later phone search will find this contact). Sets
+ * hubspot_owner_id when an owner id is known so the contact isn't ownerless.
+ *
+ * The CALLER must guard against duplicates by searching first (see
+ * hs_create_contact.php, which re-searches immediately before creating to close
+ * the double-submit / race window). This helper just creates.
+ *
+ * Returns ['ok'=>bool, 'http'=>int, 'id'=>?string, 'error'=>?string].
+ */
+function hs_create_contact_record(string $accessToken, string $rawNumber, string $firstname = '', string $lastname = '', string $ownerId = ''): array {
+  $number = trim($rawNumber);
+  if ($number === '') {
+    return ['ok' => false, 'http' => 0, 'id' => null, 'error' => 'number is required'];
+  }
+
+  $props = ['phone' => $number];
+  if ($firstname !== '') $props['firstname'] = $firstname;
+  if ($lastname !== '')  $props['lastname']  = $lastname;
+  if ($ownerId !== '')   $props['hubspot_owner_id'] = $ownerId;
+
+  [$code, $json, $raw] = hs_api_post_json($accessToken, 'https://api.hubapi.com/crm/v3/objects/contacts', ['properties' => $props]);
+  if ($code < 200 || $code >= 300) {
+    if (function_exists('log_api_failure_from_tuple')) {
+      log_api_failure_from_tuple($code, $json, $raw, 'hs_create_contact_record.failed', ['has_owner' => $ownerId !== '']);
+    }
+    $errText = '';
+    if (is_array($json) && isset($json['message'])) $errText = (string)$json['message'];
+    elseif (is_string($raw)) $errText = substr($raw, 0, 300);
+    return ['ok' => false, 'http' => $code, 'id' => null, 'error' => $errText];
+  }
+
+  return ['ok' => true, 'http' => $code, 'id' => (string)($json['id'] ?? ''), 'error' => null];
+}
