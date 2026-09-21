@@ -9,6 +9,112 @@ $REQUEST_ID = bin2hex(random_bytes(8));
 $START_TS   = microtime(true);
 
 // -----------------------------------------------------------------------------
+// PHP-level error / exception / fatal handlers → route through api_log()
+//
+// Before this, PHP-native errors landed in php_errors.log (from #225) while
+// our own structured entries went to api.log — support triage had to grep two
+// files in two formats. These handlers make every PHP error surface in
+// api.log as a structured 'php.error' / 'php.exception' / 'php.fatal' event.
+//
+// Installed EARLY (before headers, config load, timezone init) so a fatal
+// during any of those steps is still caught by the shutdown handler. Each
+// handler guards `function_exists('api_log')` and no-ops if the failure
+// happens before api_log itself is defined; php_errors.log remains our
+// belt-and-suspenders capture for that narrow "bootstrap.php failed to load"
+// window.
+//
+// Re-entry protection: the static $inside flag prevents infinite loops if
+// api_log itself trips a warning (e.g. failed file write). One error is
+// captured per invocation; anything raised during handling falls through to
+// PHP's default output.
+//
+// @-silenced expressions (via error_reporting()) are correctly skipped by the
+// error handler — matches PHP's normal semantics, and bootstrap.php + utils.php
+// use @ liberally on best-effort file operations.
+// -----------------------------------------------------------------------------
+// Scrub + truncate free-form text before it lands in api.log. Exception
+// messages and stack-trace strings can carry OAuth tokens (embedded in
+// provider error text OR as function arguments in `getTraceAsString()`),
+// and `redact_pii_recursive` in api_log() matches by KEY name only — so
+// `message`/`trace` values pass through unscrubbed without this helper.
+// Uses _pb_scrub_tokens() from utils.php when it's loaded (every endpoint
+// requires utils.php after bootstrap); falls back to a raw truncate.
+function _pb_scrub_and_truncate(string $text, int $maxLen): string {
+  if ($text === '') return '';
+  if (function_exists('_pb_scrub_tokens')) $text = _pb_scrub_tokens($text);
+  if (strlen($text) > $maxLen) $text = substr($text, 0, $maxLen) . '…[truncated]';
+  return $text;
+}
+
+function _pb_php_error_handler(int $severity, string $message, string $file, int $line): bool {
+  static $inside = false;
+  if ($inside) return false;
+  if (!(error_reporting() & $severity)) return false; // respects @-silenced
+  $inside = true;
+  try {
+    if (function_exists('api_log')) {
+      api_log('php.error', [
+        'severity' => $severity,
+        'message'  => _pb_scrub_and_truncate($message, 1000),
+        'file'     => $file,
+        'line'     => $line,
+      ]);
+    }
+  } finally {
+    $inside = false;
+  }
+  return false; // let PHP's default chain continue (still hits php_errors.log)
+}
+
+function _pb_php_exception_handler(\Throwable $e): void {
+  static $inside = false;
+  if ($inside) return;
+  $inside = true;
+  try {
+    if (function_exists('api_log')) {
+      api_log('php.exception', [
+        'class'   => get_class($e),
+        'message' => _pb_scrub_and_truncate($e->getMessage(), 1000),
+        'file'    => $e->getFile(),
+        'line'    => $e->getLine(),
+        'trace'   => _pb_scrub_and_truncate($e->getTraceAsString(), 4000),
+      ]);
+    }
+    // Emit a structured 500, but only for JSON endpoints and only if headers
+    // haven't already gone out. HTML pages (OAuth callbacks) and SSE streams
+    // opt out via PB_BOOTSTRAP_NO_JSON — for them, sending a JSON body would
+    // be worse than falling back to PHP's default handler.
+    $jsonOn = !defined('PB_BOOTSTRAP_NO_JSON') || PB_BOOTSTRAP_NO_JSON !== true;
+    if ($jsonOn && function_exists('api_error') && !headers_sent()) {
+      api_error('Internal server error', 'server_error', 500, [
+        'exception_class' => get_class($e),
+      ]);
+    }
+  } finally {
+    $inside = false;
+  }
+}
+
+function _pb_php_shutdown_handler(): void {
+  $err = error_get_last();
+  if (!$err) return;
+  $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+  if (!in_array($err['type'], $fatalTypes, true)) return;
+  if (function_exists('api_log')) {
+    api_log('php.fatal', [
+      'type'    => $err['type'],
+      'message' => _pb_scrub_and_truncate($err['message'], 1000),
+      'file'    => $err['file'],
+      'line'    => $err['line'],
+    ]);
+  }
+}
+
+set_error_handler('_pb_php_error_handler');
+set_exception_handler('_pb_php_exception_handler');
+register_shutdown_function('_pb_php_shutdown_handler');
+
+// -----------------------------------------------------------------------------
 // Timezone (set once globally for consistent "day" boundaries + timestamps)
 // - Defaults to America/Denver to match your operating timezone.
 // - If you later want to make it configurable, define PB_TIMEZONE in config.php.
