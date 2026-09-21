@@ -37,13 +37,51 @@ $START_TS   = microtime(true);
 // provider error text OR as function arguments in `getTraceAsString()`),
 // and `redact_pii_recursive` in api_log() matches by KEY name only — so
 // `message`/`trace` values pass through unscrubbed without this helper.
-// Uses _pb_scrub_tokens() from utils.php when it's loaded (every endpoint
-// requires utils.php after bootstrap); falls back to a raw truncate.
+//
+// Scrubbing is inline (does NOT depend on _pb_scrub_tokens from utils.php)
+// because bootstrap.php runs before utils.php and a fatal DURING bootstrap
+// load (e.g. config.php parse error) would otherwise slip through. Keep
+// this regex synchronized with utils.php:_pb_scrub_tokens.
+//
+// mb_strcut is used instead of substr so a UTF-8 message truncated at the
+// byte budget doesn't leave an invalid partial codepoint that then breaks
+// json_encode inside api_log.
 function _pb_scrub_and_truncate(string $text, int $maxLen): string {
   if ($text === '') return '';
-  if (function_exists('_pb_scrub_tokens')) $text = _pb_scrub_tokens($text);
-  if (strlen($text) > $maxLen) $text = substr($text, 0, $maxLen) . '…[truncated]';
+  // JSON-shape "access_token":"..." / "refresh_token":"..." / etc.
+  $text = preg_replace(
+    '/"(access_token|refresh_token|id_token|token|api_key|client_secret)"\s*:\s*"[^"]*"/i',
+    '"$1":"[REDACTED]"',
+    $text
+  );
+  // Bearer / query-string form
+  $text = preg_replace(
+    '/(?:Bearer\s+|access_token=|refresh_token=|api_key=)[A-Za-z0-9._~+\/=-]{20,}/i',
+    '[REDACTED_TOKEN]',
+    $text
+  );
+  if (function_exists('mb_strcut') && strlen($text) > $maxLen) {
+    $text = mb_strcut($text, 0, $maxLen, 'UTF-8') . '…[truncated]';
+  } elseif (strlen($text) > $maxLen) {
+    $text = substr($text, 0, $maxLen) . '…[truncated]';
+  }
   return $text;
+}
+
+// Build a lean stack trace WITHOUT function arguments. Default
+// getTraceAsString() embeds argument previews — routinely a PAT or OAuth
+// token because `pb_call_dialsession($pat, ...)` and `pb_api_call($pat, ...)`
+// take the credential as their first positional arg. Iterating the array
+// form and dropping the `args` key eliminates that leak surface entirely.
+function _pb_trace_no_args(\Throwable $e): string {
+  $lines = [];
+  foreach ($e->getTrace() as $i => $frame) {
+    $file = $frame['file'] ?? '[internal]';
+    $line = $frame['line'] ?? 0;
+    $func = ($frame['class'] ?? '') . ($frame['type'] ?? '') . ($frame['function'] ?? '');
+    $lines[] = "#$i {$file}({$line}): {$func}()";
+  }
+  return implode("\n", $lines);
 }
 
 function _pb_php_error_handler(int $severity, string $message, string $file, int $line): bool {
@@ -70,6 +108,9 @@ function _pb_php_exception_handler(\Throwable $e): void {
   static $inside = false;
   if ($inside) return;
   $inside = true;
+  // Signal the shutdown handler that this exception has already been
+  // captured so it doesn't re-log via a stale error_get_last() as php.fatal.
+  $GLOBALS['_pb_exception_logged'] = true;
   try {
     if (function_exists('api_log')) {
       api_log('php.exception', [
@@ -77,13 +118,17 @@ function _pb_php_exception_handler(\Throwable $e): void {
         'message' => _pb_scrub_and_truncate($e->getMessage(), 1000),
         'file'    => $e->getFile(),
         'line'    => $e->getLine(),
-        'trace'   => _pb_scrub_and_truncate($e->getTraceAsString(), 4000),
+        'trace'   => _pb_scrub_and_truncate(_pb_trace_no_args($e), 4000),
       ]);
     }
     // Emit a structured 500, but only for JSON endpoints and only if headers
     // haven't already gone out. HTML pages (OAuth callbacks) and SSE streams
     // opt out via PB_BOOTSTRAP_NO_JSON — for them, sending a JSON body would
-    // be worse than falling back to PHP's default handler.
+    // be worse than falling back to PHP's default handler. Callers running
+    // with display_errors=On (dev only) will see a trace in the browser;
+    // production has display_errors=Off, so it lands in Apache's error_log
+    // instead — either way, no user-facing token exposure since traces
+    // above are logged via _pb_trace_no_args (args stripped).
     $jsonOn = !defined('PB_BOOTSTRAP_NO_JSON') || PB_BOOTSTRAP_NO_JSON !== true;
     if ($jsonOn && function_exists('api_error') && !headers_sent()) {
       api_error('Internal server error', 'server_error', 500, [
@@ -96,9 +141,15 @@ function _pb_php_exception_handler(\Throwable $e): void {
 }
 
 function _pb_php_shutdown_handler(): void {
+  // Skip if the exception handler already logged this request's failure —
+  // avoids double-logging as both php.exception and php.fatal.
+  if (!empty($GLOBALS['_pb_exception_logged'])) return;
   $err = error_get_last();
   if (!$err) return;
-  $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+  // E_USER_ERROR is intentionally excluded: it terminates PHP just like
+  // E_ERROR, but the "unrecoverable fatal" set below matches PHP's own
+  // is_fatal semantics and the exact list #226 was designed against.
+  $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR];
   if (!in_array($err['type'], $fatalTypes, true)) return;
   if (function_exists('api_log')) {
     api_log('php.fatal', [
@@ -287,6 +338,23 @@ function api_log(string $event, array $fields = []): void {
 
   if (!is_dir($logDir)) @mkdir($logDir, 0770, true);
 
+  // Strip values from known-sensitive query params before path lands in the
+  // log. Webhooks carry ?s=<session_token> (PhoneBurner backend is trusted,
+  // temp codes don't work for multi-fire webhooks — see CLAUDE.md), OAuth
+  // finish pages carry ?code=<one-time>&state=<client_id>. redact_pii_recursive
+  // only filters $fields (below), not $base — so without this the raw URI with
+  // the token/code embedded would land in every api.log entry for that request.
+  // This became load-bearing when #226 added php.error handlers that fire on
+  // every warning/notice, dramatically expanding how often path is logged.
+  $path = $_SERVER['REQUEST_URI'] ?? null;
+  if (is_string($path)) {
+    $path = preg_replace(
+      '/([?&](?:s|code|state|token|access_token|api_key|secret)=)[^&#]*/i',
+      '$1[REDACTED]',
+      $path
+    );
+  }
+
   $base = [
     'ts' => date('c'),
     'request_id' => $REQUEST_ID,
@@ -294,7 +362,7 @@ function api_log(string $event, array $fields = []): void {
     'duration_ms' => (int) round((microtime(true) - $START_TS) * 1000),
     'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
     'method' => $_SERVER['REQUEST_METHOD'] ?? null,
-    'path' => $_SERVER['REQUEST_URI'] ?? null,
+    'path' => $path,
   ];
 
   // Recursively redact any sensitive keys (including nested data)
