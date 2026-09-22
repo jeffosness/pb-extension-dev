@@ -4,6 +4,11 @@
 // PhoneBurner webhook: api_contact_displayed
 // Updates the session state file so SSE + overlay can show the “current contact”.
 
+// PB_BOOTSTRAP_NO_JSON: webhooks are called by PhoneBurner's backend, not the
+// extension — no JSON content-type default, no CORS, but bootstrap.php's
+// api_log() + REQUEST_URI path-scrub + PHP-error handlers still apply.
+define('PB_BOOTSTRAP_NO_JSON', true);
+require_once __DIR__ . '/../api/core/bootstrap.php';
 require_once __DIR__ . '/../utils.php';
 
 $session_token = $_GET['s'] ?? null;
@@ -16,12 +21,12 @@ if (!$session_token) {
 $raw = file_get_contents('php://input');
 $payload = json_decode($raw, true);
 
-log_msg('contact_displayed: ' . json_encode([
+api_log('contact_displayed', [
     'has_payload'        => is_array($payload),
     'has_external_crm'   => isset($payload['external_crm']) || isset($payload['external_crm_data']),
     'has_contact'        => isset($payload['contact']),
     'payload_keys'       => is_array($payload) ? array_keys($payload) : [],
-]));
+]);
 if (!is_array($payload)) {
     http_response_code(400);
     echo 'Invalid JSON';
