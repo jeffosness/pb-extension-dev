@@ -68,6 +68,11 @@
 // The initial log line at the top of the file only records status / connected
 // / duration / has_agent for exactly this reason.
 
+// PB_BOOTSTRAP_NO_JSON: webhooks are called by PhoneBurner's backend, not the
+// extension — no JSON content-type default, no CORS, but bootstrap.php's
+// api_log() + REQUEST_URI path-scrub + PHP-error handlers still apply.
+define('PB_BOOTSTRAP_NO_JSON', true);
+require_once __DIR__ . '/../api/core/bootstrap.php';
 require_once __DIR__ . '/../utils.php';
 
 $session_token = $_GET['s'] ?? null;
@@ -80,13 +85,13 @@ if (!$session_token) {
 $raw = file_get_contents('php://input');
 $payload = json_decode($raw, true);
 
-log_msg('call_done: ' . json_encode([
+api_log('call_done', [
     'has_payload'  => is_array($payload),
     'status'       => $payload['status'] ?? null,
     'connected'    => $payload['connected'] ?? null,
     'duration'     => $payload['duration'] ?? null,
     'has_agent'    => isset($payload['agent']),
-]));
+]);
 if (!is_array($payload)) {
     http_response_code(400);
     echo 'Invalid JSON';
@@ -246,7 +251,7 @@ if ($crmName === 'close') {
         require_once __DIR__ . '/../api/crm/close/close_call_logger.php';
         close_log_call($state, $payload, $lastCall, $status);
     } catch (\Throwable $e) {
-        log_msg('close_call_log_error: ' . $e->getMessage());
+        api_log('close_call_log.error', ['message' => $e->getMessage()]);
     }
 }
 
@@ -255,7 +260,7 @@ if ($crmName === 'hubspot') {
         require_once __DIR__ . '/../api/crm/hubspot/hs_call_logger.php';
         hubspot_log_call($state, $payload, $lastCall, $status);
     } catch (\Throwable $e) {
-        log_msg('hubspot_call_log_error: ' . $e->getMessage());
+        api_log('hubspot_call_log.error', ['message' => $e->getMessage()]);
     }
 }
 
@@ -264,7 +269,7 @@ if ($crmName === 'apollo') {
         require_once __DIR__ . '/../api/crm/apollo/apollo_call_logger.php';
         apollo_log_call($state, $payload, $lastCall, $status);
     } catch (\Throwable $e) {
-        log_msg('apollo_call_log_error: ' . $e->getMessage());
+        api_log('apollo_call_log.error', ['message' => $e->getMessage()]);
     }
 }
 
@@ -273,7 +278,7 @@ if ($crmName === 'forth') {
         require_once __DIR__ . '/../api/crm/forth/forth_call_logger.php';
         forth_log_call($state, $payload, $lastCall, $status);
     } catch (\Throwable $e) {
-        log_msg('forth_call_log_error: ' . $e->getMessage());
+        api_log('forth_call_log.error', ['message' => $e->getMessage()]);
     }
 }
 

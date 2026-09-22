@@ -51,6 +51,12 @@
 // Anything else showing up in real payloads → add to this comment so the
 // next editor doesn't have to reverse-engineer it.
 
+// PB_BOOTSTRAP_NO_JSON: webhooks are called by PhoneBurner's backend, not the
+// extension — no CORS, no bootstrap-driven content-type (this endpoint returns
+// JSON manually via the header() call below). Bootstrap still wires api_log(),
+// REQUEST_URI path-scrub, and PHP-error handlers.
+define('PB_BOOTSTRAP_NO_JSON', true);
+require_once __DIR__ . '/../api/core/bootstrap.php';
 require_once __DIR__ . '/../utils.php';
 
 header('Content-Type: application/json');
@@ -72,10 +78,10 @@ if ($secret !== '' && $sigHeader !== '') {
 }
 
 if (!$verified) {
-    log_msg('softphone_call_done: signature_invalid ' . json_encode([
+    api_log('softphone_call_done.signature_invalid', [
         'has_secret' => $secret !== '',
         'has_sig'    => $sigHeader !== '',
-    ]));
+    ]);
     http_response_code(401);
     echo json_encode(['ok' => false, 'error' => 'invalid_signature']);
     exit;
@@ -112,7 +118,7 @@ if (isset($customData['pb_user_id']) && $customData['pb_user_id'] !== '') {
     $agentMemberUserId = (string)$customData['pb_user_id'];
 }
 
-log_msg('softphone_call_done: ' . json_encode([
+api_log('softphone_call_done', [
     'crm_id'         => $crmId,
     'crm_name'       => $crmName,
     'has_contact'    => is_array($payload['contact'] ?? null),
@@ -125,7 +131,7 @@ log_msg('softphone_call_done: ' . json_encode([
     'has_recording'  => !empty($payload['recording_url_public']),
     'has_call_notes' => is_array($payload['call_notes'] ?? null) && count($payload['call_notes']) > 0,
     'has_follow_up'  => !empty($payload['follow_up']),
-]));
+]);
 
 // ── Track disposition to the CRM usage log ─────────────────────────────────
 // Best-effort: appends a JSON line to metrics/crm_usage-YYYY-MM-DD.log with
@@ -176,7 +182,7 @@ try {
         );
     }
 } catch (\Throwable $e) {
-    log_msg('softphone_call_done.track_error: ' . $e->getMessage());
+    api_log('softphone_call_done.track_error', ['message' => $e->getMessage()]);
 }
 
 // ── CTC-completes-task: consume the intent bridge and dispatch to the
@@ -223,7 +229,7 @@ try {
                             );
                             break;
                         default:
-                            log_msg('ctc_intent_dispatch: no completer for crm_name=' . $intentCrmName);
+                            api_log('ctc_intent_dispatch.no_completer', ['crm_name' => $intentCrmName]);
                             break;
                     }
                 }
@@ -243,7 +249,7 @@ try {
                             );
                             break;
                         default:
-                            log_msg('ctc_intent_dispatch: no logger for crm_name=' . $intentCrmName);
+                            api_log('ctc_intent_dispatch.no_logger', ['crm_name' => $intentCrmName]);
                             break;
                     }
                 }
@@ -280,18 +286,18 @@ try {
                     );
                 }
             } catch (\Throwable $e) {
-                log_msg('softphone_call_done.ctc_audit_error: ' . $e->getMessage());
+                api_log('softphone_call_done.ctc_audit_error', ['message' => $e->getMessage()]);
             }
         }
     }
 } catch (\Throwable $e) {
-    log_msg('softphone_call_done.ctc_complete_error: ' . $e->getMessage());
+    api_log('softphone_call_done.ctc_complete_error', ['message' => $e->getMessage()]);
 }
 
 // Capture the full raw payload ONLY when debugging is explicitly enabled, so we
 // can learn the real schema during the test without leaking PII in normal ops.
 if (!empty(cfg()['DEBUG_MODE'])) {
-    log_msg('softphone_call_done.debug_raw: ' . $raw);
+    api_log('softphone_call_done.debug_raw', ['raw' => $raw]);
 }
 
 http_response_code(200);
