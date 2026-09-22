@@ -4,7 +4,8 @@
 // Logs call activities back to Apollo after each PhoneBurner call_done webhook.
 // Called from webhooks/call_done.php when crm_name === 'apollo'.
 //
-// Self-contained: uses direct curl (no bootstrap.php dependency).
+// Called from webhook context (webhooks now include bootstrap.php as of #228
+// phase 1, so api_log() is available). Uses direct curl for Apollo API calls.
 // Uses utils.php functions: load_apollo_tokens(), save_apollo_tokens(), cfg(), api_log()
 //
 // Key behaviors:
@@ -85,9 +86,10 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
                 // Capture Apollo's own error text (e.g. "invalid_grant") so a
                 // failed session doesn't reduce to "http=400" in the log.
                 // This is a hot path — every long dial session refreshes here.
-                // Route through _pb_write_api_log so this works in the webhook
-                // context (which doesn't load bootstrap.php — api_log would
-                // fatal-error). See LESSONS.md 2026-08-02.
+                // Route through _pb_write_api_log so provider_msg/body_snippet
+                // pass through the token-scrubbing helper (utils.php). Behavior
+                // is identical to bare api_log(); this call site predates the
+                // #228 phase 1 bootstrap wire-up. See LESSONS.md 2026-08-02.
                 $fail = describe_api_failure($refreshInfo, $refreshResp);
                 _pb_write_api_log('apollo_call_log_token_refresh.error', [
                     'status'       => $fail['status'],
@@ -119,7 +121,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     $apolloSeqId     = $mapEntry['apollo_sequence_id'] ?? '';
 
     // -------------------------------------------------------------------------
-    // HTTP helpers (self-contained, no bootstrap dependency)
+    // HTTP helpers (direct curl, no dependency on hs_helpers-style refresh functions)
     // -------------------------------------------------------------------------
     $authHeader = $isApiKey
         ? 'X-Api-Key: ' . $accessToken

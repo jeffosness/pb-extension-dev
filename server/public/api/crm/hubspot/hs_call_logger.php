@@ -380,7 +380,7 @@ function hs_call_logger_refresh(string $clientId, array $hsTokens): ?array {
         list($code, $resp, $raw) = hs_call_logger_post_refresh($refreshToken, $legacyId, $legacySecret);
         $usedLegacy = true;
         if ($code >= 200 && $code < 300 && is_array($resp)) {
-            api_log('hs_call_log.token_refresh.legacy_creds_success', []);
+            api_log('hs_call_log_token_refresh.legacy_creds_success', []);
         }
     }
 
@@ -388,10 +388,13 @@ function hs_call_logger_refresh(string $clientId, array $hsTokens): ?array {
         // Capture HubSpot's own error text so support can distinguish
         // invalid_grant / expired refresh_token / network timeout /
         // account-suspended without shell access to the box.
-        log_api_failure_from_tuple($code, $resp, $raw, 'hs_call_log.refresh_failed', [
+        log_api_failure_from_tuple($code, $resp, $raw, 'hs_call_log_token_refresh.failed', [
             'client_id_hash' => $clientIdHash,
             'tried_legacy'   => $usedLegacy,
         ]);
+        // Redundant with the tuple log above (same event, richer fields); the summary
+        // line stays for behavior parity with the pre-migration log_msg. Phase 4 will
+        // dedup the double-log pattern across all providers.
         api_log('hs_call_log_token_refresh.failed', ['http_code' => $code]);
         return null;
     }

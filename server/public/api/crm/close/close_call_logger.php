@@ -4,7 +4,8 @@
 // Logs call activities back to Close CRM after each PhoneBurner call_done webhook.
 // Called from webhooks/call_done.php when crm_name === 'close'.
 //
-// Self-contained: uses direct curl (no bootstrap.php dependency).
+// Called from webhook context (webhooks now include bootstrap.php as of #228
+// phase 1, so api_log() is available). Uses direct curl for Close API calls.
 // Uses utils.php functions: load_close_tokens(), save_close_tokens(), cfg(), api_log()
 //
 // Features:
@@ -91,9 +92,10 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
                 // Capture Close's own error text (e.g. "invalid_grant") so a
                 // failed session doesn't reduce to "http=400" in the log.
                 // This is a hot path — every long dial session refreshes here.
-                // Route through _pb_write_api_log so this works in the webhook
-                // context (which doesn't load bootstrap.php — api_log would
-                // fatal-error). See LESSONS.md 2026-08-02.
+                // Route through _pb_write_api_log so provider_msg/body_snippet
+                // pass through the token-scrubbing helper (utils.php). Behavior
+                // is identical to bare api_log(); this call site predates the
+                // #228 phase 1 bootstrap wire-up. See LESSONS.md 2026-08-02.
                 $fail = describe_api_failure($refreshInfo, $refreshResp);
                 _pb_write_api_log('close_call_log_token_refresh.error', [
                     'status'       => $fail['status'],
@@ -230,7 +232,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     }
 
     // -------------------------------------------------------------------------
-    // HTTP helpers (self-contained, no bootstrap dependency)
+    // HTTP helpers (direct curl, no dependency on close_helpers-style refresh functions)
     // -------------------------------------------------------------------------
     $closePost = function($url, $body) use ($accessToken) {
         $ch = curl_init($url);

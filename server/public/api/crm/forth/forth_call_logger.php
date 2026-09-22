@@ -53,9 +53,10 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
     // -------------------------------------------------------------------------
     // Ensure a valid api_key. Mint inline rather than calling
     // forth_mint_access_token_or_fail(), which calls api_error() — that would
-    // exit(500) and cause PhoneBurner to retry the webhook, double-logging the
-    // call. Webhooks must always return 200; api_log() is fine (structured log),
-    // api_error() is not. Mirrors close_call_logger.php.
+    // exit with a non-200 (401 in this path) and cause PhoneBurner to retry
+    // the webhook, double-logging the call. Webhooks must always return 200;
+    // api_log() is fine (structured log), api_error() is not. Mirrors
+    // close_call_logger.php.
     // -------------------------------------------------------------------------
     $apiKey = (string)($tokens['api_key'] ?? '');
     if (forth_token_is_expired($tokens)) {
@@ -97,7 +98,9 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
             api_log('forth_call_log_token_mint.success', []);
         } else {
             // Capture Forth's own error text (not just an HTTP code). Route
-            // through _pb_write_api_log so it works without bootstrap.
+            // through _pb_write_api_log so provider_msg/body_snippet pass
+            // through the token-scrubbing helper (utils.php). Behavior is
+            // identical to bare api_log() in bootstrap context.
             $fail = describe_api_failure($mintInfo, $mintResp);
             _pb_write_api_log('forth_call_log_token_mint.error', [
                 'status'       => $fail['status'],
@@ -186,7 +189,7 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
                     // to "contact not in contacts_map" below. CLAUDE.md external-
                     // call failure-logging rule.
                     $pbFail = describe_api_failure($pbInfo, $pbContact);
-                    _pb_write_api_log('forth_call_log_pb_lookup.error', [
+                    _pb_write_api_log('forth_call_log.pb_lookup.error', [
                         'status'       => $pbFail['status'],
                         'provider_msg' => $pbFail['message'],
                         'body_snippet' => $pbFail['body_snippet'],
@@ -367,7 +370,8 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
 
     require_once __DIR__ . '/forth_helpers.php';
 
-    // Inline mint (webhook context — no bootstrap; mirrors forth_log_call).
+    // Inline mint (avoids api_error() exit which would non-200 the webhook —
+    // see the rationale block in forth_log_call above).
     $apiKey = (string)($tokens['api_key'] ?? '');
     if (forth_token_is_expired($tokens)) {
         $ch = curl_init(FORTH_API_BASE . 'auth/token');
