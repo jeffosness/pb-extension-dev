@@ -33,12 +33,12 @@ Dev and prod live on the same VPS as separate installations. Which log file to g
 
 | File | What lands there |
 |---|---|
-| `api.log` | Structured JSON from `api_log()` — most modern API endpoints, OAuth flows, call-loggers, dial-session builders, **and webhooks** (`call_done`, `contact_displayed`, `softphone_call_done`). **First stop for most triage.** |
-| `app.log` | Plain-text lines from `log_msg()` — SSE lifecycle and remaining legacy paths (provider call-loggers, utils.php internal errors). Being migrated to `api.log` (#228). |
+| `api.log` | Structured JSON from `api_log()` — most modern API endpoints, OAuth flows, dial-session builders, webhooks (`call_done`, `contact_displayed`, `softphone_call_done`), SSE lifecycle, **and provider call-loggers** (`{provider}_call_log`, `{provider}_call_log.skip`, `{provider}_call_log.pb_lookup.matched`, etc. for Close/Apollo/Forth/HubSpot). **First stop for most triage.** |
+| `app.log` | Plain-text lines from `log_msg()` — only utils.php internal error paths remain (`update_client_index`, `pb_api_call`, `ctc_intent_*` write failures). Migrating in the final #228 sweep. |
 | `php_errors.log` | PHP-native errors (fatals, warnings, uncaught exceptions) captured by Apache's `error_log` directive. Nearly redundant since PR #233 routed most of these into `api.log` as `php.error`/`php.exception`/`php.fatal` events; kept as belt-and-suspenders for failures that die before `api_log` is defined. |
 | `token-audit.log` | Every token read/write/delete. Security-scope only — not part of routine triage |
 
-(Long-term plan: `app.log` migrates to `api.log` fully via #228 — one file, one grep. Phase 1 done: webhooks. Remaining: SSE, provider call-loggers, utils.php internal calls.)
+(Long-term plan: `app.log` migrates to `api.log` fully via #228 — one file, one grep. Done: webhooks (phase 1), SSE (phase 2), provider call-loggers (phase 3). Remaining: utils.php internal calls (phase 4).)
 
 ```bash
 ssh jeff@extension.phoneburner.biz
