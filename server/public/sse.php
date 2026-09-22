@@ -48,9 +48,12 @@ if ($session_token) {
 @set_time_limit(0);
 @ignore_user_abort(true);
 
-// Optional debug logs (keep small; avoid token contents)
-log_msg("SSE PATH=" . parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH));
-log_msg("SSE _GET keys=" . json_encode(array_keys($_GET ?? [])));
+// Optional debug: which query params were sent. api_log()'s base already
+// captures the path (with the PR #233 query-string scrub), so we only need
+// the key list here — fires unconditionally so we can still triage
+// connections that failed BEFORE session_token was resolved (sse.connect
+// above only fires on success).
+api_log('sse.request', ['get_keys' => array_keys($_GET ?? [])]);
 
 // -------------------------
 // Helpers
