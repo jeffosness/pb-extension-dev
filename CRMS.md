@@ -294,7 +294,7 @@ Parameters available:
 
 **Critical rules for call logger files:**
 
-1. **Self-contained curl** — use direct curl, not `{provider}_helpers.php`. The webhook doesn't include `bootstrap.php`, so `api_error()` is unavailable. Exception: `cfg()`, `log_msg()`, `load_{provider}_tokens()`, `save_{provider}_tokens()` ARE available via `utils.php`.
+1. **Self-contained curl** — use direct curl, not `{provider}_helpers.php`. Webhooks DO now include `bootstrap.php` (as of #228 phase 1), so `api_log()` is available, but `api_error()` still must be avoided — it exits with a non-200 which causes PhoneBurner to retry the webhook, double-logging the call. Use `api_log('event.name', [...])` for structured events, or `_pb_write_api_log('event.name', [...])` for defensive contexts (both write to `api.log`). See `close_call_logger.php` / `apollo_call_logger.php` for the canonical pattern.
 
 2. **Identify the called contact via this three-tier lookup** (PB's `call_done` payload does NOT include `external_crm_data`, unlike `contact_displayed` — so the iteration pattern alone is not enough):
 

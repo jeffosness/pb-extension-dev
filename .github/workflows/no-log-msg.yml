@@ -1,0 +1,78 @@
+name: No log_msg Reintroduction
+
+# #228 phase 4 (2026-09-22) deleted log_msg() from utils.php and migrated
+# every caller to api_log() / _pb_write_api_log(). Support triage is now
+# one grep in one file (api.log) instead of two files in two formats.
+#
+# This workflow enforces that no future PR reintroduces a log_msg() call.
+# If a contributor grep-and-copies from git history or muscle-memory-types
+# `log_msg('...')`, CI catches it here and fails the PR with a pointer to
+# the migration guide.
+#
+# The check is: `git grep 'log_msg(' server/public/` returns nothing.
+# The old function definition is gone; a fresh call site would either
+# PHP-fatal at runtime (function doesn't exist) or silently no-op if
+# someone re-added the function — both worse than the migrated api_log
+# pipeline. Fail-fast in CI is the right ergonomic.
+#
+# See SUPPORT_RUNBOOK.md for the log-triage workflow this enables.
+# See #228 for the full migration arc.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/public/**/*.php'
+      - '.github/workflows/no-log-msg.yml'
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Grep for reintroduced log_msg() calls
+        run: |
+          set -euo pipefail
+
+          # Grep for `log_msg(` (with the open paren) in every PHP file
+          # under server/public/. The paren scope excludes doc-comments
+          # like "// the log_msg function was deleted" — we care about
+          # function CALLS, not textual references.
+          #
+          # -r: recurse
+          # -n: show line numbers
+          # -I: skip binary files
+          # --include='*.php': only PHP sources
+          # Redirect grep's non-match exit=1 into a variable check so
+          # set -e doesn't trip when the check PASSES (i.e., no matches).
+          set +e
+          HITS=$(grep -rInI --include='*.php' 'log_msg(' server/public/ || true)
+          set -e
+
+          if [ -n "$HITS" ]; then
+            echo "::error::A log_msg() call was reintroduced. Every call site was migrated"
+            echo "::error::in #228; the function itself was deleted from utils.php in phase 4."
+            echo "::error::Use api_log() (when bootstrap.php is loaded) or _pb_write_api_log()"
+            echo "::error::(safe in any context — delegates to api_log when available)."
+            echo ""
+            echo "Offending line(s):"
+            echo "$HITS" | sed 's/^/  /'
+            echo ""
+            echo "How to fix:"
+            echo "  1. If your caller has bootstrap.php loaded (endpoint context, or"
+            echo "     a webhook post-#228 phase 1), use api_log('event.name', [...])."
+            echo "  2. Otherwise use _pb_write_api_log('event.name', [...]) — defined"
+            echo "     in utils.php, delegates to api_log if available."
+            echo "  3. See SUPPORT_RUNBOOK.md and #228 for the event-name convention."
+            exit 1
+          fi
+
+          echo "No log_msg() reintroductions detected. #228 stays clean."

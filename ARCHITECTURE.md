@@ -31,7 +31,8 @@
 │ PHP BACKEND (served from server/public/)                         │
 │  ├─ utils.php               Token mgmt, safe file ops, rate     │
 │  │                           limiting, temp codes,               │
-│  │                           pb_call_dialsession(), log_msg()    │
+│  │                           pb_call_dialsession(),              │
+│  │                           _pb_write_api_log() (api_log shim)  │
 │  ├─ api/core/                                                    │
 │  │  ├─ bootstrap.php         CORS, security headers, api_log,    │
 │  │  │                         redact_pii_recursive,              │
