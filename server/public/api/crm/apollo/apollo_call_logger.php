@@ -4,8 +4,9 @@
 // Logs call activities back to Apollo after each PhoneBurner call_done webhook.
 // Called from webhooks/call_done.php when crm_name === 'apollo'.
 //
-// Self-contained: uses direct curl (no bootstrap.php dependency).
-// Uses utils.php functions: load_apollo_tokens(), save_apollo_tokens(), cfg(), log_msg()
+// Called from webhook context (webhooks now include bootstrap.php as of #228
+// phase 1, so api_log() is available). Uses direct curl for Apollo API calls.
+// Uses utils.php functions: load_apollo_tokens(), save_apollo_tokens(), cfg(), api_log()
 //
 // Key behaviors:
 // - Completes the Apollo task (advances contact to next sequence step)
@@ -80,14 +81,15 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
                 $refreshResp['created_at'] = $now;
                 $refreshResp['expires_at'] = $now + max(0, $expiresIn - 60);
                 save_apollo_tokens($clientId, $refreshResp);
-                log_msg('apollo_call_log_token_refresh: success');
+                api_log('apollo_call_log_token_refresh.success', []);
             } else {
                 // Capture Apollo's own error text (e.g. "invalid_grant") so a
                 // failed session doesn't reduce to "http=400" in the log.
                 // This is a hot path — every long dial session refreshes here.
-                // Route through _pb_write_api_log so this works in the webhook
-                // context (which doesn't load bootstrap.php — api_log would
-                // fatal-error). See LESSONS.md 2026-08-02.
+                // Route through _pb_write_api_log so provider_msg/body_snippet
+                // pass through the token-scrubbing helper (utils.php). Behavior
+                // is identical to bare api_log(); this call site predates the
+                // #228 phase 1 bootstrap wire-up. See LESSONS.md 2026-08-02.
                 $fail = describe_api_failure($refreshInfo, $refreshResp);
                 _pb_write_api_log('apollo_call_log_token_refresh.error', [
                     'status'       => $fail['status'],
@@ -96,7 +98,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
                     'body_snippet' => $fail['body_snippet'],
                     'curl_error'   => $fail['curl_error'],
                 ]);
-                log_msg('apollo_call_log_token_refresh: failed (http=' . $refreshCode . ')');
+                api_log('apollo_call_log_token_refresh.failed', ['http_code' => $refreshCode]);
             }
         }
     }
@@ -119,7 +121,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
     $apolloSeqId     = $mapEntry['apollo_sequence_id'] ?? '';
 
     // -------------------------------------------------------------------------
-    // HTTP helpers (self-contained, no bootstrap dependency)
+    // HTTP helpers (direct curl, no dependency on hs_helpers-style refresh functions)
     // -------------------------------------------------------------------------
     $authHeader = $isApiKey
         ? 'X-Api-Key: ' . $accessToken
@@ -248,7 +250,7 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
         // but only fixed Close. Round 6 caught the miss.
         $logData['apollo_error'] = is_array($errBody) ? $errBody : _pb_scrub_tokens(substr($callRaw, 0, 500));
     }
-    log_msg('apollo_call_log: ' . json_encode($logData));
+    api_log('apollo_call_log', $logData);
 
     // -------------------------------------------------------------------------
     // 3) Update contact sequence status based on call outcome
@@ -274,13 +276,13 @@ function apollo_log_call(array $state, array $payload, array $lastCall, string $
             [] // params go in URL, not body
         );
 
-        log_msg('apollo_sequence_update: ' . json_encode([
+        api_log('apollo_sequence_update', [
             'http_code'   => $exitCode,
             'success'     => ($exitCode >= 200 && $exitCode < 300),
             'sequence_id' => $apolloSeqId,
             'contact_id'  => $apolloContactId,
             'mode'        => $sequenceMode,
             'pb_status'   => $status,
-        ]));
+        ]);
     }
 }

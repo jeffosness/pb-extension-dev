@@ -4,9 +4,10 @@
 // Logs call activity back to Forth CRM after each PhoneBurner call_done webhook.
 // Called from webhooks/call_done.php when crm_name === 'forth'.
 //
-// Self-contained (webhook context — no bootstrap.php). Uses utils.php functions:
+// Called from webhook context (webhooks now include bootstrap.php as of #228 phase 1,
+// so api_log() is available). Uses utils.php functions:
 //   load_forth_tokens(), save_forth_tokens(), describe_api_failure(),
-//   _pb_write_api_log(), _pb_scrub_tokens(), log_msg(), load_pb_token(), pb_api_call()
+//   _pb_scrub_tokens(), api_log(), load_pb_token(), pb_api_call()
 // Reuses the PURE helpers from forth_helpers.php (no api_log/api_error inside):
 //   forth_token_is_expired(), forth_api_post_json(), forth_fetch_disposition_map(),
 //   forth_map_pb_status_to_disposition_id(), forth_format_duration_hms(), FORTH_API_BASE
@@ -33,23 +34,29 @@
 function forth_log_call(array $state, array $payload, array $lastCall, string $status): void {
     $clientId = $state['client_id'] ?? '';
     if ($clientId === '') {
-        log_msg('forth_call_log_skip: no client_id in session state');
+        api_log('forth_call_log.skip', ['reason' => 'no_client_id_in_state']);
         return;
     }
     $clientHash = substr(hash('sha256', $clientId), 0, 12);
 
     $tokens = load_forth_tokens($clientId);
     if (!is_array($tokens) || empty($tokens['client_id']) || empty($tokens['client_secret'])) {
-        log_msg('forth_call_log_skip: no Forth credentials for client ' . $clientHash);
+        api_log('forth_call_log.skip', [
+            'reason'         => 'no_forth_credentials',
+            'client_id_hash' => $clientHash,
+        ]);
         return;
     }
 
     require_once __DIR__ . '/forth_helpers.php';
 
     // -------------------------------------------------------------------------
-    // Ensure a valid api_key. Mint inline (webhook-safe logging) rather than
-    // calling forth_mint_access_token_or_fail(), which uses api_log/api_error
-    // (unavailable in the webhook context). Mirrors close_call_logger.php.
+    // Ensure a valid api_key. Mint inline rather than calling
+    // forth_mint_access_token_or_fail(), which calls api_error() — that would
+    // exit with a non-200 (401 in this path) and cause PhoneBurner to retry
+    // the webhook, double-logging the call. Webhooks must always return 200;
+    // api_log() is fine (structured log), api_error() is not. Mirrors
+    // close_call_logger.php.
     // -------------------------------------------------------------------------
     $apiKey = (string)($tokens['api_key'] ?? '');
     if (forth_token_is_expired($tokens)) {
@@ -88,10 +95,12 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
             $tokens['expires_at'] = $now + max(0, $expiresIn - 3600);
             save_forth_tokens($clientId, $tokens);
             $apiKey = $newKey;
-            log_msg('forth_call_log_token_mint: success');
+            api_log('forth_call_log_token_mint.success', []);
         } else {
             // Capture Forth's own error text (not just an HTTP code). Route
-            // through _pb_write_api_log so it works without bootstrap.
+            // through _pb_write_api_log so provider_msg/body_snippet pass
+            // through the token-scrubbing helper (utils.php). Behavior is
+            // identical to bare api_log() in bootstrap context.
             $fail = describe_api_failure($mintInfo, $mintResp);
             _pb_write_api_log('forth_call_log_token_mint.error', [
                 'status'       => $fail['status'],
@@ -100,12 +109,15 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
                 'body_snippet' => $fail['body_snippet'],
                 'curl_error'   => $fail['curl_error'],
             ]);
-            log_msg('forth_call_log_token_mint: failed (http=' . $mintCode . ')');
+            api_log('forth_call_log_token_mint.failed', ['http_code' => $mintCode]);
         }
     }
 
     if ($apiKey === '') {
-        log_msg('forth_call_log_skip: no valid api_key for client ' . $clientHash);
+        api_log('forth_call_log.skip', [
+            'reason'         => 'no_valid_api_key',
+            'client_id_hash' => $clientHash,
+        ]);
         return;
     }
 
@@ -166,7 +178,7 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
                             if ($crmId !== '' && isset($contactsMap[$crmId])) {
                                 $calledExternalId = $crmId;
                                 $mapEntry = $contactsMap[$crmId];
-                                log_msg('forth_call_log_pb_lookup: matched via PB contact API, user_id=' . $pbUserId);
+                                api_log('forth_call_log.pb_lookup.matched', ['user_id' => $pbUserId]);
                                 break;
                             }
                         }
@@ -177,7 +189,7 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
                     // to "contact not in contacts_map" below. CLAUDE.md external-
                     // call failure-logging rule.
                     $pbFail = describe_api_failure($pbInfo, $pbContact);
-                    _pb_write_api_log('forth_call_log_pb_lookup.error', [
+                    _pb_write_api_log('forth_call_log.pb_lookup.error', [
                         'status'       => $pbFail['status'],
                         'provider_msg' => $pbFail['message'],
                         'body_snippet' => $pbFail['body_snippet'],
@@ -189,13 +201,20 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
     }
 
     if (!$mapEntry) {
-        log_msg('forth_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap));
+        api_log('forth_call_log.skip', [
+            'reason'      => 'contact_not_in_contacts_map',
+            'external_id' => substr($calledExternalId, 0, 30),
+            'map_keys'    => count($contactsMap),
+        ]);
         return;
     }
 
     // Forth contactID must be numeric.
     if (!ctype_digit((string)$calledExternalId)) {
-        log_msg('forth_call_log_skip: non-numeric Forth contactID=' . substr((string)$calledExternalId, 0, 30));
+        api_log('forth_call_log.skip', [
+            'reason'      => 'non_numeric_contact_id',
+            'external_id' => substr((string)$calledExternalId, 0, 30),
+        ]);
         return;
     }
     $forthContactId = (int)$calledExternalId;
@@ -226,7 +245,10 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
         // A POST without call_disposition would 400, so skip rather than fire a
         // doomed request. The call still exists in PB; only the Forth mirror is
         // skipped this once.
-        log_msg('forth_call_log_skip: call_disposition required but disposition list unavailable for client ' . $clientHash);
+        api_log('forth_call_log.skip', [
+            'reason'         => 'disposition_list_unavailable',
+            'client_id_hash' => $clientHash,
+        ]);
         return;
     }
 
@@ -284,7 +306,7 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
         $logData['body_snippet'] = $fail['body_snippet'];
         $logData['curl_error']   = $fail['curl_error'];
     }
-    log_msg('forth_call_log: ' . json_encode($logData));
+    api_log('forth_call_log', $logData);
 
     // -------------------------------------------------------------------------
     // 2) If the user wrote call notes, also post them as a Note on the contact
@@ -312,7 +334,7 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
             $noteLog['provider_msg'] = $nfail['message'];
             $noteLog['curl_error']   = $nfail['curl_error'];
         }
-        log_msg('forth_note_log: ' . json_encode($noteLog));
+        api_log('forth_note_log', $noteLog);
     }
 }
 
@@ -332,20 +354,24 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
  */
 function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload, string $status): bool {
     if ($client_id === '' || !ctype_digit($forth_cid)) {
-        log_msg('forth_ctc_log_skip: bad client_id/cid');
+        api_log('forth_ctc_log.skip', ['reason' => 'bad_client_id_or_cid']);
         return false;
     }
     $clientHash = substr(hash('sha256', $client_id), 0, 12);
 
     $tokens = load_forth_tokens($client_id);
     if (!is_array($tokens) || empty($tokens['client_id']) || empty($tokens['client_secret'])) {
-        log_msg('forth_ctc_log_skip: no Forth credentials for client ' . $clientHash);
+        api_log('forth_ctc_log.skip', [
+            'reason'         => 'no_forth_credentials',
+            'client_id_hash' => $clientHash,
+        ]);
         return false;
     }
 
     require_once __DIR__ . '/forth_helpers.php';
 
-    // Inline mint (webhook context — no bootstrap; mirrors forth_log_call).
+    // Inline mint (avoids api_error() exit which would non-200 the webhook —
+    // see the rationale block in forth_log_call above).
     $apiKey = (string)($tokens['api_key'] ?? '');
     if (forth_token_is_expired($tokens)) {
         $ch = curl_init(FORTH_API_BASE . 'auth/token');
@@ -390,7 +416,10 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
         }
     }
     if ($apiKey === '') {
-        log_msg('forth_ctc_log_skip: no valid api_key for client ' . $clientHash);
+        api_log('forth_ctc_log.skip', [
+            'reason'         => 'no_valid_api_key',
+            'client_id_hash' => $clientHash,
+        ]);
         return false;
     }
 
@@ -415,7 +444,10 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
         $dispoId = $dispoMap['no answer'] ?? reset($dispoMap);
     }
     if ($dispoId === null) {
-        log_msg('forth_ctc_log_skip: call_disposition unavailable for client ' . $clientHash);
+        api_log('forth_ctc_log.skip', [
+            'reason'         => 'disposition_unavailable',
+            'client_id_hash' => $clientHash,
+        ]);
         return false;
     }
 
@@ -455,7 +487,7 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
         $logData['forth_error']  = $fail['response'];
         $logData['curl_error']   = $fail['curl_error'];
     }
-    log_msg('forth_ctc_log: ' . json_encode($logData));
+    api_log('forth_ctc_log', $logData);
 
     // User notes → also a Note on the contact.
     if (!empty($callNotes)) {
@@ -466,7 +498,11 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
         );
         if ($noteCode < 200 || $noteCode >= 300) {
             $nfail = describe_api_failure($noteInfo, $_nR);
-            log_msg('forth_ctc_note_log: ' . json_encode(['http_code' => $noteCode, 'success' => false, 'provider_msg' => $nfail['message']]));
+            api_log('forth_ctc_note_log', [
+                'http_code'    => $noteCode,
+                'success'      => false,
+                'provider_msg' => $nfail['message'],
+            ]);
         }
     }
 

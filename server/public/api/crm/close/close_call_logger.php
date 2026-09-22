@@ -4,8 +4,9 @@
 // Logs call activities back to Close CRM after each PhoneBurner call_done webhook.
 // Called from webhooks/call_done.php when crm_name === 'close'.
 //
-// Self-contained: uses direct curl (no bootstrap.php dependency).
-// Uses utils.php functions: load_close_tokens(), save_close_tokens(), cfg(), log_msg()
+// Called from webhook context (webhooks now include bootstrap.php as of #228
+// phase 1, so api_log() is available). Uses direct curl for Close API calls.
+// Uses utils.php functions: load_close_tokens(), save_close_tokens(), cfg(), api_log()
 //
 // Features:
 // - Creates call activity with disposition, recording, and notes
@@ -24,13 +25,16 @@
 function close_log_call(array $state, array $payload, array $lastCall, string $status): void {
     $clientId = $state['client_id'] ?? '';
     if ($clientId === '') {
-        log_msg('close_call_log_skip: no client_id in session state');
+        api_log('close_call_log.skip', ['reason' => 'no_client_id_in_state']);
         return;
     }
 
     $closeTokens = load_close_tokens($clientId);
     if (!is_array($closeTokens) || empty($closeTokens['access_token'])) {
-        log_msg('close_call_log_skip: no Close tokens for client ' . substr(hash('sha256', $clientId), 0, 12));
+        api_log('close_call_log.skip', [
+            'reason' => 'no_close_tokens',
+            'client_id_hash' => substr(hash('sha256', $clientId), 0, 12),
+        ]);
         return;
     }
 
@@ -83,14 +87,15 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
                 $refreshResp['created_at'] = $now;
                 $refreshResp['expires_at'] = $now + max(0, $expiresIn - 60);
                 save_close_tokens($clientId, $refreshResp);
-                log_msg('close_call_log_token_refresh: success');
+                api_log('close_call_log_token_refresh.success', []);
             } else {
                 // Capture Close's own error text (e.g. "invalid_grant") so a
                 // failed session doesn't reduce to "http=400" in the log.
                 // This is a hot path — every long dial session refreshes here.
-                // Route through _pb_write_api_log so this works in the webhook
-                // context (which doesn't load bootstrap.php — api_log would
-                // fatal-error). See LESSONS.md 2026-08-02.
+                // Route through _pb_write_api_log so provider_msg/body_snippet
+                // pass through the token-scrubbing helper (utils.php). Behavior
+                // is identical to bare api_log(); this call site predates the
+                // #228 phase 1 bootstrap wire-up. See LESSONS.md 2026-08-02.
                 $fail = describe_api_failure($refreshInfo, $refreshResp);
                 _pb_write_api_log('close_call_log_token_refresh.error', [
                     'status'       => $fail['status'],
@@ -99,7 +104,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
                     'body_snippet' => $fail['body_snippet'],
                     'curl_error'   => $fail['curl_error'],
                 ]);
-                log_msg('close_call_log_token_refresh: failed (http=' . $refreshCode . ')');
+                api_log('close_call_log_token_refresh.failed', ['http_code' => $refreshCode]);
             }
         }
     }
@@ -171,24 +176,38 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
                             if ($crmId !== '' && isset($contactsMap[$crmId])) {
                                 $calledExternalId = $crmId;
                                 $mapEntry = $contactsMap[$crmId];
-                                log_msg('close_call_log_pb_lookup: matched via PB contact API, user_id=' . $pbUserId . ', crm_id=' . substr($crmId, 0, 30));
+                                api_log('close_call_log.pb_lookup.matched', [
+                                    'user_id' => $pbUserId,
+                                    'crm_id'  => substr($crmId, 0, 30),
+                                ]);
                                 break;
                             }
                         }
                     }
 
                     if (!$mapEntry) {
-                        log_msg('close_call_log_pb_lookup: PB contact fetched but no matching crm_id, user_id=' . $pbUserId . ', ecd_count=' . (is_array($pbEcd) ? count($pbEcd) : 0));
+                        api_log('close_call_log.pb_lookup.no_match', [
+                            'user_id'   => $pbUserId,
+                            'ecd_count' => is_array($pbEcd) ? count($pbEcd) : 0,
+                        ]);
                     }
                 } else {
-                    log_msg('close_call_log_pb_lookup: PB API returned http=' . $pbHttpCode . ' for user_id=' . $pbUserId);
+                    api_log('close_call_log.pb_lookup.api_error', [
+                        'user_id'   => $pbUserId,
+                        'http_code' => $pbHttpCode,
+                    ]);
                 }
             }
         }
     }
 
     if (!$mapEntry) {
-        log_msg('close_call_log_skip: contact not in contacts_map, external_id=' . substr($calledExternalId, 0, 30) . ', map_keys=' . count($contactsMap) . ', has_ecd=' . (is_array($ecd) ? count($ecd) : 'no'));
+        api_log('close_call_log.skip', [
+            'reason'      => 'contact_not_in_contacts_map',
+            'external_id' => substr($calledExternalId, 0, 30),
+            'map_keys'    => count($contactsMap),
+            'ecd_count'   => is_array($ecd) ? count($ecd) : null,
+        ]);
         return;
     }
 
@@ -203,12 +222,17 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     }
 
     if ($closeLeadId === '' || $closeContactId === '') {
-        log_msg('close_call_log_skip: missing lead_id=' . ($closeLeadId ?: '(empty)') . ' or contact_id=' . ($closeContactId ?: '(empty)') . ', record_url=' . substr($recordUrl, 0, 80));
+        api_log('close_call_log.skip', [
+            'reason'     => 'missing_lead_or_contact_id',
+            'lead_id'    => $closeLeadId ?: null,
+            'contact_id' => $closeContactId ?: null,
+            'record_url' => substr($recordUrl, 0, 80),
+        ]);
         return;
     }
 
     // -------------------------------------------------------------------------
-    // HTTP helpers (self-contained, no bootstrap dependency)
+    // HTTP helpers (direct curl, no dependency on close_helpers-style refresh functions)
     // -------------------------------------------------------------------------
     $closePost = function($url, $body) use ($accessToken) {
         $ch = curl_init($url);
@@ -286,7 +310,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         $cacheAge = time() - filemtime($outcomeCacheFile);
         if ($cacheAge > $outcomeCacheTtl) {
             $cacheExpired = true;
-            log_msg('close_outcome_cache_expired: age=' . $cacheAge . 's, clearing');
+            api_log('close_outcome_cache.expired', ['age_sec' => $cacheAge]);
         } else {
             $cached = @json_decode(@file_get_contents($outcomeCacheFile), true);
             if (is_array($cached)) $outcomeCache = $cached;
@@ -316,7 +340,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
                         $outcomesDisabled = true;
                         $outcomeCache = ['_disabled' => true];
                         @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
-                        log_msg('close_outcomes_disabled: org does not support outcomes, caching for 24h');
+                        api_log('close_outcomes.disabled', ['reason' => 'org_does_not_support_outcomes']);
                         break;
                     }
                 }
@@ -440,7 +464,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         // LESSONS.md 2026-08-03 adversarial review round 5, finding #2.
         $logData['close_error'] = is_array($errBody) ? $errBody : _pb_scrub_tokens(substr($rawResp, 0, 500));
     }
-    log_msg('close_call_log: ' . json_encode($logData));
+    api_log('close_call_log', $logData);
 
     // -------------------------------------------------------------------------
     // 2) Assign outcome to the call activity via PUT
@@ -462,7 +486,7 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
         if ($putCode >= 400 && is_array($putResp)) {
             $outcomeLogData['close_error'] = $putResp;
         }
-        log_msg('close_outcome_set: ' . json_encode($outcomeLogData));
+        api_log('close_outcome_set', $outcomeLogData);
 
         // If outcome PUT failed with 400, check if outcomes are disabled for this org
         if ($putCode === 400 && is_array($putResp)) {
@@ -478,10 +502,10 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
             }
             if ($isDisabled) {
                 $outcomeCache = ['_disabled' => true];
-                log_msg('close_outcomes_disabled: org does not support outcomes, caching for 24h');
+                api_log('close_outcomes.disabled', ['reason' => 'org_does_not_support_outcomes']);
             } else {
                 unset($outcomeCache[$outcomeLookupKey]);
-                log_msg('close_outcome_cache_invalidated: ' . $outcomeLookupKey);
+                api_log('close_outcome_cache.invalidated', ['lookup_key' => $outcomeLookupKey]);
             }
             @file_put_contents($outcomeCacheFile, json_encode($outcomeCache), LOCK_EX);
         }
@@ -500,10 +524,10 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
                 'note_html'  => $noteBody,
             ]
         );
-        log_msg('close_note_log: ' . json_encode([
+        api_log('close_note_log', [
             'http_code' => $noteHttpCode,
             'success'   => ($noteHttpCode >= 200 && $noteHttpCode < 300),
             'lead_id'   => $closeLeadId,
-        ]));
+        ]);
     }
 }
