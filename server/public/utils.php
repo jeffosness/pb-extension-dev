@@ -800,6 +800,15 @@ function _pb_write_api_log(string $event, array $fields): void {
         'method'      => $_SERVER['REQUEST_METHOD'] ?? null,
         'path'        => $_SERVER['REQUEST_URI'] ?? null,
     ];
+
+    // Silent-drop protection (#242). KEEP IN SYNC with bootstrap.php's
+    // api_log — same $base shape, same collision class. See that file for
+    // the full rationale.
+    $collisions = array_intersect_key($fields, $base);
+    if (!empty($collisions)) {
+        $fields['_field_collisions'] = array_keys($collisions);
+    }
+
     $line = json_encode($base + $fields, JSON_UNESCAPED_SLASHES) . PHP_EOL;
     @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
 }
