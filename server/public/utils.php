@@ -977,12 +977,12 @@ function update_client_index($client_id, $memberUserId)
     $path = client_index_file_path();
     $fh = @fopen($path, 'c+');
     if ($fh === false) {
-        _pb_write_api_log('update_client_index.file_open_failed', ['path' => $path]);
+        _pb_write_api_log('update_client_index.file_open_failed', ['file_path' => $path]);
         return;
     }
     if (!flock($fh, LOCK_EX)) {
         fclose($fh);
-        _pb_write_api_log('update_client_index.file_lock_failed', ['path' => $path]);
+        _pb_write_api_log('update_client_index.file_lock_failed', ['file_path' => $path]);
         return;
     }
 
@@ -1082,7 +1082,7 @@ function save_user_settings($memberUserId, array $settings)
     $path = user_settings_file_path($memberUserId);
     $result = file_put_contents($path, json_encode($settings, JSON_PRETTY_PRINT), LOCK_EX);
     if ($result === false) {
-        _pb_write_api_log('save_user_settings.write_failed', ['path' => $path]);
+        _pb_write_api_log('save_user_settings.write_failed', ['file_path' => $path]);
     }
 }
 
