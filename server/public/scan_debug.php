@@ -24,8 +24,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 $raw = file_get_contents('php://input');
 $now = date('c');
 
-// Log via your existing log system
-log_msg('scan_debug: ' . $raw);
+// Log via _pb_write_api_log (delegates to api_log if bootstrap is loaded,
+// otherwise writes directly to api.log via utils.php fallback).
+_pb_write_api_log('scan_debug', ['raw' => $raw]);
 
 // Also append to a dedicated scan_debug.log for easier viewing
 $logFile = __DIR__ . '/scan_debug.log';

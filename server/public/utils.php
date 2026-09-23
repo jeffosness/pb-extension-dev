@@ -17,14 +17,11 @@ function ensure_dir($dir)
     }
 }
 
-function log_msg($msg)
-{
-    $cfg = cfg();
-    if (!empty($cfg['LOG_FILE'])) {
-        $line = '[' . date('c') . '] ' . $msg . PHP_EOL;
-        file_put_contents($cfg['LOG_FILE'], $line, FILE_APPEND);
-    }
-}
+// NOTE: the log_msg function was deleted in #228 phase 4 (all callers
+// migrated to _pb_write_api_log / api_log). The `LOG_FILE` config key
+// (points at app.log) is now unused. See SUPPORT_RUNBOOK.md for the new
+// log-triage workflow (one file: api.log). CI enforces no-reintroduction
+// via .github/workflows/no-log-msg.yml.
 
 function json_input()
 {
@@ -980,12 +977,12 @@ function update_client_index($client_id, $memberUserId)
     $path = client_index_file_path();
     $fh = @fopen($path, 'c+');
     if ($fh === false) {
-        log_msg("update_client_index: failed to open $path");
+        _pb_write_api_log('update_client_index.file_open_failed', ['file_path' => $path]);
         return;
     }
     if (!flock($fh, LOCK_EX)) {
         fclose($fh);
-        log_msg("update_client_index: failed to lock $path");
+        _pb_write_api_log('update_client_index.file_lock_failed', ['file_path' => $path]);
         return;
     }
 
@@ -1085,7 +1082,7 @@ function save_user_settings($memberUserId, array $settings)
     $path = user_settings_file_path($memberUserId);
     $result = file_put_contents($path, json_encode($settings, JSON_PRETTY_PRINT), LOCK_EX);
     if ($result === false) {
-        log_msg("save_user_settings: failed to write $path");
+        _pb_write_api_log('save_user_settings.write_failed', ['file_path' => $path]);
     }
 }
 
@@ -1243,7 +1240,7 @@ function http_post_form_info($url, array $fields): array
     curl_close($ch);
 
     if ($err) {
-        log_msg("http_post_form_info error: $err");
+        _pb_write_api_log('http_post_form_info.curl_error', ['error' => $err]);
         return [['curl_error' => $err, 'http_code' => 0, 'raw_body' => ''], null];
     }
 
@@ -1299,7 +1296,7 @@ function pb_api_call($pat, $method, $path, $body = null, int $timeoutSec = 20)
     curl_close($ch);
 
     if ($err) {
-        log_msg("pb_api_call error: $err");
+        _pb_write_api_log('pb_api_call.curl_error', ['error' => $err]);
         // Return an $info array (not null) so callers can uniformly read
         // ['curl_error'] / ['http_code'] without null-guarding the tuple.
         return [['curl_error' => $err, 'http_code' => 0], ['error' => $err]];
@@ -1545,7 +1542,7 @@ function ctc_intent_write(
     try {
         atomic_write_json($path, $existing);
     } catch (\Throwable $e) {
-        log_msg('ctc_intent_write_error: ' . $e->getMessage());
+        _pb_write_api_log('ctc_intent.write_error', ['message' => $e->getMessage()]);
         return false;
     }
 
@@ -1596,7 +1593,7 @@ function ctc_intent_consume(string $pb_user_id, string $phone): ?array
             // with the OLD contents including the just-consumed entry. That
             // would let the same webhook double-fire task completion on a
             // retry. Log loud so we notice.
-            log_msg('ctc_intent_consume_rewrite_error: ' . $e->getMessage());
+            _pb_write_api_log('ctc_intent.consume_rewrite_error', ['message' => $e->getMessage()]);
         }
     }
 
