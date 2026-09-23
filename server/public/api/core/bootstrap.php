@@ -406,6 +406,30 @@ function api_log(string $event, array $fields = []): void {
     'path' => $path,
   ];
 
+  // Silent-drop protection (#242): $base + $fields uses PHP's array UNION
+  // operator, which keeps LEFT-operand values on key collision. A caller
+  // passing e.g. ['path' => $filesystemPath] gets their value silently
+  // dropped because $base['path'] (the URI) wins. Codex caught 3 real
+  // instances of this in PR #241; the reserved-key list grows as $base
+  // grows so silent-drop bugs will recur without a guard.
+  //
+  // Rather than array_merge (which would let callers accidentally
+  // overwrite the canonical ts/request_id/event/etc.) or auto-rename
+  // (which mangles grep queries and could leak PII the caller didn't
+  // opt into logging under the rescued key name), we emit the COLLIDING
+  // KEY NAMES under `_field_collisions`. Support triage greps for that
+  // marker, finds the call site via request_id + event, and renames the
+  // colliding key to a non-reserved name.
+  //
+  // The caller's colliding VALUES are intentionally NOT rescued — they'd
+  // require redaction we can't safely apply generically, and the point
+  // of this guard is to make the mistake LOUD, not to silently preserve
+  // it under a different name. See LESSONS.md 2026-09-23 for the incident.
+  $collisions = array_intersect_key($fields, $base);
+  if (!empty($collisions)) {
+    $fields['_field_collisions'] = array_keys($collisions);
+  }
+
   // Recursively redact any sensitive keys (including nested data)
   $fields = redact_pii_recursive($fields);
 
