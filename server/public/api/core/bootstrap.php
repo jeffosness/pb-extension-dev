@@ -331,24 +331,37 @@ function redact_pii_recursive(array $data): array {
     'close_error', 'apollo_error', 'forth_error', 'hubspot_error',
   ];
   
-  // Recursive array walk to find and redact all matching keys
-  array_walk_recursive($data, function(&$value, $key) use ($denyPatterns, $denyKeys) {
-    // Exact key match (fast path)
-    if (in_array($key, $denyKeys, true)) {
-      $value = '[REDACTED]';
-      return;
-    }
-    
-    // Pattern match (case-insensitive, for flexible key naming)
+  // Recursive walk that checks EACH KEY (including array-valued wrapper
+  // keys) BEFORE descending. array_walk_recursive() — which we used before —
+  // only invokes its callback on non-array LEAVES, so wrapper keys like
+  // `payload`/`response_body`/`close_error` pointing at nested arrays were
+  // silently walked-through unredacted (Codex caught this on 2026-09-23; see
+  // #242 for the systemic-reserved-key-collision follow-up that this fix
+  // sits alongside). The rewrite is strict-improvement: nothing that was
+  // being redacted before stops being redacted, but array-valued wrappers
+  // now get their entire subtree collapsed to '[REDACTED]' as intended.
+  $keyMatches = static function ($key) use ($denyPatterns, $denyKeys) {
+    if (in_array($key, $denyKeys, true)) return true;
     foreach ($denyPatterns as $pattern) {
-      if (preg_match($pattern, (string)$key)) {
-        $value = '[REDACTED]';
-        return;
+      if (preg_match($pattern, (string)$key)) return true;
+    }
+    return false;
+  };
+
+  $walk = static function (array $node) use (&$walk, $keyMatches) {
+    foreach ($node as $k => $v) {
+      if ($keyMatches($k)) {
+        $node[$k] = '[REDACTED]';
+        continue;
+      }
+      if (is_array($v)) {
+        $node[$k] = $walk($v);
       }
     }
-  });
-  
-  return $data;
+    return $node;
+  };
+
+  return $walk($data);
 }
 
 // -----------------------------------------------------------------------------
