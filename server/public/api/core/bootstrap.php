@@ -299,9 +299,37 @@ function redact_pii_recursive(array $data): array {
     '/^.*content.*$/i',         // note content echoed in provider errors
     '/^.*(ssn|social.?security).*$/i', // SSNs (debt-settlement CRM fields)
   ];
-  
-  // Exact key matches (for known bulk data fields)
-  $denyKeys = ['payload', 'contacts', 'response_body', 'request_body'];
+
+  // Exact key matches (for known bulk data fields).
+  //
+  // Added in the #235/#239 sweep (2026-09-23) from PR #236 + #238 adversarial
+  // reviews:
+  //   - `raw`          — softphone_call_done.debug_raw & scan_debug's full
+  //                       request body dumps (DEBUG_MODE-gated).
+  //   - `record_url`   — Close CRM record URL, exposes customer subdomain.
+  //   - `body_snippet` — first 500 chars of raw provider response when JSON
+  //                       decode fails; describe_api_failure only scrubs
+  //                       OAuth tokens, not PII.
+  //   - `{provider}_error` keys — wrapper for nested provider error bodies
+  //                       (close_call_logger $logData['close_error'] etc.).
+  //                       array_walk_recursive walks INTO the nested body if
+  //                       the wrapper key doesn't match — so provider
+  //                       response shapes with keys like `submitted`/`input`
+  //                       would echo back raw. Redacting at the wrapper
+  //                       stops the walk.
+  //
+  // NOT added (deliberate — full redaction destroys diagnostic value that
+  // motivates the field's existence):
+  //   - `provider_msg` — the extracted human-readable provider error text.
+  //                       describe_api_failure already runs _pb_scrub_tokens
+  //                       on it; the residual "provider echoed a phone
+  //                       number in a 4xx" leak surface is smaller than
+  //                       losing every diagnostic message would be.
+  $denyKeys = [
+    'payload', 'contacts', 'response_body', 'request_body',
+    'raw', 'record_url', 'body_snippet',
+    'close_error', 'apollo_error', 'forth_error', 'hubspot_error',
+  ];
   
   // Recursive array walk to find and redact all matching keys
   array_walk_recursive($data, function(&$value, $key) use ($denyPatterns, $denyKeys) {

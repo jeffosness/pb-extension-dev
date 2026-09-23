@@ -13,10 +13,12 @@
 //       There is NO refresh_token — re-minting re-posts the durable creds.
 // Docs: https://developer.setforth.com/api/forth-crm
 //
-// NOTE: this file is loaded by endpoints that DO have bootstrap.php (api_log /
-// api_error are available). The call logger (webhook context, no bootstrap)
-// re-implements token minting inline via _pb_write_api_log — mirrors the
-// close_helpers.php / close_call_logger.php split. See close_call_logger.php.
+// NOTE: this file is loaded by endpoints that have bootstrap.php (api_log /
+// api_error are available). The call logger re-implements token minting
+// inline via _pb_write_api_log because api_error() would exit(non-200) and
+// cause PhoneBurner to retry the webhook, double-logging the call — bootstrap
+// IS loaded in webhook context as of #228 phase 1, but api_error remains
+// unsafe there. Mirrors close_helpers.php / close_call_logger.php.
 
 if (!defined('FORTH_API_BASE')) {
   define('FORTH_API_BASE', 'https://api.forthcrm.com/v1/');
@@ -196,7 +198,9 @@ function forth_fetch_disposition_map(string $apiKey): array {
   if ($code !== 200 || !is_array($json)) {
     // Log Forth's own error text (not just the HTTP code) so a customer whose
     // dispositions silently stop mapping has a diagnostic trail. Uses
-    // _pb_write_api_log so it is safe in the webhook context (no bootstrap).
+    // _pb_write_api_log so provider_msg/body_snippet pass through the
+    // token-scrubbing helper — behavior identical to bare api_log() in
+    // bootstrap context.
     $fail = describe_api_failure($info, $json);
     _pb_write_api_log('forth_dispo_fetch.error', [
       'status'       => $fail['status'],
