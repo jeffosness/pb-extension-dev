@@ -715,21 +715,41 @@ if (!function_exists('redact_pii_recursive')) {
             '/^.*content.*$/i',
             '/^.*(ssn|social.?security).*$/i',
         ];
-        $denyKeys = ['payload', 'contacts', 'response_body', 'request_body'];
+        // KEEP IN SYNC with bootstrap.php's redact_pii_recursive $denyKeys.
+        // See bootstrap.php for the rationale on each entry (added in the
+        // #235/#239 sweep, 2026-09-23).
+        $denyKeys = [
+            'payload', 'contacts', 'response_body', 'request_body',
+            'raw', 'record_url', 'body_snippet',
+            'close_error', 'apollo_error', 'forth_error', 'hubspot_error',
+        ];
 
-        array_walk_recursive($data, function (&$value, $key) use ($denyPatterns, $denyKeys) {
-            if (in_array($key, $denyKeys, true)) {
-                $value = '[REDACTED]';
-                return;
-            }
+        // KEEP IN SYNC with bootstrap.php's redact_pii_recursive walk logic.
+        // Rewrote 2026-09-23 to check wrapper keys BEFORE descending —
+        // array_walk_recursive only fires on non-array LEAVES, so array-
+        // valued wrappers like `payload`/`close_error` were slipping past
+        // the deny-list. See bootstrap.php for the full rationale (Codex
+        // review of PR #244 caught it).
+        $keyMatches = static function ($key) use ($denyPatterns, $denyKeys) {
+            if (in_array($key, $denyKeys, true)) return true;
             foreach ($denyPatterns as $pattern) {
-                if (preg_match($pattern, (string)$key)) {
-                    $value = '[REDACTED]';
-                    return;
+                if (preg_match($pattern, (string)$key)) return true;
+            }
+            return false;
+        };
+        $walk = static function (array $node) use (&$walk, $keyMatches) {
+            foreach ($node as $k => $v) {
+                if ($keyMatches($k)) {
+                    $node[$k] = '[REDACTED]';
+                    continue;
+                }
+                if (is_array($v)) {
+                    $node[$k] = $walk($v);
                 }
             }
-        });
-        return $data;
+            return $node;
+        };
+        return $walk($data);
     }
 }
 
