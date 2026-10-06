@@ -1096,8 +1096,9 @@ function hs_ctc_name_from_props(string $crmName, array $props): ?array {
  * Fail-open name lookup for a click-to-call dial. Returns
  * ['first_name' => ..., 'last_name' => ...] or null on ANY failure.
  *
- * Never calls api_error(): softphone.php renders HTML without bootstrap.php,
- * and a failed lookup must never block the call — it just dials unnamed.
+ * Never calls api_error(): softphone.php is an HTML page (bootstrap in
+ * NO_JSON mode), and a failed lookup must never block the call — it just
+ * dials unnamed.
  * Token refresh reuses hs_call_logger_refresh(), the existing non-exiting
  * refresh that softphone_call_done.php already uses for CTC task completion.
  */

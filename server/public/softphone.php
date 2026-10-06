@@ -12,13 +12,6 @@
 //
 // softphone_host.js drives the dial over the postMessage contract (unchanged).
 
-require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/utils.php';
-
-header('Content-Type: text/html; charset=utf-8');
-header('Cache-Control: no-store');
-header('X-Content-Type-Options: nosniff');
-
 $code    = $_GET['code'] ?? '';
 $runtime = $_GET['runtime'] ?? '';
 $number  = (string)($_GET['number'] ?? '');
@@ -26,11 +19,24 @@ $crmId   = (string)($_GET['crm_id'] ?? '');
 $crmName = (string)($_GET['crm_name'] ?? '');
 
 // Every api.log line records REQUEST_URI as `path`, and ours carries the dialed
-// ?number= (plus code/crm_id). Params are already read above, so drop the query
-// before anything in this request logs.
+// ?number= (bootstrap's path scrub only masks code/token-style params). Params
+// are read above, so drop the query BEFORE bootstrap wires any logging.
 if (isset($_SERVER['REQUEST_URI'])) {
     $_SERVER['REQUEST_URI'] = explode('?', (string)$_SERVER['REQUEST_URI'], 2)[0];
 }
+
+// HTML page: bootstrap in NO_JSON mode (same as the OAuth finish pages) for
+// api_log() + PHP error handlers. The CTC name lookup reaches call-logger
+// helpers that call api_log() directly.
+define('PB_BOOTSTRAP_NO_JSON', true);
+require_once __DIR__ . '/api/core/bootstrap.php';
+require_once __DIR__ . '/utils.php';
+
+header('Content-Type: text/html; charset=utf-8');
+header('Cache-Control: no-store');
+// bootstrap sets Referrer-Policy: no-referrer. Restore the browser default so
+// the PhoneBurner softphone iframe request carries the same Referer as before.
+header('Referrer-Policy: strict-origin-when-cross-origin');
 
 // Resolve the bearer token (server-side only).
 //

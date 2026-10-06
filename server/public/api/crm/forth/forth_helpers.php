@@ -54,8 +54,8 @@ function forth_mint_access_token_or_fail(string $client_id, array $tokens): arra
 /**
  * Fail-open core of forth_mint_access_token_or_fail(): returns the updated
  * $tokens array, or null with $failReason set ('missing_credentials' |
- * 'request_failed'). Logs via _pb_write_api_log, so it's safe without
- * bootstrap.php (e.g. softphone.php's CTC name lookup).
+ * 'request_failed'). Never exits, so callers that must not fail (e.g.
+ * softphone.php's CTC name lookup) can treat null as "skip".
  *
  * Forth response shape (200):
  *   { "status": {"code":200,"message":"Success"},
