@@ -104,27 +104,49 @@ install_cron() {
     echo "[deploy] cron: no template at $tmpl — skipping"
     return 0
   fi
-  # This writes a root-owned file into /etc/cron.d, so only accept the two
-  # known checkout paths. The values also go into a sed replacement.
-  if [[ ! "$REPO_DIR" =~ ^/opt/pb-extension(-dev)?$ ]]; then
-    echo "[deploy] cron: WARNING unexpected REPO_DIR '$REPO_DIR' — not installing cron"
+  # Root follows symlinks: a committed symlink could copy any file into a
+  # world-readable cron file. Only regular files.
+  if [[ -L "$tmpl" ]]; then
+    echo "[deploy] cron: WARNING template is a symlink — not installing"
     return 0
   fi
-  local name="pb-extension"
-  [[ "$ENV" == "dev" ]] && name="pb-extension-dev"
+  # This writes a root-owned file into /etc/cron.d, so only accept the two
+  # known checkout paths. The cron file NAME is derived from the same path
+  # (not from $ENV) so a mismatched ENV can't point dev's file at prod.
+  local name
+  case "$REPO_DIR" in
+    /opt/pb-extension)     name="pb-extension" ;;
+    /opt/pb-extension-dev) name="pb-extension-dev" ;;
+    *) echo "[deploy] cron: WARNING unexpected REPO_DIR '$REPO_DIR' — not installing cron"; return 0 ;;
+  esac
   local dest="/etc/cron.d/$name"
   # Temp name starts with "." so cron ignores it until the atomic rename.
   local tmp
   tmp=$(mktemp /etc/cron.d/.pb-cron.XXXXXX) || { echo "[deploy] cron: WARNING mktemp failed"; return 0; }
+  # Note: set -e is OFF inside a function called from `||`, so every step
+  # must check its own result. A failed write (e.g. a full disk) must never
+  # replace a working cron file with an empty one.
   # Strip CRLF too: a Windows line ending makes cron silently ignore the line.
-  sed -e "s#{{REPO_DIR}}#$REPO_DIR#g" -e 's/[[:cntrl:]]*$//' "$tmpl" > "$tmp"
-  if grep -q '{{' "$tmp"; then
-    echo "[deploy] cron: WARNING unreplaced placeholder in template — not installing"
+  if ! sed -e "s#{{REPO_DIR}}#$REPO_DIR#g" -e 's/[[:cntrl:]]*$//' "$tmpl" > "$tmp"; then
+    echo "[deploy] cron: WARNING render failed — keeping existing $dest"
     rm -f "$tmp"; return 0
   fi
-  chown root:root "$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$dest" \
-    && echo "[deploy] cron: installed $dest" \
-    || { echo "[deploy] cron: WARNING install failed"; rm -f "$tmp"; }
+  if grep -q '{{' "$tmp" || ! grep -q 'collect_server_health.php' "$tmp"; then
+    echo "[deploy] cron: WARNING rendered file looks wrong (placeholder left or collector missing) — keeping existing $dest"
+    rm -f "$tmp"; return 0
+  fi
+  # Every job line must run as www-data. Env lines (NAME=value) and comments
+  # are skipped. Enforces the template's "never root" rule.
+  if ! awk '/^[[:space:]]*#/ || NF == 0 || $1 ~ /=/ { next } NF < 7 || $6 != "www-data" { bad = 1 } END { exit bad }' "$tmp"; then
+    echo "[deploy] cron: WARNING a job line does not run as www-data — not installing"
+    rm -f "$tmp"; return 0
+  fi
+  if chown root:root "$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$dest"; then
+    echo "[deploy] cron: installed $dest"
+  else
+    echo "[deploy] cron: WARNING install failed — keeping existing $dest"
+    rm -f "$tmp"
+  fi
 }
 install_cron || echo "[deploy] cron: WARNING install_cron errored"
 

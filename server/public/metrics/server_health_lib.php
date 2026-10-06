@@ -189,7 +189,8 @@ function sh_collect_sample(array $cfg, string $env): array {
         $total = @disk_total_space($path);
         $free  = @disk_free_space($path);
         if (!$total || $free === false) continue;
-        $inodeRaw = @shell_exec('df -P -i -- ' . escapeshellarg($path) . ' 2>/dev/null');
+        // timeout: a hung mount must not pile up one stuck collector per minute.
+        $inodeRaw = @shell_exec('timeout 5 df -P -i -- ' . escapeshellarg($path) . ' 2>/dev/null');
         $seen[$dev] = [
             'path'           => $path,
             'used_by'        => [$name],

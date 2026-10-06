@@ -36,7 +36,7 @@ jobs:
           url="https://extension.phoneburner.biz/health.php"
           for attempt in 1 2 3; do
             code=$(curl -s -o body.json -w '%{http_code}' --max-time 20 "$url" || echo 000)
-            ok=$(jq -r '.ok // false' body.json 2>/dev/null || echo false)
+            ok=$(jq -r '.ok // false' body.json 2>/dev/null | tr -cd 'a-z' || echo false)
             echo "attempt $attempt: http=$code ok=$ok"
             if [ "$code" = "200" ] && [ "$ok" = "true" ]; then
               echo "Prod is healthy."
