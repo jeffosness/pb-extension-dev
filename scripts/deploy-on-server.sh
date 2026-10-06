@@ -116,7 +116,8 @@ install_cron() {
   # Temp name starts with "." so cron ignores it until the atomic rename.
   local tmp
   tmp=$(mktemp /etc/cron.d/.pb-cron.XXXXXX) || { echo "[deploy] cron: WARNING mktemp failed"; return 0; }
-  sed "s#{{REPO_DIR}}#$REPO_DIR#g" "$tmpl" > "$tmp"
+  # Strip CRLF too: a Windows line ending makes cron silently ignore the line.
+  sed -e "s#{{REPO_DIR}}#$REPO_DIR#g" -e 's/[[:cntrl:]]*$//' "$tmpl" > "$tmp"
   if grep -q '{{' "$tmp"; then
     echo "[deploy] cron: WARNING unreplaced placeholder in template — not installing"
     rm -f "$tmp"; return 0
