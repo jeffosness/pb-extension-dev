@@ -342,7 +342,9 @@ function hs_token_is_expired(array $hsTokens): bool {
   return $exp > 0 && time() >= $exp;
 }
 
-function hs_api_get_json($accessToken, $url) {
+// $timeout defaults to the historical 20s. Latency-sensitive callers (e.g.
+// the click-to-call name lookup in softphone.php) pass a shorter value.
+function hs_api_get_json($accessToken, $url, int $timeout = 20) {
   $ch = curl_init($url);
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
@@ -350,17 +352,23 @@ function hs_api_get_json($accessToken, $url) {
       'Authorization: Bearer ' . $accessToken,
       'Accept: application/json',
     ],
-    CURLOPT_TIMEOUT => 20,
+    CURLOPT_TIMEOUT => $timeout,
   ]);
   $raw = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $err = curl_error($ch);
   curl_close($ch);
 
   $json = null;
   if (is_string($raw) && $raw !== '') {
     $json = json_decode($raw, true);
   }
-  return [$code, $json, $raw];
+  // 4th element: describe_api_failure-ready $info, so transport failures
+  // (timeout/DNS/TLS → code 0) keep curl_error. Existing callers list() only
+  // the first three and are unaffected.
+  $info = ['http_code' => $code, 'raw_body' => is_string($raw) ? $raw : ''];
+  if ($err !== '') $info['curl_error'] = $err;
+  return [$code, $json, $raw, $info];
 }
 
 /**
@@ -1043,4 +1051,95 @@ function hs_ensure_owner_cached(string $client_id, array $hs, string $endpointLa
     ]);
 
     return $hs;
+}
+
+// -----------------------------------------------------------------------------
+// Click-to-call name lookup (used by softphone.php)
+// -----------------------------------------------------------------------------
+//
+// PhoneBurner's softphone accepts first_name/last_name on pb-softphone:dial and
+// uses them to name the PB record it creates for an otherwise-unknown number.
+// CTC reads the NUMBER off the page, so the name is the only thing we fetch.
+
+/**
+ * Which HubSpot object + properties carry the display name for a CTC crm_name.
+ * Returns [objectPath, propertiesCsv], or null for object types we don't name
+ * (e.g. hubspotdeal — a deal isn't a person/company to label the PB record with).
+ */
+function hs_ctc_name_object(string $crmName): ?array {
+  switch ($crmName) {
+    case 'hubspot':        return ['contacts', 'firstname,lastname'];
+    case 'hubspotcompany': return ['companies', 'name'];
+    default:               return null;
+  }
+}
+
+/**
+ * Map a HubSpot record's properties to PB first/last name. Mirrors dial-session
+ * normalization in pb_dialsession_selection.php: contacts use firstname/lastname;
+ * companies put the company name in first_name with an empty last_name.
+ */
+function hs_ctc_name_from_props(string $crmName, array $props): ?array {
+  if ($crmName === 'hubspot') {
+    return [
+      'first_name' => trim((string)($props['firstname'] ?? '')),
+      'last_name'  => trim((string)($props['lastname'] ?? '')),
+    ];
+  }
+  if ($crmName === 'hubspotcompany') {
+    return ['first_name' => trim((string)($props['name'] ?? '')), 'last_name' => ''];
+  }
+  return null;
+}
+
+/**
+ * Fail-open name lookup for a click-to-call dial. Returns
+ * ['first_name' => ..., 'last_name' => ...] or null on ANY failure.
+ *
+ * Never calls api_error(): softphone.php is an HTML page (bootstrap in
+ * NO_JSON mode), and a failed lookup must never block the call — it just
+ * dials unnamed.
+ * Token refresh reuses hs_call_logger_refresh(), the existing non-exiting
+ * refresh that softphone_call_done.php already uses for CTC task completion.
+ */
+function hs_ctc_lookup_name(string $client_id, string $crmName, string $crmId, int $timeout = 3): ?array {
+  $obj = hs_ctc_name_object($crmName);
+  if ($obj === null || !preg_match('/^\d{1,20}$/', $crmId)) return null;
+
+  $hs = load_hs_tokens($client_id);
+  if (!is_array($hs) || empty($hs['access_token'])) return null;
+
+  require_once __DIR__ . '/hs_call_logger.php';
+  if (hs_token_is_expired($hs)) {
+    $hs = hs_call_logger_refresh($client_id, $hs);
+    if (!is_array($hs) || empty($hs['access_token'])) return null;
+  }
+
+  list($objectPath, $props) = $obj;
+  $url = 'https://api.hubapi.com/crm/v3/objects/' . $objectPath . '/' . rawurlencode($crmId) .
+         '?properties=' . rawurlencode($props);
+
+  // No refresh-and-retry on 401: it would stack another refresh (10s timeout)
+  // onto a page the rep is waiting on. A premature 401 just dials unnamed.
+  list($code, $json, , $info) = hs_api_get_json((string)$hs['access_token'], $url, $timeout);
+
+  if ($code !== 200 || !is_array($json)) {
+    // A 200 that didn't decode is a (truncated) contact record — never log its
+    // body, it holds the very names we're fetching. Error bodies are kept so
+    // the provider's own error text reaches the log.
+    if ($code === 200) { $json = null; $info['raw_body'] = ''; }
+    $fail = describe_api_failure($info, $json);
+    _pb_write_api_log('softphone.hs_name_lookup_failed', [
+      'client_id_hash' => substr(hash('sha256', $client_id), 0, 12),
+      'crm_name'       => $crmName,
+      'status'         => $fail['status'],
+      'provider_msg'   => $fail['message'],
+      'body_snippet'   => $fail['body_snippet'],
+      'curl_error'     => $fail['curl_error'],
+    ]);
+    return null;
+  }
+
+  $recordProps = (isset($json['properties']) && is_array($json['properties'])) ? $json['properties'] : [];
+  return hs_ctc_name_from_props($crmName, $recordProps);
 }
