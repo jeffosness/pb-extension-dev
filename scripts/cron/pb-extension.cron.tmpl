@@ -1,0 +1,23 @@
+# MANAGED BY THE REPO: scripts/cron/pb-extension.cron.tmpl
+# Installed to /etc/cron.d/ by scripts/deploy-on-server.sh on every deploy,
+# with {{REPO_DIR}} replaced by this environment's checkout path.
+# Edits made on the server are overwritten on the next deploy.
+# Change this file in a PR instead.
+#
+# Jobs run as www-data, the same user Apache/PHP runs as, so they can read and
+# delete the files PHP writes. Never root.
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+MAILTO=""
+
+# Server health sample + alert check (every minute). Errors land in api.log.
+* * * * * www-data /usr/bin/php {{REPO_DIR}}/scripts/cron/collect_server_health.php >/dev/null 2>&1
+
+# Stale SSE presence files (daily, 03:00 server time). Live sessions rewrite theirs constantly.
+0 3 * * * www-data find {{REPO_DIR}}/server/public/metrics/sse_presence -type f -name '*.json' -mtime +1 -delete
+
+# Rate-limit counters older than an hour (hourly).
+5 * * * * www-data find {{REPO_DIR}}/server/public/cache -type f -name 'rl_*.txt' -mmin +60 -delete
+
+# Expired single-use temp codes (5-minute TTL; delete after 10).
+*/15 * * * * www-data find {{REPO_DIR}}/server/public/cache -type f -name 'temp_code_*.json' -mmin +10 -delete

@@ -54,6 +54,15 @@ return [
     // Prod: /opt/pb-extension/var/log/app.log
     'LOG_FILE' => '/opt/pb-extension-dev/var/log/app.log',
 
+    // ── Server health alerts (Slack) ─────────────────────────────
+    // Incoming-webhook URL that scripts/cron/collect_server_health.php posts
+    // CPU / memory / disk / Apache-worker alerts to. Treat it as a secret:
+    // anyone holding it can post to the channel. Must start with
+    // https://hooks.slack.com/ (anything else is refused). Leave empty to
+    // keep alerts dashboard-only. Only prod sends; dev just records samples.
+    // Test with: sudo -u www-data php scripts/cron/collect_server_health.php --test-alert
+    'SLACK_ALERT_WEBHOOK_URL' => '',
+
     // Set to true to enable debug endpoints (scan_debug.php, _debug_get.php)
     // NEVER enable in production
     'DEBUG_MODE' => false,

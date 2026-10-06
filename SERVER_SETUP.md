@@ -435,23 +435,61 @@ Should see `[deploy]` log lines indicating success, then the next `state.php` re
 
 ---
 
-## 9. Cron jobs for cleanup
+## 9. Cron jobs (managed by the repo)
 
-PHP doesn't reap its own stale files. Add to `$DEPLOY_USER`'s crontab (`crontab -e`):
+Cron is **not** configured by hand. The schedule lives in [`scripts/cron/pb-extension.cron.tmpl`](scripts/cron/pb-extension.cron.tmpl), and `scripts/deploy-on-server.sh` installs it on every deploy:
 
-```cron
-# Cleanup old SSE presence files (daily at 3am UTC)
-0 3 * * * find /opt/pb-extension-dev/server/public/metrics/sse_presence -type f -mtime +1 -delete 2>/dev/null
-0 3 * * * find /opt/pb-extension/server/public/metrics/sse_presence -type f -mtime +1 -delete 2>/dev/null
+- dev deploy → `/etc/cron.d/pb-extension-dev` (paths point at `/opt/pb-extension-dev`)
+- prod deploy → `/etc/cron.d/pb-extension` (paths point at `/opt/pb-extension`; only changes when a `prod-*` tag deploys)
 
-# Cleanup old rate-limit cache (hourly)
-0 * * * * find /opt/pb-extension-dev/server/public/cache -name 'rl_*.txt' -mmin +60 -delete 2>/dev/null
-0 * * * * find /opt/pb-extension/server/public/cache -name 'rl_*.txt' -mmin +60 -delete 2>/dev/null
+All jobs run as `www-data` (the Apache/PHP user), never root. To change a schedule, edit the template in a PR. Edits made on the server are overwritten by the next deploy. If the install step fails it prints a `[deploy] cron: WARNING` line but doesn't fail the deploy. The dashboard's "collector stale" banner catches a cron that stopped running.
 
-# Cleanup expired temp codes (every 15 min)
-*/15 * * * * find /opt/pb-extension-dev/server/public/cache -name 'temp_code_*.json' -mmin +10 -delete 2>/dev/null
-*/15 * * * * find /opt/pb-extension/server/public/cache -name 'temp_code_*.json' -mmin +10 -delete 2>/dev/null
+What runs:
+
+| Schedule | Job |
+|---|---|
+| every minute | `scripts/cron/collect_server_health.php`: server health sample + Slack alerts (see below) |
+| daily 03:00 | delete `metrics/sse_presence/*.json` older than ~2 days |
+| hourly | delete rate-limit counters (`cache/rl_*.txt`) older than 60 min |
+| every 15 min | delete expired temp codes (`cache/temp_code_*.json`) older than 10 min |
+
+Check what's installed:
+
+```bash
+cat /etc/cron.d/pb-extension /etc/cron.d/pb-extension-dev
+grep CRON /var/log/syslog | tail          # recent cron executions
 ```
+
+> History: before 2026-10 this section told you to paste these jobs into a user crontab. That was never done on the current VPS (`crontab -l` → "no crontab for jeff"), which is why `sse_presence/` had grown to ~4,000 files. If you find hand-installed copies in a user crontab, delete them. The repo-managed file replaces them, and running both is harmless but confusing.
+
+### 9a. Server health monitoring + Slack alerts
+
+The collector writes one sample per minute to `/opt/pb-extension*/var/log/health/` (outside the webroot): `health-YYYY-MM-DD.jsonl` with 30-day self-pruning retention (no logrotate entry needed) and `state.json` (latest sample + alert state). The dashboard's **Server Health** section reads them through `metrics/api/server_health_stats.php`.
+
+Metrics: CPU (5-min load vs. cores), memory (from `MemAvailable`), swap, disk + inode use per volume, Apache busy workers vs. `MaxRequestWorkers` (via `mod_status` on `http://127.0.0.1/server-status?auto`, which Ubuntu allows from localhost by default), live dial sessions, session-file count, and log-dir size.
+
+**Why workers matter most:** Apache runs `mpm_prefork` + `mod_php` with `MaxRequestWorkers 150`. Every live dial session holds one SSE connection, which means one whole Apache process, for the whole session. When busy workers reach 150, new requests queue and hang while CPU looks idle.
+
+Alert thresholds live in `sh_alert_rules()` in `server/public/metrics/server_health_lib.php`. A breach must be sustained across several 1-minute samples before it alerts. An alert posts once when it starts, again if it escalates warning→critical, every 6 hours while it keeps firing, and once when it resolves. **Only prod sends Slack messages.** Dev collects the same host's numbers for its own dashboard, so letting it alert would duplicate every message.
+
+**Slack setup (one time):**
+
+1. In Slack, create an app with an **Incoming Webhook** for your alerts channel (api.slack.com/apps → Create App → Incoming Webhooks → Add New Webhook). Copy the URL. Treat it as a secret.
+2. Add it to **prod** `config.php` (dev doesn't need it):
+   ```bash
+   sudo chattr -i /opt/pb-extension/server/public/config.php
+   sudo nano /opt/pb-extension/server/public/config.php   # 'SLACK_ALERT_WEBHOOK_URL' => 'https://hooks.slack.com/services/...',
+   sudo chattr +i /opt/pb-extension/server/public/config.php
+   ```
+3. Send a test message:
+   ```bash
+   sudo -u www-data php /opt/pb-extension/scripts/cron/collect_server_health.php --test-alert
+   ```
+4. Optional: add the same URL as the GitHub repo secret `SLACK_ALERT_WEBHOOK_URL` so the outside-in uptime check (`.github/workflows/uptime-check.yml`, every 15 min) also posts there when prod is unreachable. Without it, GitHub emails you on failure instead.
+
+See a raw sample at any time: `sudo -u www-data php /opt/pb-extension/scripts/cron/collect_server_health.php --dry-run`
+
+### 9b. Log rotation
 
 Add log rotation (`/etc/logrotate.d/pb-extension`). Two blocks — token audit logs get 365 days for security investigations, everything else gets 90:
 
@@ -583,6 +621,9 @@ After all of the above, walk through this list. Each step should succeed cleanly
 - [ ] `curl https://extension.phoneburner.biz/kb.php?format=md | head` returns the troubleshooting markdown (PB's AI agent endpoint)
 - [ ] `curl -X POST https://extension.phoneburner.biz/api/core/state.php -H "Content-Type: application/json" -d '{"client_id":"verify-test"}'` returns `{"ok": true, "pb_ready": false, ...}`
 - [ ] Hitting `https://extension.phoneburner.biz/metrics/crm_usage_dashboard.php` in a browser prompts for Basic Auth, accepts your htpasswd credentials, and renders the dashboard
+- [ ] The no-credentials loop in §7 prints 401/404 for every `metrics/` URL (no 200s)
+- [ ] `ls /etc/cron.d/pb-extension*` shows both env files after one deploy of each, and the dashboard's **Server Health** section shows fresh numbers (no "collector stale" banner) within 2 minutes
+- [ ] `sudo -u www-data php /opt/pb-extension/scripts/cron/collect_server_health.php --test-alert` posts to Slack (§9a)
 - [ ] Hitting `https://extension.phoneburner.biz/tokens/anything` returns 403 (token dir blocked at vhost level)
 - [ ] Hitting `https://extension.phoneburner.biz/sessions/anything` returns 403
 - [ ] Loading the extension in Chrome (Developer Options toggle → prod), pasting a PAT, and clicking Connect HubSpot completes the OAuth flow and lands back on the extension popup with "Connected"
