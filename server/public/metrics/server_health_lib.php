@@ -43,6 +43,10 @@ function sh_alert_rules(): array {
         'disk'       => ['label' => 'Disk used (fullest volume)',       'metric' => 'disk_used_pct',    'warn' => 80, 'crit' => 90,  'sustain' => 2,  'unit' => '%'],
         'inodes'     => ['label' => 'Inodes used (fullest volume)',     'metric' => 'inode_used_pct',   'warn' => 80, 'crit' => 90,  'sustain' => 2,  'unit' => '%'],
         'swap'       => ['label' => 'Swap used',                        'metric' => 'swap_used_pct',    'warn' => 50, 'crit' => 80,  'sustain' => 5,  'unit' => '%'],
+        // 100 when the localhost server-status request fails, else 0. With
+        // prefork, a status page that stops answering usually means every
+        // worker is taken, which is the failure the workers rule can't see.
+        'apache_down' => ['label' => 'Apache status page not answering (workers likely exhausted)', 'metric' => 'apache_unreachable', 'warn' => 50, 'crit' => 100, 'sustain' => 3, 'unit' => '%'],
     ];
 }
 
@@ -254,6 +258,7 @@ function sh_flatten_for_rules(array $s): array {
         'mem_used_pct'     => $s['mem_used_pct'] ?? null,
         'swap_used_pct'    => $s['swap_used_pct'] ?? null,
         'workers_busy_pct' => $s['apache']['busy_pct'] ?? null,
+        'apache_unreachable' => array_key_exists('apache', $s) ? ($s['apache'] === null ? 100 : 0) : null,
         'disk_used_pct'    => $disk,
         'inode_used_pct'   => $inode,
         'sse_live'         => $s['app']['sse_live'] ?? null,
@@ -300,6 +305,15 @@ function sh_evaluate_alerts(array $ring, array $alertState, int $now, ?array $ru
         $prev  = $alertState[$key] ?? ['level' => 'ok'];
         $level = sh_rule_level($rule, $ring);
         $value = $latest[$rule['metric']] ?? null;
+
+        // Unknown is not "recovered". During worker exhaustion the collector's
+        // own server-status request can time out, which nulls the workers
+        // metric exactly when it matters. Keep an active alert as-is until a
+        // real reading shows recovery. (Codex review, 2026-10-06.)
+        if ($level === 'ok' && $prev['level'] !== 'ok' && $value === null) {
+            $out[$key] = $prev;
+            continue;
+        }
 
         if ($level === 'ok') {
             if ($prev['level'] !== 'ok') {

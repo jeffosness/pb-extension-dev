@@ -86,10 +86,9 @@ if ($testMsg) {
     exit($ok ? 0 : 1);
 }
 
-$sample = sh_collect_sample($cfg, $env);
-
 if ($dryRun) {
-    fwrite(STDOUT, json_encode($sample, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+    fwrite(STDOUT, json_encode(sh_collect_sample($cfg, $env), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "
+");
     exit(0);
 }
 
@@ -98,6 +97,17 @@ if (!is_dir($dir) && !@mkdir($dir, 0750, true)) {
     api_log('server_health.mkdir_failed', ['dir' => $dir]);
     exit(1);
 }
+
+// One collector at a time. A slow run (Slack timeouts, a hung df) must not
+// overlap the next minute's run: both would read the same state.json and
+// send duplicate alerts. Held until exit. (Codex review, 2026-10-06.)
+$lock = @fopen($dir . '/collector.lock', 'c');
+if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+    api_log('server_health.skipped_locked', []);
+    exit(0);
+}
+
+$sample = sh_collect_sample($cfg, $env);
 
 // 1) Append sample
 $line = json_encode($sample, JSON_UNESCAPED_SLASHES) . "\n";

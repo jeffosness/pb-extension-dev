@@ -159,6 +159,32 @@ final class ServerHealthTest extends TestCase
     }
 
     #[Test]
+    public function unknown_reading_does_not_resolve_an_active_alert(): void
+    {
+        // Worker exhaustion makes the localhost status request time out, so
+        // the workers metric goes null. That must NOT send "RESOLVED".
+        [$state] = sh_evaluate_alerts($this->ring([92, 92, 92]), [], 1000, $this->rules());
+        [$state2, $notes] = sh_evaluate_alerts($this->ring([92, 92, null]), $state, 1060, $this->rules());
+        $this->assertSame([], $notes);
+        $this->assertSame('crit', $state2['disk']['level']);
+        $this->assertSame(1000, $state2['disk']['since']);
+
+        // A real low reading does resolve it.
+        [$state3, $notes3] = sh_evaluate_alerts($this->ring([92, null, 40]), $state2, 1120, $this->rules());
+        $this->assertSame([], $state3);
+        $this->assertSame('resolved', $notes3[0]['kind']);
+    }
+
+    #[Test]
+    public function apache_unreachable_metric_is_derived_from_missing_status(): void
+    {
+        $this->assertSame(100, sh_flatten_for_rules(['ts' => 1, 'apache' => null])['apache_unreachable']);
+        $this->assertSame(0, sh_flatten_for_rules(['ts' => 1, 'apache' => ['busy_pct' => 5.0]])['apache_unreachable']);
+        // Old samples without the key at all: unknown, not "down".
+        $this->assertNull(sh_flatten_for_rules(['ts' => 1])['apache_unreachable']);
+    }
+
+    #[Test]
     public function too_few_samples_never_fires(): void
     {
         // Right after the first deploy the ring is short. It must not fire on partial data.
