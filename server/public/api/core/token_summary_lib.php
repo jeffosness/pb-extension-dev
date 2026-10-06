@@ -60,6 +60,9 @@ function token_read_whitelist(): array
             // v0.8.2 CTC-completes-task flow (PR #172) added HubSpot token
             // reads on both softphone endpoints. See LESSONS.md 2026-07-09.
             'softphone_auth_code', 'softphone_call_done',
+            // softphone.php looks up the contact/company name for the dial
+            // (hs_ctc_lookup_name) so PB can label the record it creates.
+            'softphone',
         ],
         'close' => [
             'state', 'oauth_close_finish', 'oauth_disconnect',
@@ -86,6 +89,8 @@ function token_read_whitelist(): array
             //   softphone_auth_code — checks connection before writing the intent
             //   softphone_call_done — forth_log_ctc_call loads tokens to POST /calls
             'softphone_auth_code', 'softphone_call_done',
+            //   softphone           — forth_ctc_lookup_name fetches the contact name
+            'softphone',
         ],
     ];
 }

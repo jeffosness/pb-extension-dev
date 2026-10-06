@@ -38,18 +38,36 @@ function forth_token_is_expired(array $tokens): bool {
 /**
  * Exchange the durable client_id/client_secret for a fresh api_key access token.
  * Persists the new api_key + expires_at back into the token file and returns the
- * updated $tokens array. Bootstrap context only (uses api_log / api_error).
+ * updated $tokens array. Bootstrap context only (uses api_error).
+ */
+function forth_mint_access_token_or_fail(string $client_id, array $tokens): array {
+  $reason = null;
+  $minted = forth_try_mint_access_token($client_id, $tokens, $reason);
+  if ($minted !== null) return $minted;
+
+  if ($reason === 'missing_credentials') {
+    api_error('Forth credentials missing. Please reconnect Forth (enter your API Key ID + Secret).', 'unauthorized', 401);
+  }
+  api_error('Forth token request failed. Please verify your API credentials and reconnect Forth.', 'unauthorized', 401);
+}
+
+/**
+ * Fail-open core of forth_mint_access_token_or_fail(): returns the updated
+ * $tokens array, or null with $failReason set ('missing_credentials' |
+ * 'request_failed'). Logs via _pb_write_api_log, so it's safe without
+ * bootstrap.php (e.g. softphone.php's CTC name lookup).
  *
  * Forth response shape (200):
  *   { "status": {"code":200,"message":"Success"},
  *     "response": { "api_key": "xxxx-...", "expires_in": 864000 } }
  */
-function forth_mint_access_token_or_fail(string $client_id, array $tokens): array {
+function forth_try_mint_access_token(string $client_id, array $tokens, ?string &$failReason = null, int $timeout = 20): ?array {
   $forthClientId     = (string)($tokens['client_id'] ?? '');
   $forthClientSecret = (string)($tokens['client_secret'] ?? '');
 
   if ($forthClientId === '' || $forthClientSecret === '') {
-    api_error('Forth credentials missing. Please reconnect Forth (enter your API Key ID + Secret).', 'unauthorized', 401);
+    $failReason = 'missing_credentials';
+    return null;
   }
 
   // JSON body — Forth's /auth/token expects application/json (see docs curl).
@@ -66,7 +84,7 @@ function forth_mint_access_token_or_fail(string $client_id, array $tokens): arra
       'Content-Type: application/json',
       'Accept: application/json',
     ],
-    CURLOPT_TIMEOUT => 20,
+    CURLOPT_TIMEOUT => $timeout,
   ]);
   $raw  = curl_exec($ch);
   $info = curl_getinfo($ch);
@@ -88,7 +106,7 @@ function forth_mint_access_token_or_fail(string $client_id, array $tokens): arra
 
   if ($status < 200 || $status >= 300 || $apiKey === '') {
     $fail = describe_api_failure($info, $resp);
-    api_log('forth_token.error', [
+    _pb_write_api_log('forth_token.error', [
       'client_id_hash' => substr(hash('sha256', $client_id), 0, 12),
       'status'         => $fail['status'],
       'ms'             => $ms,
@@ -97,7 +115,8 @@ function forth_mint_access_token_or_fail(string $client_id, array $tokens): arra
       'body_snippet'   => $fail['body_snippet'],
       'curl_error'     => $fail['curl_error'],
     ]);
-    api_error('Forth token request failed. Please verify your API credentials and reconnect Forth.', 'unauthorized', 401);
+    $failReason = 'request_failed';
+    return null;
   }
 
   $now        = time();
@@ -110,7 +129,7 @@ function forth_mint_access_token_or_fail(string $client_id, array $tokens): arra
 
   save_forth_tokens($client_id, $tokens);
 
-  api_log('forth_token.ok', [
+  _pb_write_api_log('forth_token.ok', [
     'client_id_hash' => substr(hash('sha256', $client_id), 0, 12),
     'ms' => $ms,
   ]);
@@ -136,7 +155,7 @@ function forth_get_access_token_or_fail(string $client_id, array &$tokens): stri
  * curl_error means transport failures (timeout/DNS/TLS → http_code 0) still log
  * the underlying reason, per CLAUDE.md's external-call failure-logging rule.
  */
-function forth_api_get_json(string $apiKey, string $url): array {
+function forth_api_get_json(string $apiKey, string $url, int $timeout = 20): array {
   $ch = curl_init($url);
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
@@ -144,7 +163,7 @@ function forth_api_get_json(string $apiKey, string $url): array {
       'Api-Key: ' . $apiKey,     // NOTE: Forth uses `Api-Key`, NOT `Authorization: Bearer`
       'Accept: application/json',
     ],
-    CURLOPT_TIMEOUT => 20,
+    CURLOPT_TIMEOUT => $timeout,
   ]);
   $raw  = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -341,17 +360,7 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
     // Contact object may be nested under `response` (Forth's usual envelope).
     $c = (isset($json['response']) && is_array($json['response'])) ? $json['response'] : $json;
 
-    $first = trim((string)($c['first_name'] ?? $c['firstname'] ?? ''));
-    $last  = trim((string)($c['last_name']  ?? $c['lastname']  ?? ''));
-    if ($first === '' && $last === '') {
-      // Fall back to a single fullname field.
-      $full = trim((string)($c['fullname'] ?? $c['name'] ?? ''));
-      if ($full !== '') {
-        $parts = preg_split('/\s+/', $full, 2);
-        $first = $parts[0] ?? '';
-        $last  = $parts[1] ?? '';
-      }
-    }
+    list($first, $last) = forth_extract_contact_name($c);
 
     // Email: string or first non-empty of an emails[] array.
     $email = trim((string)($c['email'] ?? ''));
@@ -418,4 +427,70 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   }
 
   return $contacts;
+}
+
+/**
+ * Pull [first, last] from a Forth contact object. Tolerant of field-name
+ * variants (first_name|firstname, last_name|lastname) and falls back to
+ * splitting a single fullname|name field. Shared by dial sessions
+ * (forth_fetch_contacts_by_ids) and the CTC name lookup.
+ */
+function forth_extract_contact_name(array $c): array {
+  $first = trim((string)($c['first_name'] ?? $c['firstname'] ?? ''));
+  $last  = trim((string)($c['last_name']  ?? $c['lastname']  ?? ''));
+  if ($first === '' && $last === '') {
+    // Fall back to a single fullname field.
+    $full = trim((string)($c['fullname'] ?? $c['name'] ?? ''));
+    if ($full !== '') {
+      $parts = preg_split('/\s+/', $full, 2);
+      $first = $parts[0] ?? '';
+      $last  = $parts[1] ?? '';
+    }
+  }
+  return [$first, $last];
+}
+
+/**
+ * Fail-open name lookup for a click-to-call dial (used by softphone.php).
+ * Returns ['first_name' => ..., 'last_name' => ...] or null on ANY failure —
+ * never api_error()s, so a failed lookup just dials unnamed.
+ */
+function forth_ctc_lookup_name(string $client_id, string $crmId, int $timeout = 3): ?array {
+  if (!preg_match('/^\d{1,20}$/', $crmId)) return null;
+
+  $tokens = load_forth_tokens($client_id);
+  if (!is_array($tokens) || empty($tokens['client_id']) || empty($tokens['client_secret'])) return null;
+
+  if (forth_token_is_expired($tokens)) {
+    // Short mint timeout: the softphone page is waiting on this lookup.
+    $reason = null;
+    $tokens = forth_try_mint_access_token($client_id, $tokens, $reason, 5);
+    if ($tokens === null) return null;
+  }
+
+  // No re-mint-and-retry on 401: it would stack another token request onto a
+  // page the rep is waiting on. A premature 401 just dials unnamed.
+  $url = FORTH_API_BASE . 'contacts/' . rawurlencode($crmId);
+  list($code, $json, $raw, $info) = forth_api_get_json((string)$tokens['api_key'], $url, $timeout);
+
+  if ($code !== 200 || !is_array($json)) {
+    // A 200 that didn't decode is a (truncated) contact record — never log its
+    // body, it holds the very names we're fetching. Error bodies are kept so
+    // Forth's own error text reaches the log.
+    if ($code === 200) { $json = null; $info['raw_body'] = ''; }
+    $fail = describe_api_failure($info, $json);
+    _pb_write_api_log('softphone.forth_name_lookup_failed', [
+      'client_id_hash' => substr(hash('sha256', $client_id), 0, 12),
+      'status'         => $fail['status'],
+      'provider_msg'   => $fail['message'],
+      'body_snippet'   => $fail['body_snippet'],
+      'curl_error'     => $fail['curl_error'],
+    ]);
+    return null;
+  }
+
+  // Contact object may be nested under `response` (Forth's usual envelope).
+  $c = (isset($json['response']) && is_array($json['response'])) ? $json['response'] : $json;
+  list($first, $last) = forth_extract_contact_name($c);
+  return ['first_name' => $first, 'last_name' => $last];
 }

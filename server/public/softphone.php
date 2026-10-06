@@ -25,6 +25,13 @@ $number  = (string)($_GET['number'] ?? '');
 $crmId   = (string)($_GET['crm_id'] ?? '');
 $crmName = (string)($_GET['crm_name'] ?? '');
 
+// Every api.log line records REQUEST_URI as `path`, and ours carries the dialed
+// ?number= (plus code/crm_id). Params are already read above, so drop the query
+// before anything in this request logs.
+if (isset($_SERVER['REQUEST_URI'])) {
+    $_SERVER['REQUEST_URI'] = explode('?', (string)$_SERVER['REQUEST_URI'], 2)[0];
+}
+
 // Resolve the bearer token (server-side only).
 //
 // DEV/TEST override: SOFTPHONE_TEST_TOKEN in config.php forces a fixed token —
@@ -41,6 +48,58 @@ if ($testToken !== '') {
     if (!empty($pat)) {
         $token = $pat;
     }
+}
+
+// Resolve the contact's name so PhoneBurner can label the record it creates
+// (pb-softphone:dial accepts first_name/last_name). CTC reads the NUMBER off the
+// CRM page; the name is the only thing we fetch. Fail-open: the provider helpers
+// never api_error(), so any failure just dials unnamed. Short timeout because
+// the softphone page waits on this before rendering.
+$firstName = '';
+$lastName  = '';
+if ($client_id && $crmId !== '' && $crmName !== '') {
+    $lookupT0 = microtime(true);
+    $name = null;
+    $lookupError = false;
+    // Catch-all: a token refresh inside the lookup persists via
+    // atomic_write_json(), which throws on write failure. An optional name must
+    // never stop the softphone from rendering (the code is already consumed).
+    try {
+        switch ($crmName) {
+            case 'hubspot':
+            case 'hubspotcompany':
+                require_once __DIR__ . '/api/crm/hubspot/hs_helpers.php';
+                $name = hs_ctc_lookup_name((string)$client_id, $crmName, $crmId);
+                break;
+            case 'forth':
+                require_once __DIR__ . '/api/crm/forth/forth_helpers.php';
+                $name = forth_ctc_lookup_name((string)$client_id, $crmId);
+                break;
+        }
+    } catch (Throwable $e) {
+        $name = null;
+        $lookupError = get_class($e);
+    }
+    if (is_array($name)) {
+        // Strip control chars + cap length; this lands in a postMessage payload
+        // and PB's contact record, not just our page.
+        $clean = function ($s) {
+            $s = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)$s) ?? '');
+            // Cap at 100 characters (not bytes) without depending on mbstring —
+            // a byte cut could split a multibyte char and corrupt the name.
+            return preg_match('/^.{0,100}/us', $s, $m) ? $m[0] : '';
+        };
+        $firstName = $clean($name['first_name'] ?? '');
+        $lastName  = $clean($name['last_name'] ?? '');
+    }
+    // No names in the log (PII) — just whether we found one.
+    _pb_write_api_log('softphone.name_lookup', [
+        'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
+        'crm_name'       => $crmName,
+        'found'          => ($firstName !== '' || $lastName !== ''),
+        'exception'      => $lookupError, // class name only — message could carry paths/data
+        'ms'             => (int) round((microtime(true) - $lookupT0) * 1000),
+    ]);
 }
 
 // Only accept an http(s) runtime URL.
@@ -64,6 +123,8 @@ $cfg = [
     'number'        => $number,
     'crmId'         => $crmId,
     'crmName'       => $crmName,
+    'firstName'     => $firstName,
+    'lastName'      => $lastName,
     'authed'        => $token !== '',
 ];
 ?><!doctype html>
@@ -106,7 +167,15 @@ $cfg = [
         <pre id="sp-log"></pre>
       </details>
     </div>
-    <script>window.PB_SOFTPHONE = <?= json_encode($cfg, JSON_UNESCAPED_SLASHES) ?>;</script>
+    <?php
+      // JSON_HEX_* escapes < > & ' " so CRM-sourced names (or a crafted ?number=)
+      // containing "</script>" can't break out of this inline script block.
+      // INVALID_UTF8_SUBSTITUTE keeps a malformed byte from making json_encode
+      // return false, which would emit "PB_SOFTPHONE = ;" and kill the dial.
+      $cfgJson = json_encode($cfg, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP
+        | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
+    ?>
+    <script>window.PB_SOFTPHONE = <?= $cfgJson ?>;</script>
     <?php
       // Cache-bust softphone_host.js on every deploy so browsers immediately
       // pick up server-side JS changes without waiting for Chrome's heuristic

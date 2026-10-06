@@ -25,6 +25,10 @@
   var number = cfg.number || "";
   var crmId = cfg.crmId || "";
   var crmName = cfg.crmName || "";
+  // Resolved server-side by softphone.php from the CRM record; empty when the
+  // lookup failed or the object type isn't named (e.g. HubSpot deals).
+  var firstName = cfg.firstName || "";
+  var lastName = cfg.lastName || "";
 
   var frame = document.getElementById("sp-frame");
   var statusEl = document.getElementById("sp-status");
@@ -70,6 +74,9 @@
   function dial(num) {
     if (!num) return;
     pendingDial = { type: MSG.DIAL, number: num, external_crm_data: externalCrmData() };
+    // PB names the record it creates from these; omit when unknown.
+    if (firstName) pendingDial.first_name = firstName;
+    if (lastName) pendingDial.last_name = lastName;
     if (isReady) flush();
     else { setStatus("queued — waiting for softphone…"); log("dial queued: " + num); }
   }

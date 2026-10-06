@@ -787,6 +787,7 @@ The very first time a customer clicks a flame icon in a new browser profile, Chr
 - **Logging in HubSpot**: calls placed via click-to-call are logged to the contact's HubSpot record through the same PhoneBurner ↔ HubSpot integration that handles dial sessions. Customer needs the native PB↔HS integration activated in PhoneBurner's admin — same requirement as dial sessions.
 - **What if the customer isn't set up with the native PB↔HS integration?** The call still connects, but the activity won't appear in HubSpot. Direct them to https://www.phoneburner.com/myaccount/integrations/hubspot/index to activate it.
 - **Recording, disposition, call notes**: same as dial session calls — the softphone in the popup window has the same UI as PhoneBurner's regular dialer.
+- **Contact name in PhoneBurner**: the extension looks up the record's name in HubSpot and sends it with the call, so the PhoneBurner contact is named (e.g. "Rachel Sample") instead of showing only the phone number. Companies use the company name. Deals, and task rows linked to zero or several contacts, dial without a name. If the name lookup fails for any reason the call still goes through — only the name is missing. Server-side change; no extension update needed.
 
 ### Escalate if
 
@@ -849,7 +850,7 @@ Forth does **not** use OAuth. It uses a durable API credential pair — a **Key 
 
 ### Click-to-call in Forth
 
-A PhoneBurner flame button appears next to every phone number on Forth contact-list and record pages. Clicking it dials that number through PhoneBurner and logs the call (and any note) back to the contact — no dial session required.
+A PhoneBurner flame button appears next to every phone number on Forth contact-list and record pages. Clicking it dials that number through PhoneBurner and logs the call (and any note) back to the contact — no dial session required. The contact's first and last name are looked up in Forth and sent along, so the PhoneBurner contact is named rather than showing only the number; if that lookup fails the call still connects, just without the name.
 
 ### Common questions and fixes
 
