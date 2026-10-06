@@ -1271,7 +1271,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const grid = document.getElementById("health-grid");
-    if (!grid || !s) return;
+    if (!grid) return;
+    if (!s) { grid.innerHTML = healthTile("Server health", "No data", "waiting for the first sample", null); return; }
 
     const disks = s.disks || [];
     const fullest = disks.reduce((m, x) => (!m || x.used_pct > m.used_pct) ? x : m, null);
@@ -1285,9 +1286,11 @@ document.addEventListener("DOMContentLoaded", () => {
       healthTile("Memory", pct(s.mem_used_pct),
         s.mem_avail_mb != null ? (s.mem_avail_mb / 1024).toFixed(1) + " GB free of " + (s.mem_total_mb / 1024).toFixed(1) + " GB" : "n/a",
         healthLevel(rules.memory, s.mem_used_pct)),
-      healthTile("Apache workers", ap ? pct(ap.busy_pct) : "n/a",
-        ap ? ap.busy + " busy / " + (ap.max ?? "?") + " max" : "mod_status unreachable",
-        ap ? healthLevel(rules.workers, ap.busy_pct) : null),
+      // No status answer usually means every prefork worker is taken (the
+      // status request itself can't get one), so show it as critical, not grey.
+      healthTile("Apache workers", ap ? pct(ap.busy_pct) : "Not answering",
+        ap ? ap.busy + " busy / " + (ap.max ?? "?") + " max" : "status page timed out (workers may be exhausted)",
+        ap ? healthLevel(rules.workers, ap.busy_pct) : "crit"),
       healthTile("Disk", fullest ? pct(fullest.used_pct) : "n/a",
         fullest ? fullest.free_gb + " GB free · inodes " + pct(fullest.inode_used_pct) : "n/a",
         fullest ? healthLevel(rules.disk, fullest.used_pct) : null),

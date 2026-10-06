@@ -97,9 +97,15 @@ final class ServerHealthTest extends TestCase
         return ['disk' => ['label' => 'Disk', 'metric' => 'disk_used_pct', 'warn' => 80, 'crit' => 90, 'sustain' => 3, 'unit' => '%']];
     }
 
-    private function ring(array $values): array
+    /** One sample per minute, newest last, ending at $endTs. */
+    private function ring(array $values, int $endTs = 10000): array
     {
-        return array_map(fn($v) => ['disk_used_pct' => $v], $values);
+        $n = count($values);
+        $out = [];
+        foreach (array_values($values) as $i => $v) {
+            $out[] = ['ts' => $endTs - ($n - 1 - $i) * 60, 'disk_used_pct' => $v];
+        }
+        return $out;
     }
 
     #[Test]
@@ -142,12 +148,52 @@ final class ServerHealthTest extends TestCase
     }
 
     #[Test]
-    public function recovery_sends_resolved_and_clears_state(): void
+    public function one_dip_does_not_resolve_hysteresis(): void
     {
         [$state] = sh_evaluate_alerts($this->ring([85, 85, 85]), [], 1000, $this->rules());
-        [$state2, $notes] = sh_evaluate_alerts($this->ring([85, 85, 60]), $state, 1060, $this->rules());
+        [$state2, $notes] = sh_evaluate_alerts($this->ring([85, 85, 85, 85, 60]), $state, 1060, $this->rules());
+        $this->assertSame([], $notes);
+        $this->assertSame('warn', $state2['disk']['level']);
+    }
+
+    #[Test]
+    public function recovery_needs_clear_samples_then_resolves(): void
+    {
+        [$state] = sh_evaluate_alerts($this->ring([85, 85, 85]), [], 1000, $this->rules());
+        $clean = array_fill(0, SH_CLEAR_SAMPLES, 60);
+        [$state2, $notes] = sh_evaluate_alerts($this->ring($clean), $state, 1300, $this->rules());
         $this->assertSame([], $state2);
         $this->assertSame('resolved', $notes[0]['kind']);
+    }
+
+    #[Test]
+    public function hovering_near_crit_does_not_flap_escalations(): void
+    {
+        // crit -> one sample at 89 -> back to 91: no de-escalate, no second ESCALATED.
+        [$state] = sh_evaluate_alerts($this->ring([92, 92, 92]), [], 1000, $this->rules());
+        [$state, $n1] = sh_evaluate_alerts($this->ring([92, 92, 92, 89]), $state, 1060, $this->rules());
+        [$state, $n2] = sh_evaluate_alerts($this->ring([92, 92, 89, 91]), $state, 1120, $this->rules());
+        $this->assertSame([], $n1);
+        $this->assertSame([], $n2);
+        $this->assertSame('crit', $state['disk']['level']);
+    }
+
+    #[Test]
+    public function crit_deescalates_quietly_to_warn(): void
+    {
+        [$state] = sh_evaluate_alerts($this->ring([92, 92, 92]), [], 1000, $this->rules());
+        [$state2, $notes] = sh_evaluate_alerts($this->ring(array_fill(0, SH_CLEAR_SAMPLES, 85)), $state, 1300, $this->rules());
+        $this->assertSame('warn', $state2['disk']['level']);
+        $this->assertSame([], $notes);
+    }
+
+    #[Test]
+    public function samples_across_a_cron_gap_are_not_sustained(): void
+    {
+        // Two old breaching samples from an hour ago + one fresh: not 3 consecutive minutes.
+        $ring = [['ts' => 1000, 'disk_used_pct' => 95], ['ts' => 1060, 'disk_used_pct' => 95], ['ts' => 4660, 'disk_used_pct' => 95]];
+        [, $notes] = sh_evaluate_alerts($ring, [], 4660, $this->rules());
+        $this->assertSame([], $notes);
     }
 
     #[Test]
@@ -169,8 +215,8 @@ final class ServerHealthTest extends TestCase
         $this->assertSame('crit', $state2['disk']['level']);
         $this->assertSame(1000, $state2['disk']['since']);
 
-        // A real low reading does resolve it.
-        [$state3, $notes3] = sh_evaluate_alerts($this->ring([92, null, 40]), $state2, 1120, $this->rules());
+        // Real low readings do resolve it.
+        [$state3, $notes3] = sh_evaluate_alerts($this->ring(array_fill(0, SH_CLEAR_SAMPLES, 40)), $state2, 1500, $this->rules());
         $this->assertSame([], $state3);
         $this->assertSame('resolved', $notes3[0]['kind']);
     }

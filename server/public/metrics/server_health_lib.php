@@ -27,6 +27,9 @@ const SH_RENOTIFY_SEC     = 6 * 3600; // repeat a still-firing alert every 6h
 const SH_STALE_SEC        = 180;     // dashboard warns if the newest sample is older than this
 const SH_SSE_ACTIVE_SEC   = 240;     // presence file touched within this window = live session (matches sse_usage_stats)
 const SH_SLACK_URL_PREFIX = 'https://hooks.slack.com/';
+const SH_CLEAR_SAMPLES    = 5;       // clean samples needed before an alert resolves/de-escalates (hysteresis)
+const SH_GAP_TOLERANCE_SEC = 90;     // slack allowed in a window's span before it's treated as a gap
+const SH_OUTBOX_MAX_TRIES = 6;       // failed Slack posts are retried this many times, 5 min apart
 
 /**
  * Alert rules. Thresholds live in code on purpose (reviewed in PRs, no
@@ -42,7 +45,8 @@ function sh_alert_rules(): array {
         'workers'    => ['label' => 'Apache workers busy',              'metric' => 'workers_busy_pct', 'warn' => 70, 'crit' => 90,  'sustain' => 3,  'unit' => '%'],
         'disk'       => ['label' => 'Disk used (fullest volume)',       'metric' => 'disk_used_pct',    'warn' => 80, 'crit' => 90,  'sustain' => 2,  'unit' => '%'],
         'inodes'     => ['label' => 'Inodes used (fullest volume)',     'metric' => 'inode_used_pct',   'warn' => 80, 'crit' => 90,  'sustain' => 2,  'unit' => '%'],
-        'swap'       => ['label' => 'Swap used',                        'metric' => 'swap_used_pct',    'warn' => 50, 'crit' => 80,  'sustain' => 5,  'unit' => '%'],
+        // Swap is recorded but not alerted: Linux leaves pages in swap long after
+        // pressure ends, so a used-% rule would sit at warning indefinitely.
         // 100 when the localhost server-status request fails, else 0. With
         // prefork, a status page that stops answering usually means every
         // worker is taken, which is the failure the workers rule can't see.
@@ -271,17 +275,28 @@ function sh_flatten_for_rules(array $s): array {
 // ---------------------------------------------------------------------------
 
 /**
- * Level for one rule given the recent ring (newest last). A level counts only
- * if EVERY one of the last `sustain` samples breaches it; missing data never
- * fires (null metric = unknown, not bad).
+ * The last $n ring rows for a rule, or null if there aren't $n of them OR
+ * they don't span consecutive-ish minutes. After a cron gap, samples from
+ * hours ago must not combine with fresh ones to count as "sustained".
+ */
+function sh_window(array $ring, int $n): ?array {
+    if ($n < 1 || count($ring) < $n) return null;
+    $w = array_slice($ring, -$n);
+    $span = (int)($w[$n - 1]['ts'] ?? 0) - (int)($w[0]['ts'] ?? 0);
+    if ($span > ($n - 1) * 60 + SH_GAP_TOLERANCE_SEC) return null;
+    return $w;
+}
+
+/**
+ * Raising level for one rule: a level counts only if EVERY sample in the
+ * window breaches it. Missing data never raises (null = unknown, not bad).
  */
 function sh_rule_level(array $rule, array $ring): string {
-    $n = (int)$rule['sustain'];
-    if (count($ring) < $n) return 'ok';
-    $window = array_slice($ring, -$n);
+    $w = sh_window($ring, (int)$rule['sustain']);
+    if ($w === null) return 'ok';
     foreach (['crit', 'warn'] as $lvl) {
         $all = true;
-        foreach ($window as $row) {
+        foreach ($w as $row) {
             $v = $row[$rule['metric']] ?? null;
             if ($v === null || $v < $rule[$lvl]) { $all = false; break; }
         }
@@ -291,9 +306,30 @@ function sh_rule_level(array $rule, array $ring): string {
 }
 
 /**
+ * Lowering level for a rule currently at $prev: only drop when the last
+ * max(sustain, SH_CLEAR_SAMPLES) samples are ALL known and ALL below the
+ * current level's threshold (hysteresis: one dip doesn't resolve, one spike
+ * after that doesn't re-fire). Unknown readings hold the current level,
+ * because worker exhaustion makes the collector's own server-status request
+ * time out, nulling the metric exactly when it matters (Codex review).
+ */
+function sh_rule_cleared_level(array $rule, array $ring, string $prev): string {
+    $w = sh_window($ring, max((int)$rule['sustain'], SH_CLEAR_SAMPLES));
+    if ($w === null) return $prev;
+    $belowWarn = true;
+    foreach ($w as $row) {
+        $v = $row[$rule['metric']] ?? null;
+        if ($v === null || $v >= $rule[$prev]) return $prev;
+        if ($v >= $rule['warn']) $belowWarn = false;
+    }
+    return $belowWarn ? 'ok' : 'warn';
+}
+
+/**
  * Advance alert state. Returns [newAlertState, notifications[]].
- * A notification fires when an alert starts, escalates warn→crit, is still
- * firing SH_RENOTIFY_SEC after the last notice, or resolves.
+ * Notifies when an alert starts, escalates warn→crit, is still firing
+ * SH_RENOTIFY_SEC after the last notice, or resolves. De-escalation
+ * crit→warn is recorded quietly; the resolve message covers the recovery.
  */
 function sh_evaluate_alerts(array $ring, array $alertState, int $now, ?array $rules = null): array {
     $rules = $rules ?? sh_alert_rules();
@@ -304,35 +340,33 @@ function sh_evaluate_alerts(array $ring, array $alertState, int $now, ?array $ru
 
     foreach ($rules as $key => $rule) {
         $prev  = $alertState[$key] ?? ['level' => 'ok'];
-        $level = sh_rule_level($rule, $ring);
+        $prevLevel = isset($rank[$prev['level'] ?? null]) ? $prev['level'] : 'ok';
         $value = $latest[$rule['metric']] ?? null;
 
-        // Unknown is not "recovered". During worker exhaustion the collector's
-        // own server-status request can time out, which nulls the workers
-        // metric exactly when it matters. Keep an active alert as-is until a
-        // real reading shows recovery. (Codex review, 2026-10-06.)
-        if ($level === 'ok' && $prev['level'] !== 'ok' && $value === null) {
-            $out[$key] = $prev;
-            continue;
+        $raised = sh_rule_level($rule, $ring);
+        if ($rank[$raised] >= $rank[$prevLevel]) {
+            $level = $raised;
+        } else {
+            $level = sh_rule_cleared_level($rule, $ring, $prevLevel);
         }
 
         if ($level === 'ok') {
-            if ($prev['level'] !== 'ok') {
-                $notes[] = ['key' => $key, 'kind' => 'resolved', 'level' => 'ok', 'from' => $prev['level'], 'value' => $value, 'rule' => $rule, 'since' => $prev['since'] ?? null];
+            if ($prevLevel !== 'ok') {
+                $notes[] = ['key' => $key, 'kind' => 'resolved', 'level' => 'ok', 'from' => $prevLevel, 'value' => $value, 'rule' => $rule, 'since' => $prev['since'] ?? null];
             }
             continue; // ok rules are not stored
         }
 
         $entry = [
             'level'         => $level,
-            'since'         => ($prev['level'] ?? 'ok') === 'ok' ? $now : ($prev['since'] ?? $now),
+            'since'         => $prevLevel === 'ok' ? $now : ($prev['since'] ?? $now),
             'last_notified' => $prev['last_notified'] ?? 0,
             'value'         => $value,
         ];
         $kind = null;
-        if ($prev['level'] === 'ok')                          $kind = 'firing';
-        elseif ($rank[$level] > $rank[$prev['level']])        $kind = 'escalated';
-        elseif ($now - (int)$entry['last_notified'] >= SH_RENOTIFY_SEC) $kind = 'still_firing';
+        if ($prevLevel === 'ok')                                         $kind = 'firing';
+        elseif ($rank[$level] > $rank[$prevLevel])                       $kind = 'escalated';
+        elseif ($now - (int)$entry['last_notified'] >= SH_RENOTIFY_SEC)  $kind = 'still_firing';
 
         if ($kind) {
             $entry['last_notified'] = $now;

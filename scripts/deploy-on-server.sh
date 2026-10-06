@@ -94,8 +94,9 @@ PHP_EOF
 echo "[deploy] stamped version.php: version=$DEPLOYED_VERSION commit=$DEPLOYED_COMMIT env=$ENV"
 
 # Install this env's cron file from the repo (scripts/cron/pb-extension.cron.tmpl).
-# Each env installs its OWN file from its OWN checkout, so prod's cron only
-# changes when a prod tag deploys. A failure here warns but does NOT fail the
+# Each env installs its OWN file from its OWN checkout, so prod's job list
+# only changes when a prod tag deploys. (This installer function itself always
+# runs from the dev checkout, like the rest of this script.) A failure here warns but does NOT fail the
 # deploy: monitoring must never block shipping a fix. The dashboard's
 # "collector stale" banner shows if the cron stops running.
 install_cron() {

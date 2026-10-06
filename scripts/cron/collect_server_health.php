@@ -41,18 +41,21 @@ $env = is_array($versionInfo) ? (string)($versionInfo['env'] ?? 'unknown') : 'un
 $baseUrl      = rtrim((string)($cfg['BASE_URL'] ?? ''), '/');
 $dashboardUrl = $baseUrl . '/metrics/crm_usage_dashboard.php#server-health';
 
-/** Post one message to the configured Slack incoming webhook. Returns true on success. */
-function sh_post_slack(array $cfg, string $text): bool {
+/**
+ * Post one message to the configured Slack incoming webhook.
+ * Returns 'sent', 'failed' (worth retrying), or 'unconfigured' (don't retry:
+ * an empty or non-Slack URL won't fix itself, and retrying would just fill api.log).
+ */
+function sh_post_slack(array $cfg, string $text): string {
     $url = (string)($cfg['SLACK_ALERT_WEBHOOK_URL'] ?? '');
     if ($url === '') {
-        api_log('server_health.slack.not_configured', []);
-        return false;
+        return 'unconfigured';
     }
     // Only ever send to Slack — a typo'd or tampered config value must not
     // turn this into a request to an arbitrary host.
     if (strpos($url, SH_SLACK_URL_PREFIX) !== 0) {
         api_log('server_health.slack.bad_url', []); // never log the URL itself: it is a secret
-        return false;
+        return 'unconfigured';
     }
 
     $ch = curl_init($url);
@@ -74,13 +77,13 @@ function sh_post_slack(array $cfg, string $text): bool {
         // Slack returns plain-text errors ("invalid_payload", "no_service").
         $info['raw_body'] = is_string($body) ? $body : '';
         api_log('server_health.slack.failed', describe_api_failure($info, null) + ['curl_error' => $err]);
-        return false;
+        return 'failed';
     }
-    return true;
+    return 'sent';
 }
 
 if ($testMsg) {
-    $ok = sh_post_slack($cfg, ':test_tube: *[' . strtoupper($env) . '] Test alert* — server health alerts are wired up.'
+    $ok = 'sent' === sh_post_slack($cfg, ':test_tube: *[' . strtoupper($env) . '] Test alert* — server health alerts are wired up.'
         . "\n<{$dashboardUrl}|Open the dashboard>");
     fwrite(STDOUT, $ok ? "Sent.\n" : "Failed — see api.log (server_health.slack.*).\n");
     exit($ok ? 0 : 1);
@@ -123,17 +126,34 @@ $ring  = array_slice($ring, -SH_RING_SIZE);
 
 [$alerts, $notes] = sh_evaluate_alerts($ring, is_array($state['alerts'] ?? null) ? $state['alerts'] : [], $sample['ts']);
 
+// Delivery. Failed posts go to an outbox with their exact text (so a failed
+// "WARNING" is retried as that WARNING, and a failed "RESOLVED" isn't lost),
+// retried every 5 min, oldest first, dropped after SH_OUTBOX_MAX_TRIES.
 $sendAlerts = ($env === 'prod');
+$outbox = is_array($state['outbox'] ?? null) ? $state['outbox'] : [];
 foreach ($notes as $n) {
     api_log('server_health.alert', [
         'rule' => $n['key'], 'kind' => $n['kind'], 'level' => $n['level'], 'value' => $n['value'], 'sent' => $sendAlerts,
     ]);
-    if ($sendAlerts && !sh_post_slack($cfg, sh_format_notification($n, $env, $dashboardUrl))) {
-        // Delivery failed: clear last_notified so the next run retries instead
-        // of waiting 6h. (Resolved notices have no entry to retry; they're logged above.)
-        if (isset($alerts[$n['key']])) $alerts[$n['key']]['last_notified'] = 0;
+    if ($sendAlerts) {
+        $outbox[] = ['text' => sh_format_notification($n, $env, $dashboardUrl), 'tries' => 0, 'next_at' => 0];
     }
 }
+$remaining = [];
+$slackDown = false;
+foreach ($outbox as $msg) {
+    if ($slackDown || ($msg['next_at'] ?? 0) > $sample['ts']) { $remaining[] = $msg; continue; }
+    $res = sh_post_slack($cfg, (string)$msg['text']);
+    if ($res === 'failed') {
+        $slackDown = true; // don't burn 15s per message this run
+        $msg['tries'] = (int)($msg['tries'] ?? 0) + 1;
+        $msg['next_at'] = $sample['ts'] + 300;
+        if ($msg['tries'] < SH_OUTBOX_MAX_TRIES) $remaining[] = $msg;
+        else api_log('server_health.slack.dropped', ['tries' => $msg['tries']]);
+    }
+    // 'sent' and 'unconfigured' leave the outbox.
+}
+$outbox = array_slice($remaining, -20);
 
 // 3) Persist state (latest sample for the dashboard tiles + ring + alerts)
 try {
@@ -142,6 +162,7 @@ try {
         'latest'     => $sample,
         'ring'       => $ring,
         'alerts'     => $alerts,
+        'outbox'     => $outbox,
     ]);
 } catch (\Throwable $e) {
     api_log('server_health.state_write_failed', ['exception' => get_class($e)]);
