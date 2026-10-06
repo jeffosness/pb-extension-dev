@@ -251,6 +251,21 @@ api_log('crm_usage_dashboard.view', [
     .stat-lg.purple { border-left-color: var(--purple); }
     .stat-lg.red    { border-left-color: var(--red); }
 
+    /* Server Health */
+    .health-tile { border-left: 4px solid var(--border); }
+    .health-tile.lvl-ok   { border-left-color: #0ca30c; }
+    .health-tile.lvl-warn { border-left-color: #fab219; }
+    .health-tile.lvl-crit { border-left-color: #d03b3b; }
+    .health-tile .detail { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+    .health-tile .status { font-size: 11px; font-weight: 600; color: var(--text); margin-top: 6px; }
+    .health-chart-head { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 6px; gap: 8px; flex-wrap: wrap; }
+    .health-chart-head .hint { font-size: 12px; color: var(--text-muted); }
+    .health-range { display: inline-flex; gap: 6px; }
+    .health-range-btn { font-size: 12px; padding: 4px 10px; border: 1px solid var(--border); background: var(--card); border-radius: 6px; cursor: pointer; font-weight: 600; color: var(--text); }
+    .health-range-btn.active { background: var(--accent); border-color: var(--accent-dark); color: #fff; }
+    .health-chart-box { position: relative; height: 240px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .alert-danger { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+
     /* Charts */
     .chart-row {
       display: grid;
@@ -550,6 +565,27 @@ api_log('crm_usage_dashboard.view', [
     <?php endif; ?>
     </div>
 
+    <!-- Section 1c: Server Health. Samples are written every minute by
+         scripts/cron/collect_server_health.php and fed by metrics/api/server_health_stats.php.
+         Tiles color by the instant value; Slack alerts need the breach to be
+         sustained (see sh_alert_rules() in metrics/server_health_lib.php). -->
+    <h2 class="section-title" id="server-health">Server Health</h2>
+    <div id="server-health-section">
+      <div id="health-stale" class="alert alert-warning" style="display:none;"></div>
+      <div id="health-alerts" class="alert alert-danger" style="display:none;"></div>
+      <div class="grid-5" id="health-grid">
+        <div class="stat"><div class="label">Server health</div><div class="value">…</div></div>
+      </div>
+      <div class="health-chart-head">
+        <span class="hint">% of capacity over time. CPU = 5-min load vs. cores. Workers = busy Apache processes vs. MaxRequestWorkers; each live dial session holds one.</span>
+        <span class="health-range" role="group" aria-label="Server health range">
+          <button type="button" class="health-range-btn active" data-health-range="24h">24h</button>
+          <button type="button" class="health-range-btn" data-health-range="7d">7 days</button>
+        </span>
+      </div>
+      <div class="health-chart-box"><canvas id="chart-health" aria-label="Server capacity trend"></canvas></div>
+    </div>
+
     <!-- Tab Navigation -->
     <nav class="tab-nav" role="tablist" aria-label="Dashboard sections">
       <button type="button" class="tab-btn active" data-tab="trends"       role="tab" aria-selected="true"  aria-controls="tab-trends">📈 Trends</button>
@@ -774,6 +810,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const sseEndpoint          = "api/sse_usage_stats.php";
   const agentEndpoint        = "api/daily_agent_stats.php";
   const tokenSummaryEndpoint = "api/token_summary_stats.php";
+  const healthEndpoint       = "api/server_health_stats.php";
 
   const hasChartJs = typeof Chart !== "undefined";
 
@@ -869,6 +906,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // needing a full page reload. Independent of the main Promise.all so a
     // slow / failing token-summary endpoint doesn't block anything else.
     loadTokenSummary();
+    loadServerHealth();
 
     const dr  = getDateRange(currentRange);
     const t   = Date.now();
@@ -1161,6 +1199,162 @@ document.addEventListener("DOMContentLoaded", () => {
     d.textContent = s;
     return d.innerHTML;
   }
+
+  // ========================================================================
+  // Server Health — see metrics/api/server_health_stats.php
+  // Tiles refresh on every loadDashboard tick (cheap: state.json). The trend
+  // chart refetches at most every 5 min, or when the range changes.
+  // ========================================================================
+  const HEALTH_COLORS = { cpu: "#2a78d6", mem: "#eb6834", workers: "#1baf7a", disk: "#eda100" };
+  const HEALTH_STATUS = {
+    ok:   { icon: "✓", text: "OK" },
+    warn: { icon: "▲", text: "Warning" },
+    crit: { icon: "■", text: "Critical" },
+  };
+  let healthRange = "24h";
+  let healthHistoryAt = 0;
+
+  function healthLevel(rule, v) {
+    if (!rule || v === null || v === undefined) return null;
+    if (v >= rule.crit) return "crit";
+    if (v >= rule.warn) return "warn";
+    return "ok";
+  }
+
+  function healthTile(label, value, detail, level) {
+    const st = level ? HEALTH_STATUS[level] : null;
+    return '<div class="stat health-tile' + (level ? ' lvl-' + level : '') + '">' +
+      '<div class="label">' + esc(label) + '</div>' +
+      '<div class="value">' + esc(value) + '</div>' +
+      '<div class="detail">' + esc(detail) + '</div>' +
+      (st ? '<div class="status">' + st.icon + ' ' + st.text + '</div>' : '') +
+      '</div>';
+  }
+
+  function pct(v) { return (v === null || v === undefined) ? "n/a" : (Math.round(v * 10) / 10) + "%"; }
+
+  function loadServerHealth() {
+    fetch(healthEndpoint + "?view=latest&t=" + Date.now())
+      .then(r => r.ok ? r.json() : null)
+      .then(resp => { const d = normalize(resp); if (d) renderServerHealth(d); })
+      .catch(() => {});
+    if (Date.now() - healthHistoryAt > 300000) loadHealthHistory();
+  }
+
+  function renderServerHealth(d) {
+    const s = d.latest, rules = d.rules || {};
+    const staleEl = document.getElementById("health-stale");
+    if (staleEl) {
+      if (d.stale) {
+        staleEl.style.display = "";
+        staleEl.textContent = s
+          ? "No new sample in " + Math.round(d.age_sec / 60) + " min. The collector cron may have stopped. Numbers below are from " + new Date(s.ts * 1000).toLocaleString() + "."
+          : "No server health samples yet. They start within a minute of the first deploy that installs the cron file.";
+      } else {
+        staleEl.style.display = "none";
+      }
+    }
+
+    const alertsEl = document.getElementById("health-alerts");
+    const active = Object.entries(d.alerts || {});
+    if (alertsEl) {
+      if (active.length) {
+        alertsEl.style.display = "";
+        alertsEl.innerHTML = "<strong>Active alerts:</strong> " + active.map(([k, a]) => {
+          const r = rules[k] || { label: k, unit: "" };
+          return (a.level === "crit" ? "■ Critical" : "▲ Warning") + " — " + esc(r.label) + " at " + esc(String(a.value)) + esc(r.unit) +
+            " since " + new Date(a.since * 1000).toLocaleTimeString();
+        }).join("<br>");
+      } else {
+        alertsEl.style.display = "none";
+      }
+    }
+
+    const grid = document.getElementById("health-grid");
+    if (!grid || !s) return;
+
+    const disks = s.disks || [];
+    const fullest = disks.reduce((m, x) => (!m || x.used_pct > m.used_pct) ? x : m, null);
+    const ap = s.apache;
+    const app = s.app || {};
+
+    grid.innerHTML = [
+      healthTile("CPU load", pct(s.load5_pct),
+        "load " + (s.load5 ?? "n/a") + " on " + (s.cores ?? "?") + " cores · now " + pct(s.cpu_pct) + " busy",
+        healthLevel(rules.cpu_load, s.load5_pct)),
+      healthTile("Memory", pct(s.mem_used_pct),
+        s.mem_avail_mb != null ? (s.mem_avail_mb / 1024).toFixed(1) + " GB free of " + (s.mem_total_mb / 1024).toFixed(1) + " GB" : "n/a",
+        healthLevel(rules.memory, s.mem_used_pct)),
+      healthTile("Apache workers", ap ? pct(ap.busy_pct) : "n/a",
+        ap ? ap.busy + " busy / " + (ap.max ?? "?") + " max" : "mod_status unreachable",
+        ap ? healthLevel(rules.workers, ap.busy_pct) : null),
+      healthTile("Disk", fullest ? pct(fullest.used_pct) : "n/a",
+        fullest ? fullest.free_gb + " GB free · inodes " + pct(fullest.inode_used_pct) : "n/a",
+        fullest ? healthLevel(rules.disk, fullest.used_pct) : null),
+      healthTile("Live dial sessions", fmt(app.sse_live ?? 0),
+        fmt(app.session_files ?? 0) + " session files · logs " + (app.log_dir_mb ?? 0) + " MB",
+        null),
+    ].join("");
+  }
+
+  function loadHealthHistory() {
+    healthHistoryAt = Date.now();
+    fetch(healthEndpoint + "?view=history&range=" + healthRange + "&t=" + Date.now())
+      .then(r => r.ok ? r.json() : null)
+      .then(resp => { const d = normalize(resp); if (d) renderHealthChart(d.points || []); })
+      .catch(() => {});
+  }
+
+  function renderHealthChart(points) {
+    if (!hasChartJs) return;
+    destroyChart("chart-health");
+    const canvas = document.getElementById("chart-health");
+    if (!canvas) return;
+    const long = healthRange === "7d";
+    const labels = points.map(p => {
+      const dt = new Date(p.t * 1000);
+      const hm = String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0");
+      return long ? dt.toLocaleDateString(undefined, { weekday: "short" }) + " " + hm : hm;
+    });
+    const series = [
+      ["cpu", "CPU load"], ["mem", "Memory"], ["workers", "Apache workers"], ["disk", "Disk"],
+    ].map(([k, label]) => ({
+      label,
+      data: points.map(p => p[k]),
+      borderColor: HEALTH_COLORS[k],
+      backgroundColor: HEALTH_COLORS[k],
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      tension: 0.2,
+    }));
+    charts["chart-health"] = new Chart(canvas, {
+      type: "line",
+      data: { labels, datasets: series },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "bottom", labels: { boxWidth: 12, padding: 16 } },
+          tooltip: { callbacks: { label: c => c.dataset.label + ": " + (c.parsed.y === null ? "n/a" : c.parsed.y + "%") } },
+        },
+        scales: {
+          y: { beginAtZero: true, suggestedMax: 100, ticks: { callback: v => v + "%" }, grid: { color: "#eee" } },
+          x: { grid: { display: false }, ticks: { maxTicksLimit: long ? 7 : 12, autoSkip: true, maxRotation: 0 } },
+        },
+      },
+    });
+  }
+
+  document.querySelectorAll("[data-health-range]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      healthRange = btn.dataset.healthRange;
+      document.querySelectorAll("[data-health-range]").forEach(b => b.classList.toggle("active", b === btn));
+      loadHealthHistory();
+    });
+  });
 
   // Token Security section refresh — see metrics/api/token_summary_stats.php
   // for the JSON shape and token_summary_lib.php for the underlying

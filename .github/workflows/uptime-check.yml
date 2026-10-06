@@ -1,0 +1,65 @@
+name: Uptime check (prod)
+
+# Outside-in "is the server up?" check. The on-box health collector
+# (scripts/cron/collect_server_health.php) can't report an outage that takes
+# down the box itself, so GitHub checks prod from outside every 15 minutes.
+#
+# On failure:
+#   - GitHub emails whoever last changed this file's `schedule` (default
+#     behavior for scheduled workflows).
+#   - If the SLACK_ALERT_WEBHOOK_URL repo secret is set, it also posts to
+#     the same Slack channel as the on-box alerts.
+#
+# GitHub may delay scheduled runs by a few minutes under load. Treat this as
+# "you'll hear within ~20-30 min", not as precise paging.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: uptime-check
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check prod health.php (3 attempts)
+        id: probe
+        run: |
+          url="https://extension.phoneburner.biz/health.php"
+          for attempt in 1 2 3; do
+            code=$(curl -s -o body.json -w '%{http_code}' --max-time 20 "$url" || echo 000)
+            ok=$(jq -r '.ok // false' body.json 2>/dev/null || echo false)
+            echo "attempt $attempt: http=$code ok=$ok"
+            if [ "$code" = "200" ] && [ "$ok" = "true" ]; then
+              echo "Prod is healthy."
+              exit 0
+            fi
+            sleep 20
+          done
+          # Print only the names of failing checks, never the full body (it holds server paths).
+          jq -r '.checks[]? | select(.ok == false) | "failing check: " + .name' body.json 2>/dev/null || true
+          echo "summary=http $code, ok=$ok" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_URL: ${{ secrets.SLACK_ALERT_WEBHOOK_URL }}
+          SUMMARY: ${{ steps.probe.outputs.summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_URL" ]; then
+            echo "SLACK_ALERT_WEBHOOK_URL secret not set; relying on GitHub's failure email."
+            exit 0
+          fi
+          case "$SLACK_URL" in https://hooks.slack.com/*) ;; *) echo "secret is not a Slack webhook URL; skipping"; exit 0;; esac
+          payload=$(jq -n --arg t ":red_circle: *[PROD] DOWN* — extension.phoneburner.biz/health.php failed 3 checks from outside (${SUMMARY:-no response}). <${RUN_URL}|Run log>" '{text: $t}')
+          curl -s -X POST -H 'Content-Type: application/json' --data "$payload" --max-time 15 "$SLACK_URL" >/dev/null

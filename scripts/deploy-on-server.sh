@@ -92,4 +92,39 @@ return [
 PHP_EOF
 
 echo "[deploy] stamped version.php: version=$DEPLOYED_VERSION commit=$DEPLOYED_COMMIT env=$ENV"
+
+# Install this env's cron file from the repo (scripts/cron/pb-extension.cron.tmpl).
+# Each env installs its OWN file from its OWN checkout, so prod's cron only
+# changes when a prod tag deploys. A failure here warns but does NOT fail the
+# deploy: monitoring must never block shipping a fix. The dashboard's
+# "collector stale" banner shows if the cron stops running.
+install_cron() {
+  local tmpl="$REPO_DIR/scripts/cron/pb-extension.cron.tmpl"
+  if [[ ! -f "$tmpl" ]]; then
+    echo "[deploy] cron: no template at $tmpl — skipping"
+    return 0
+  fi
+  # This writes a root-owned file into /etc/cron.d, so only accept the two
+  # known checkout paths. The values also go into a sed replacement.
+  if [[ ! "$REPO_DIR" =~ ^/opt/pb-extension(-dev)?$ ]]; then
+    echo "[deploy] cron: WARNING unexpected REPO_DIR '$REPO_DIR' — not installing cron"
+    return 0
+  fi
+  local name="pb-extension"
+  [[ "$ENV" == "dev" ]] && name="pb-extension-dev"
+  local dest="/etc/cron.d/$name"
+  # Temp name starts with "." so cron ignores it until the atomic rename.
+  local tmp
+  tmp=$(mktemp /etc/cron.d/.pb-cron.XXXXXX) || { echo "[deploy] cron: WARNING mktemp failed"; return 0; }
+  sed "s#{{REPO_DIR}}#$REPO_DIR#g" "$tmpl" > "$tmp"
+  if grep -q '{{' "$tmp"; then
+    echo "[deploy] cron: WARNING unreplaced placeholder in template — not installing"
+    rm -f "$tmp"; return 0
+  fi
+  chown root:root "$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$dest" \
+    && echo "[deploy] cron: installed $dest" \
+    || { echo "[deploy] cron: WARNING install failed"; rm -f "$tmp"; }
+}
+install_cron || echo "[deploy] cron: WARNING install_cron errored"
+
 echo "[deploy] done"
