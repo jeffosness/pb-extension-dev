@@ -6,6 +6,16 @@ Ordered newest-first. When adding a new entry, use the template at the bottom of
 
 ---
 
+## 2026-10-06 — Dashboard data feeds were public; only the dashboard page was behind Basic Auth
+
+**What happened:** While scoping server CPU/disk monitoring for the dashboard, a no-credentials `curl` against prod showed `metrics/crm_usage_dashboard.php` correctly returned 401, but its four JSON feeds (`api/core/{crm_usage,sse_usage,daily_agent,token_summary}_stats.php`) returned 200 to anyone. They exposed usage volume, per-CRM breakdowns, PhoneBurner user IDs mapped to CRM usage (`by_user`), call-outcome counts, live session counts, and server file paths (`audit_path`). No tokens or contact PII. Fixed by moving the feeds to `metrics/api/` (covered by the vhost's `<Location "/metrics/">` Basic Auth) and adding `metrics_require_auth()` in `metrics/metrics_auth.php`, a PHP-level check that refuses to serve unless Apache authenticated the request.
+
+**Why we didn't catch it:** The auth boundary lives in the Apache vhost (server config, not the repo), and it's path-based: `/metrics/` only. Each feed was added next to other `api/core/` endpoints because that's where JSON endpoints live, and their header comments asserted "the dashboard itself is admin-authed via metrics/.htaccess" — true for the page, never verified for the feed. Code review checks what the code does, but nothing in the repo shows which URLs are actually behind auth. Every reviewer had to trust the comment.
+
+**Process change:** (1) Dashboard/admin-only endpoints live under `metrics/` and call `metrics_require_auth()`. That gives two independent gates, and the PHP one is version-controlled. (2) To verify an auth claim, run a no-credentials `curl -s -o /dev/null -w "%{http_code}"` against prod after deploy; reading a comment isn't verification. Put that curl in the Post-Deploy Verification section of any PR that adds an admin endpoint.
+
+---
+
 ## 2026-09-23 — Same-family adversarial review missed a BLOCKER that cross-family review caught
 
 **What happened:** Closing out #228 (log-consolidation arc), phase 4 (PR #241) migrated 8 remaining `log_msg` sites to `_pb_write_api_log`. Three of the migrations used `['path' => $path]` for the filesystem path argument. Both `api_log()` and `_pb_write_api_log()` build their final log line via `$base + $fields` — PHP's array UNION operator, which keeps LEFT-operand values on key collision (even when left is `null`). `$base['path']` (the scrubbed `$_SERVER['REQUEST_URI']`) always won, and the filesystem path was silently discarded from the log entry. Support triage would see the event but not the filename that failed to open/lock/write — the whole point of the log line. Two Claude adversarial reviewers ran on PR #241 with distinct hostile lenses per the [ADVERSARIAL_REVIEW_PLAYBOOK](ADVERSARIAL_REVIEW_PLAYBOOK.md); both said MERGE. A subsequent Codex (OpenAI cross-family) review caught it in ~2 minutes as its ONLY finding. Fixed in the same PR by renaming to `'file_path' => $path` for all 3 sites. Filed #242 for systemic protection.

@@ -2,15 +2,17 @@
 // server/public/metrics/crm_usage_dashboard.php
 //
 // Dashboard that visualizes:
-// - ../api/core/crm_usage_stats.php    (CRM usage events)
-// - ../api/core/sse_usage_stats.php    (SSE dial session metrics)
-// - ../api/core/daily_agent_stats.php  (call productivity from daily_stats)
+// - api/crm_usage_stats.php    (CRM usage events)
+// - api/sse_usage_stats.php    (SSE dial session metrics)
+// - api/daily_agent_stats.php  (call productivity from daily_stats)
 //
 // Uses core/bootstrap.php for shared hardening/CORS/OPTIONS behavior.
 // IMPORTANT: This page is HTML, not JSON, so we opt out of JSON headers.
 
 define('PB_BOOTSTRAP_NO_JSON', true);
 require_once __DIR__ . '/../api/core/bootstrap.php';
+require_once __DIR__ . '/metrics_auth.php';
+metrics_require_auth();
 
 header('Content-Type: text/html; charset=utf-8');
 
@@ -454,11 +456,11 @@ api_log('crm_usage_dashboard.view', [
 
     <!-- Section 1b: Token Security (server-rendered for first paint;
                                     JS auto-refresh updates in-place via
-                                    /api/core/token_summary_stats.php) -->
+                                    metrics/api/token_summary_stats.php) -->
     <?php
     // Read the audit log and compute summary + anomalies for the last 24h.
     // Shared computation with the JSON endpoint used by JS auto-refresh —
-    // see api/core/token_summary_lib.php and api/core/token_summary_stats.php.
+    // see api/core/token_summary_lib.php and metrics/api/token_summary_stats.php.
     require_once __DIR__ . '/../utils.php';
     require_once __DIR__ . '/../api/core/token_summary_lib.php';
 
@@ -768,10 +770,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const msgEl        = document.getElementById("message");
   const contentEl    = document.getElementById("content");
 
-  const crmEndpoint          = "../api/core/crm_usage_stats.php";
-  const sseEndpoint          = "../api/core/sse_usage_stats.php";
-  const agentEndpoint        = "../api/core/daily_agent_stats.php";
-  const tokenSummaryEndpoint = "../api/core/token_summary_stats.php";
+  const crmEndpoint          = "api/crm_usage_stats.php";
+  const sseEndpoint          = "api/sse_usage_stats.php";
+  const agentEndpoint        = "api/daily_agent_stats.php";
+  const tokenSummaryEndpoint = "api/token_summary_stats.php";
 
   const hasChartJs = typeof Chart !== "undefined";
 
@@ -1160,7 +1162,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return d.innerHTML;
   }
 
-  // Token Security section refresh — see api/core/token_summary_stats.php
+  // Token Security section refresh — see metrics/api/token_summary_stats.php
   // for the JSON shape and token_summary_lib.php for the underlying
   // computation. Fires on every loadDashboard tick so auto-refresh picks
   // up new anomalies without a full page reload.

@@ -53,6 +53,15 @@ server/public/cache/*
 !server/public/metrics/.htaccess
 !server/public/cache/.htaccess
 
+# metrics/ also holds code (dashboard + its JSON feeds). Track the PHP;
+# everything else in there (logs, sse_presence/, health samples) stays ignored.
+!server/public/metrics/*.php
+# Local-only seed script; writes fake data, must never reach the server.
+server/public/metrics/generate_test_data.php
+!server/public/metrics/api/
+server/public/metrics/api/*
+!server/public/metrics/api/*.php
+
 # Server-only logs outside webroot
 var/log/
 *.log
