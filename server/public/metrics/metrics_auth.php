@@ -23,7 +23,12 @@ function metrics_require_auth(): void {
         return;
     }
 
-    $user = (string)($_SERVER['REMOTE_USER'] ?? $_SERVER['PHP_AUTH_USER'] ?? $_SERVER['REDIRECT_REMOTE_USER'] ?? '');
+    // Only trust identity that Apache set AFTER verifying the password.
+    // Do NOT fall back to PHP_AUTH_USER: mod_php fills it straight from the
+    // request's Authorization header with no validation, so with the vhost
+    // rule missing, `curl -u anyone:anything` would pass. (Codex review,
+    // 2026-10-06.)
+    $user = (string)($_SERVER['REMOTE_USER'] ?? $_SERVER['REDIRECT_REMOTE_USER'] ?? '');
     if ($user !== '') {
         return;
     }
