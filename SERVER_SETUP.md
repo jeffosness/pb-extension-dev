@@ -358,6 +358,18 @@ sudo systemctl reload apache2
 
 Verify by hitting `https://extension.phoneburner.biz/metrics/crm_usage_dashboard.php` and `https://extension-dev.phoneburner.biz/metrics/crm_usage_dashboard.php` — both should prompt for credentials and render the dashboard after auth.
 
+The dashboard's JSON feeds live in `/metrics/api/` so the same `<Location "/metrics/">` rule covers them. Each metrics page also calls `metrics_require_auth()` (`metrics/metrics_auth.php`), which returns 404 if Apache didn't authenticate the request, so a vhost that loses the `<Location>` block fails closed instead of going public. Confirm with no credentials:
+
+```bash
+for p in metrics/crm_usage_dashboard.php metrics/api/crm_usage_stats.php metrics/api/sse_usage_stats.php          metrics/api/daily_agent_stats.php metrics/api/token_summary_stats.php; do
+  printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}
+' "https://extension.phoneburner.biz/$p"
+done
+# Every line must be 401 (or 404). A 200 means the data is public.
+```
+
+**Rule:** admin-only endpoints go under `metrics/`, never `api/`. See LESSONS.md 2026-10-06.
+
 ---
 
 ## 8. GitHub Actions deploy automation

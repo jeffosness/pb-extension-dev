@@ -1,5 +1,5 @@
 <?php
-// server/public/api/core/sse_usage_stats.php
+// server/public/metrics/api/sse_usage_stats.php
 //
 // Returns lightweight SSE usage stats from:
 // - server/public/metrics/sse_usage-YYYY-MM-DD.log  (daily JSONL connect/disconnect events)
@@ -8,7 +8,9 @@
 // Uses core/bootstrap.php for shared hardening/CORS/OPTIONS behavior.
 // JSON endpoint.
 
-require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../../api/core/bootstrap.php';
+require_once __DIR__ . '/../metrics_auth.php';
+metrics_require_auth();
 require_once __DIR__ . '/../../utils.php';
 
 // ✅ Rate limit: 60 requests per minute per client_id
@@ -44,12 +46,7 @@ function date_range_ymd(string $start, string $end): array {
 }
 
 function read_presence_active_now(int $activeWindowSec = 180): array {
-    $presenceDir = __DIR__ . '/../../metrics/sse_presence';
-    // __DIR__ here is server/public/api/core, so ../../metrics = server/public/metrics
-    // (core -> api -> public) is 2 up, then /metrics
-
-    // However, since we're in api/core, easier to compute public dir like other files:
-    $publicDir = dirname(__DIR__, 2); // core -> api -> public
+    $publicDir = dirname(__DIR__, 2); // api -> metrics -> public
     $presenceDir = $publicDir . '/metrics/sse_presence';
 
     $now = time();
@@ -125,7 +122,7 @@ function get_session_crm_lookup(): array {
 }
 
 function read_daily_sse_log(string $dateYmd): array {
-    $publicDir = dirname(__DIR__, 2); // core -> api -> public
+    $publicDir = dirname(__DIR__, 2); // api -> metrics -> public
     $metricsDir = $publicDir . '/metrics';
     
     // Use safe_file_path for defensive path traversal protection
@@ -325,7 +322,7 @@ foreach ($dates as $d) {
 $activeNow = read_presence_active_now($activeWindowSec);
 
 // Calculate true P95 from all durations across all days
-$publicDir = dirname(__DIR__, 2); // core -> api -> public
+$publicDir = dirname(__DIR__, 2); // api -> metrics -> public
 $metricsDir = $publicDir . '/metrics';
 $allDurations = [];
 

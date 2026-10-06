@@ -1,5 +1,5 @@
 <?php
-// server/public/api/core/daily_agent_stats.php
+// server/public/metrics/api/daily_agent_stats.php
 //
 // Aggregates per-agent daily stats files from server/public/daily_stats/
 // and returns call productivity metrics (total calls, connections, appointments,
@@ -7,7 +7,9 @@
 //
 // Files written by call_done.php: daily_stats/{date}_{agentId}.json
 
-require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../../api/core/bootstrap.php';
+require_once __DIR__ . '/../metrics_auth.php';
+metrics_require_auth();
 require_once __DIR__ . '/../../utils.php';
 
 // Rate limit: dashboard-only endpoint
@@ -127,7 +129,7 @@ function normalize_status(string $status): string {
     return ucwords($lower);
 }
 
-$publicDir     = dirname(__DIR__, 2); // core -> api -> public
+$publicDir     = dirname(__DIR__, 2); // api -> metrics -> public
 $dailyStatsDir = $publicDir . '/daily_stats';
 
 $totalCalls        = 0;

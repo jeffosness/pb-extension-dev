@@ -1,11 +1,13 @@
 <?php
-// server/public/api/core/crm_usage_stats.php
+// server/public/metrics/api/crm_usage_stats.php
 //
 // Reads CRM usage logs and returns aggregated counts (wrapped via api_ok()).
 // Prefers daily files (crm_usage-YYYY-MM-DD.log) written by track_crm_usage.php.
 // Falls back to legacy monolithic crm_usage.log for historical data.
 
-require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../../api/core/bootstrap.php';
+require_once __DIR__ . '/../metrics_auth.php';
+metrics_require_auth();
 require_once __DIR__ . '/../../utils.php';
 
 // Date filtering (same pattern as sse_usage_stats.php)
@@ -224,7 +226,7 @@ if (count($dates) > 31) {
     api_error('Date range too large (max 31 days)', 'bad_request', 400);
 }
 
-$publicDir  = dirname(__DIR__, 2); // core -> api -> public
+$publicDir  = dirname(__DIR__, 2); // api -> metrics -> public
 $metricsDir = $publicDir . '/metrics';
 $legacyFile = $metricsDir . '/crm_usage.log';
 
