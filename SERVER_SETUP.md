@@ -38,6 +38,32 @@ Before starting, have these in hand:
 
 ---
 
+## 0. Lock down SSH first (key-only, no root)
+
+Do this before anything else. A fresh VPS usually allows password and root login, and bots start guessing within minutes (our VPS had ~18k failed attempts in one auth.log). Keep your current session open throughout, and make sure the provider's web console (IONOS Cloud Panel → server → Actions → KVM/Remote Console) works as a fallback.
+
+1. From your own PC, create a key and install it (Windows PowerShell shown; `ssh-copy-id` does the same on macOS/Linux):
+   ```powershell
+   ssh-keygen -t ed25519 -C "<you>-pc"
+   ssh-keygen -y -f $env:USERPROFILE\.ssh\id_ed25519        # confirms the passphrase BEFORE you rely on it
+   type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh $DEPLOY_USER@<server> "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+   ssh -o PasswordAuthentication=no $DEPLOY_USER@<server> "echo key login works"
+   ```
+   On first connect, compare the host fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server before typing `yes`. Keys piped from Windows carry CRLF; clean them with `sed -i 's/\r$//' ~/.ssh/authorized_keys`.
+2. Only after `key login works`, on the server:
+   ```bash
+   sudo tee /etc/ssh/sshd_config.d/00-hardening.conf >/dev/null <<'EOF'
+   # Named 00- so it wins: sshd uses the FIRST value it sees, and 50-cloud-init.conf may set PasswordAuthentication yes.
+   PasswordAuthentication no
+   KbdInteractiveAuthentication no
+   PermitRootLogin no
+   EOF
+   sudo sshd -t && sudo systemctl reload ssh
+   ```
+3. From a **new** terminal: `ssh $DEPLOY_USER@<server>` must still work. `ssh -o PubkeyAuthentication=no $DEPLOY_USER@<server>` must fail with `Permission denied (publickey)`. If the first fails, undo it from the still-open session: `sudo rm /etc/ssh/sshd_config.d/00-hardening.conf && sudo systemctl reload ssh`.
+
+The GitHub Actions deploy key (§8a) is a key, so deploys are unaffected.
+
 ## 1. System packages
 
 ```bash
@@ -450,6 +476,7 @@ What runs:
 |---|---|
 | every minute | `scripts/cron/collect_server_health.php`: server health sample + Slack alerts (see below) |
 | daily 03:00 | delete `metrics/sse_presence/*.json` older than ~2 days |
+| hourly | delete dial-session files (`sessions/<token>.json`) untouched for 6d23h, so always gone within 7 days: privacy-policy retention |
 | hourly | delete rate-limit counters (`cache/rl_*.txt`) older than 60 min |
 | every 15 min | delete expired temp codes (`cache/temp_code_*.json`) older than 10 min |
 
