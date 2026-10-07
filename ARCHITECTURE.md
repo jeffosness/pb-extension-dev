@@ -217,6 +217,8 @@ Access tokens are refreshed lazily. `load_{provider}_tokens()` returns the store
 
 Location: `server/public/sessions/{session_token}.json`
 
+Retention: deleted within 7 days of last activity (file mtime, which moves on create and on every PhoneBurner webhook) by the repo-managed cron (`scripts/cron/pb-extension.cron.tmpl`). That is the promise in `privacy.html`. Nothing deletes a session file when a session ends: `session_stop` is best-effort, and `call_done` for the in-flight call can arrive after it.
+
 ```json
 {
   "session_token": "abc123...",
