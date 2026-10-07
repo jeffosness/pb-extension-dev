@@ -450,7 +450,7 @@ What runs:
 |---|---|
 | every minute | `scripts/cron/collect_server_health.php`: server health sample + Slack alerts (see below) |
 | daily 03:00 | delete `metrics/sse_presence/*.json` older than ~2 days |
-| daily 03:15 | delete dial-session files (`sessions/<32-hex>.json`) untouched for 7+ days: privacy-policy retention |
+| hourly | delete dial-session files (`sessions/<32-hex>.json`) untouched for 6d23h, so always gone within 7 days: privacy-policy retention |
 | hourly | delete rate-limit counters (`cache/rl_*.txt`) older than 60 min |
 | every 15 min | delete expired temp codes (`cache/temp_code_*.json`) older than 10 min |
 
