@@ -521,6 +521,8 @@ A: Yes — but **disconnect before uninstalling** for a complete cleanup:
 1. In the extension popup → Settings → click **Disconnect** for each connected service (PhoneBurner, HubSpot, Close, Apollo). This clears tokens both locally and on PhoneBurner's backend.
 2. Then uninstall the extension from `chrome://extensions`.
 
+**Dial session data** (the contact list the backend keeps so the Follow widget can show who's being called) is deleted automatically within 7 days of the session's last activity. Nothing is needed from the customer.
+
 **Why the order matters:** Uninstalling alone only removes local Chrome data — it does not signal the server to clear the backend tokens. If a customer has already uninstalled without disconnecting first, the backend tokens become orphaned (still owner-restricted on disk, but no longer reachable from the extension). To request manual server-side cleanup in that case, contact PhoneBurner support with the customer's account email.
 
 ---

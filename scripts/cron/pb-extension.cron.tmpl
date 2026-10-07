@@ -16,6 +16,15 @@ MAILTO=""
 # Stale SSE presence files (daily, 03:00 server time). Live sessions rewrite theirs constantly.
 0 3 * * * www-data find {{REPO_DIR}}/server/public/metrics/sse_presence -type f -name '*.json' -mtime +1 -delete
 
+# Dial-session state files untouched for 7+ days (daily, 03:15). They hold the
+# session's contact list (names, phones), so this enforces the privacy policy's
+# retention promise. mtime moves on create and on every PhoneBurner webhook,
+# and SSE gives up 60 min after the last webhook, so 7 days leaves wide margin
+# for a PB dial session resumed days later. Only 32-hex-char token files match;
+# sessions/.htaccess is never touched. Path is hard-coded because
+# session_file_path() in utils.php ignores the SESSIONS_DIR config key.
+15 3 * * * www-data find {{REPO_DIR}}/server/public/sessions -maxdepth 1 -type f -regextype posix-extended -regex '.*/[a-f0-9]{32}\.json' -mtime +7 -delete
+
 # Rate-limit counters older than an hour (hourly).
 5 * * * * www-data find {{REPO_DIR}}/server/public/cache -type f -name 'rl_*.txt' -mmin +60 -delete
 

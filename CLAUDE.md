@@ -868,7 +868,7 @@ Keep these answers in sync:
 - ✅ Collect: CRM contact data (name, phone, email) for dial session creation
 - ✅ Store server-side: PhoneBurner PAT + OAuth tokens for every connected L3 CRM (currently HubSpot, Close, Apollo — see `server/public/tokens/` for the live set). Tokens stored outside webroot with 0600 permissions; not transmitted to third parties.
 - ❌ Sell or share: No data sold or shared with third parties
-- ✅ Data retention: Session data deleted when session ends; logs rotated after 90 days
+- ✅ Data retention: Session files (contacts_map = names/phones) deleted 7 days after last activity by the repo-managed cron (`scripts/cron/pb-extension.cron.tmpl`); logs rotated after 90 days. Keep this, `privacy.html`, and the KB "Can I delete my data?" answer in sync.
 - ✅ Data transmission: Only to PhoneBurner API and CRM APIs (user-initiated)
 
 ### Review Response Template
