@@ -42,6 +42,7 @@ Token values themselves are **never** stored in the browser after the initial sa
 - HTTPS only between extension and backend (enforced by extension `host_permissions` in `manifest.json`)
 - TLS via Let's Encrypt, auto-renewed by `certbot.timer`
 - No tokens in URLs (the SSE bootstrap uses single-use `temp_code` exchanges via `temp_code_store()`/`temp_code_retrieve_and_delete()`)
+- CRM OAuth connects (HubSpot, Close, Apollo) use a random, single-use, 10-minute, provider-bound `state` code (`oauth_state_create()`/`oauth_state_consume()`); the extension `client_id` never appears in OAuth URLs. Tokens are saved under the `client_id` recorded when the connect started.
 - Webhook traffic from PhoneBurner over HTTPS
 
 ## What's audited

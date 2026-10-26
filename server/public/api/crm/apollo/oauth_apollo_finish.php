@@ -3,7 +3,7 @@
 //
 // Apollo OAuth callback page.
 // Apollo redirects the user here with ?code=...&state=...
-// - state is the extension client_id (set in oauth_apollo_start.php)
+// - state is a one-time code from oauth_apollo_start.php, redeemed for the client_id
 // - exchange code -> tokens via Apollo token endpoint
 // - save tokens under TOKENS_DIR/apollo/<client_id>.json
 //
@@ -48,14 +48,18 @@ if (!$code || !$state) {
     apollo_error_page('Apollo OAuth error', 'Missing code or state in callback.', 400);
 }
 
-// state is the extension client_id we set in oauth_apollo_start.php
-$client_id = preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$state);
+// state is a one-time code from oauth_apollo_start.php. Redeem it (single
+// use, 10-min TTL, provider-bound) for the client_id it was issued to. Done
+// BEFORE the code exchange so a forged/expired state never reaches Apollo.
+$client_id = oauth_state_consume((string)$state, 'apollo');
 
-if ($client_id === '' || strlen($client_id) > 128) {
+if ($client_id === null) {
     api_log('apollo_oauth_finish.reject.bad_state', [
-        'state_len' => is_string($state) ? strlen($state) : null,
+        'state_len'  => is_string($state) ? strlen($state) : null,
+        'looks_like' => preg_match('/^[a-f0-9]{32}$/', (string)$state) ? 'code' : 'legacy_or_garbage',
     ]);
-    apollo_error_page('Apollo OAuth error', 'Invalid state parameter.', 400);
+    apollo_error_page('Apollo connection link expired',
+        'This connect link has expired or was already used. Close this tab, then click "Connect Apollo" in the PhoneBurner extension again.', 400);
 }
 
 $apolloClientId     = $cfg['APOLLO_CLIENT_ID'] ?? null;

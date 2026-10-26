@@ -124,6 +124,75 @@ function temp_code_retrieve_and_delete(string $code): ?string {
 }
 
 // -------------------------
+// OAuth "state" codes (HubSpot / Close / Apollo connect flows)
+// -------------------------
+// The OAuth state must be unguessable, single-use and short-lived, and must
+// never carry the extension client_id (a bearer identifier) into CRM-side
+// URLs, browser history or access logs. So start stores the client_id
+// server-side under a random one-time code and uses that code as the state;
+// finish redeems it exactly once, within OAUTH_STATE_TTL, for the same
+// provider, and saves tokens under the client_id recorded at start.
+//
+// Stored in the same cache dir/naming as temp codes, so the existing cron
+// cleanup (temp_code_*.json older than 10 min) also reaps abandoned states.
+// A `purpose` tag keeps the two kinds from being redeemed as each other.
+
+const OAUTH_STATE_TTL = 600; // 10 min; must stay <= the cron cleanup age
+// NOTE: the cron cleanup only reaps {REPO_DIR}/server/public/cache. If
+// CACHE_DIR is ever set in config.php, add a matching cron line too, or
+// abandoned states (each holding a client_id) are never deleted.
+
+function oauth_state_create(string $client_id, string $provider): string {
+    // The start endpoints are unauthenticated and this writes $client_id to
+    // disk, so bound it before writing (real ids are 36-char UUIDs).
+    // get_client_id_or_fail() only strips characters; it doesn't cap length.
+    if (!preg_match('/^[A-Za-z0-9_-]{8,128}$/', $client_id)) {
+        throw new InvalidArgumentException('Invalid client_id for OAuth state');
+    }
+    $code = bin2hex(random_bytes(16));
+    $data = [
+        'purpose'    => 'oauth:' . $provider,
+        'client_id'  => $client_id,
+        'created_at' => time(),
+        'expires_at' => time() + OAUTH_STATE_TTL,
+    ];
+    $path = temp_code_file_path($code);
+    if (@file_put_contents($path, json_encode($data, JSON_UNESCAPED_SLASHES), LOCK_EX) === false) {
+        throw new RuntimeException('Unable to store OAuth state');
+    }
+    @chmod($path, 0600);
+    return $code;
+}
+
+/**
+ * Redeem an OAuth state code. Returns the client_id it was issued for, or null
+ * if the code is malformed, unknown, already used, expired, or for another
+ * provider. Single-use even under concurrent requests: the file is claimed by
+ * atomic rename before it is read, so only one caller can win it.
+ */
+function oauth_state_consume(string $state, string $provider): ?string {
+    if (!preg_match('/^[a-f0-9]{32}$/', $state)) return null;
+
+    $path = temp_code_file_path($state);
+    // Claimed name keeps the temp_code_*.json shape so the cron cleanup reaps
+    // it if this request dies between rename and unlink.
+    $claimed = substr($path, 0, -5) . '_claimed_' . bin2hex(random_bytes(4)) . '.json';
+    if (!@rename($path, $claimed)) return null; // unknown, or another request won it
+
+    $raw = @file_get_contents($claimed);
+    @unlink($claimed);
+    $data = $raw ? json_decode($raw, true) : null;
+    if (!is_array($data)) return null;
+
+    if (($data['purpose'] ?? '') !== 'oauth:' . $provider) return null;
+    if ((int)($data['expires_at'] ?? 0) < time()) return null;
+
+    $client_id = preg_replace('/[^a-zA-Z0-9_-]/', '', (string)($data['client_id'] ?? ''));
+    if ($client_id === '' || strlen($client_id) > 128) return null;
+    return $client_id;
+}
+
+// -------------------------
 // Safe file path validation (defensive path traversal protection)
 // -------------------------
 // Ensures a constructed file path stays within the intended base directory.
