@@ -179,6 +179,14 @@ $callbacks = [
     'callback_type' => 'api_calldone',
     'callback'      => $base . '/webhooks/call_done.php?s=' . urlencode($session_token),
   ],
+  [
+    // EXP-5135 Call Transcript webhook: fires minutes after a recorded call;
+    // forth_transcript_logger attaches the AI summary + transcript as a contact
+    // note. Ignored by PB until their prod deploy (unknown callback types are
+    // skipped). See GH #258.
+    'callback_type' => 'api_transcript',
+    'callback'      => $base . '/webhooks/transcript_done.php?s=' . urlencode($session_token),
+  ],
 ];
 
 $payload = [

@@ -16,8 +16,8 @@
 // which surfaces in the contact's "Calls" tab and the "Last Call Activity" column.
 // User-entered call notes are additionally posted to /v1/contacts/{cid}/notes.
 //
-// STATUS: dormant until crm_name === 'forth' sessions exist (registry still lists
-// Forth as generic L1). Untested end-to-end pending live API credentials. TODOs:
+// STATUS: live (a Forth team is dialing with call activities logging in prod).
+// Remaining TODOs:
 //   - dialer_id: PhoneBurner is not yet in Forth's dialer_id list — omitted until
 //     Forth adds a "PhoneBurner" entry (raise with Forth). See GH issue.
 //   - assigned_agent: only sent when the dial-session captured the Forth userID;
@@ -307,6 +307,21 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
         $logData['curl_error']   = $fail['curl_error'];
     }
     api_log('forth_call_log', $logData);
+
+    // Drop a transcript-target record so the async api_transcript webhook
+    // (EXP-5135, minutes later) can attach the AI summary + transcript to this
+    // contact. Keyed by PB's call_id (same id the webhook sends). Only once the
+    // call activity itself logged OK. See webhooks/transcript_done.php +
+    // forth_transcript_logger.php.
+    $txCallId = $lastCall['call_id'] ?? null;
+    if ($callOk && $txCallId !== null && function_exists('transcript_target_store')) {
+        transcript_target_store($txCallId, [
+            'provider'  => 'forth',
+            'client_id' => $clientId,
+            'forth_cid' => (string)$calledExternalId,
+            'note_text' => $noteText,
+        ]);
+    }
 
     // -------------------------------------------------------------------------
     // 2) If the user wrote call notes, also post them as a Note on the contact

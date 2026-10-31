@@ -1308,6 +1308,96 @@ function load_session_state($session_token)
     return is_array($data) ? $data : null;
 }
 
+// -----------------------------------------------------------------------------
+// Transcript targets: correlate an async transcript webhook back to the CRM
+// call activity we logged at call_done time.
+//
+// Call transcripts (PB EXP-5135) arrive minutes AFTER the call via the
+// `api_transcript` webhook, which carries `call_id` (identical to call_done's)
+// but NOT the CRM record id. So when a provider call-logger creates its CRM
+// call activity, it drops a small per-call record here keyed by PB's `call_id`.
+// webhooks/transcript_done.php reads it back by `call_id` to know which activity
+// to enrich. One file per call_id = race-free under multi-line dialing (unlike a
+// shared session-state map). Lives in a Deny-from-all dir like sessions/.
+//
+// Contents are mildly sensitive (CRM ids + the note text we built), never
+// tokens — stored 0600 via atomic_write_json, swept by the retention cron.
+// -----------------------------------------------------------------------------
+function transcript_target_path($call_id): ?string
+{
+    // PB dial-session call_id is an integer; allow alnum + dash so the same
+    // store can serve the softphone UUID call_id later. safe_file_path blocks
+    // traversal; the regex is defence-in-depth on the basename.
+    $safe = preg_replace('/[^a-zA-Z0-9-]/', '', (string)$call_id);
+    if ($safe === '' || $safe === null) {
+        return null;
+    }
+    return safe_file_path(__DIR__ . '/transcript_targets', $safe . '.json');
+}
+
+function transcript_target_store($call_id, array $data): bool
+{
+    $path = transcript_target_path($call_id);
+    if ($path === null) {
+        return false;
+    }
+    if (!is_dir(dirname($path))) {
+        @mkdir(dirname($path), 0700, true);
+    }
+    $data['created_at'] = $data['created_at'] ?? time();
+    try {
+        atomic_write_json($path, $data); // 0600, atomic rename
+        return true;
+    } catch (\Throwable $e) {
+        return false;
+    }
+}
+
+function transcript_target_load($call_id): ?array
+{
+    $path = transcript_target_path($call_id);
+    if ($path === null || !file_exists($path)) {
+        return null;
+    }
+    $json = @file_get_contents($path);
+    if (!is_string($json) || $json === '') {
+        return null;
+    }
+    $data = json_decode($json, true);
+    return is_array($data) ? $data : null;
+}
+
+function transcript_target_delete($call_id): void
+{
+    $path = transcript_target_path($call_id);
+    if ($path !== null && file_exists($path)) {
+        @unlink($path);
+    }
+}
+
+/**
+ * Sweep transcript-target files older than $maxAgeSeconds. Called by the
+ * retention cron (scripts/cron/pb-extension.cron.tmpl). Targets normally
+ * delete themselves once their transcript lands; this reclaims the stragglers
+ * (calls that were never transcribed — recording/transcription off, < 30s).
+ * Returns the number removed.
+ */
+function transcript_targets_cleanup(int $maxAgeSeconds = 604800): int
+{
+    $dir = __DIR__ . '/transcript_targets';
+    if (!is_dir($dir)) {
+        return 0;
+    }
+    $removed = 0;
+    $cutoff  = time() - max(0, $maxAgeSeconds);
+    foreach (glob($dir . '/*.json') ?: [] as $file) {
+        if (@filemtime($file) < $cutoff && @unlink($file)) {
+            $removed++;
+        }
+    }
+    return $removed;
+}
+
 
 
 /**
