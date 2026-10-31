@@ -7,12 +7,16 @@
 // call_done time with the AI summary (and full transcript).
 //
 // ── TRUST ──────────────────────────────────────────────────────────────────
-// Reachable only with the per-session token we handed PhoneBurner at launch
-// (?s=<session_token>), exactly like call_done.php — that token IS the trust
-// boundary. The dial-session transcript webhook is ALSO HMAC-signed when the
-// account set a Webhooks signing secret, but that secret is the customer's
-// (set in their PB settings), not ours, so we can't rely on it. We verify
-// X-PB-Signature opportunistically only if we're ever given the secret.
+// The real trust boundary is the per-session token we handed PhoneBurner at
+// launch (?s=<session_token>) — an unguessable 128-bit value, like call_done.php.
+// BUT unlike call_done (whose writes all come from the session the token
+// resolves to), our CRM target comes from a call_id-keyed file. So presence of
+// a token is not enough: we require the token to MATCH the one that created the
+// target. The target stores only hash('sha256', token); we compare hashes. A
+// forged request with a guessed call_id but no valid token is rejected. The
+// dial-session transcript webhook is also HMAC-signed when the account set a
+// Webhooks secret, but that secret is the customer's (not ours), so we don't
+// rely on it.
 //
 // ── CORRELATION ──────────────────────────────────────────────────────────────
 // The payload carries `call_id` (identical to call_done's) but NOT the CRM
@@ -85,16 +89,26 @@ if (!is_array($target)) {
     exit;
 }
 
-// Defense-in-depth on top of the ?s= token: if a live session exists for this
-// token, it must own this call's target (same client_id). This forces a forger
-// to hold BOTH a valid session token AND a call_id logged under that same
-// session, not just a guessed call_id. Absent session (rare — transcripts land
-// minutes after the call, while the session is still live) falls back to the
-// target alone, which itself required a genuine earlier call_done.
-$state = load_session_state($session_token);
-if (is_array($state) && !empty($state['client_id']) && !empty($target['client_id'])
-    && !hash_equals((string)$state['client_id'], (string)$target['client_id'])) {
-    api_log('transcript_done.skip', ['reason' => 'session_target_client_mismatch', 'call_id' => (string)$callId]);
+// Authenticate the caller: the ?s= token MUST match the one that created this
+// target. The target stores only hash('sha256', session_token) — never the raw
+// token — so we compare hashes in constant time. This is the trust boundary: a
+// forged request with a guessed call_id but no valid token is rejected. We bind
+// to the stored hash (not a live session lookup) so a transcript that lands
+// after the session file is cleaned still authenticates.
+$incomingHash = hash('sha256', (string)$session_token);
+$storedHash   = (string)($target['s_hash'] ?? '');
+if ($storedHash === '' || !hash_equals($storedHash, $incomingHash)) {
+    api_log('transcript_done.skip', ['reason' => 'session_binding_mismatch', 'call_id' => (string)$callId]);
+    echo 'OK';
+    exit;
+}
+
+// Idempotency: PB delivers api_transcript at-least-once, so claim this
+// transcript_id atomically — a redelivery or a concurrent delivery gets false
+// and skips, preventing a duplicate write (e.g. a second Forth contact note).
+// Done AFTER the binding check so a forger can't pre-claim real transcript_ids.
+if (!transcript_claim($transcriptId)) {
+    api_log('transcript_done.skip', ['reason' => 'already_processed', 'call_id' => (string)$callId]);
     echo 'OK';
     exit;
 }

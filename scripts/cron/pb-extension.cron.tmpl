@@ -28,6 +28,15 @@ MAILTO=""
 # session_file_path() in utils.php ignores the SESSIONS_DIR config key.
 20 * * * * www-data find {{REPO_DIR}}/server/public/sessions -maxdepth 1 -type f -regextype posix-extended -regex '.*/[A-Za-z0-9]+\.json' -mmin +10020 -delete
 
+# Transcript-target + dedup-marker files untouched for ~7 days (hourly). They
+# correlate the async api_transcript webhook back to a logged CRM activity and
+# hold call-note text + CRM ids, so this enforces the same 7-day retention as
+# session files. Targets normally self-delete the moment their transcript lands;
+# this reclaims the stragglers (calls never transcribed — recording/transcription
+# off, <30s). Matches only *.json so sessions/.htaccess-style files are left
+# alone; the dir's own .htaccess has no .json suffix. -mmin +10020 ≈ 6d23h.
+20 * * * * www-data find {{REPO_DIR}}/server/public/transcript_targets -maxdepth 1 -type f -name '*.json' -mmin +10020 -delete
+
 # Rate-limit counters older than an hour (hourly).
 5 * * * * www-data find {{REPO_DIR}}/server/public/cache -type f -name 'rl_*.txt' -mmin +60 -delete
 

@@ -320,6 +320,10 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
             'client_id' => $clientId,
             'forth_cid' => (string)$calledExternalId,
             'note_text' => $noteText,
+            // Bind to the session that created it (hash of the ?s= token); the
+            // transcript webhook must present the same token. See
+            // webhooks/transcript_done.php.
+            's_hash'    => hash('sha256', (string)($state['session_token'] ?? '')),
         ]);
     }
 

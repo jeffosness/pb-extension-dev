@@ -1327,7 +1327,11 @@ function transcript_target_path($call_id): ?string
 {
     // PB dial-session call_id is an integer; allow alnum + dash so the same
     // store can serve the softphone UUID call_id later. safe_file_path blocks
-    // traversal; the regex is defence-in-depth on the basename.
+    // traversal; the regex is defence-in-depth on the basename. Guard non-scalar
+    // (a malformed payload could send call_id as an array) before the cast.
+    if (!is_scalar($call_id)) {
+        return null;
+    }
     $safe = preg_replace('/[^a-zA-Z0-9-]/', '', (string)$call_id);
     if ($safe === '' || $safe === null) {
         return null;
@@ -1396,6 +1400,43 @@ function transcript_targets_cleanup(int $maxAgeSeconds = 604800): int
         }
     }
     return $removed;
+}
+
+/**
+ * Idempotency claim for a transcript delivery, keyed by the webhook's
+ * transcript_id. PhoneBurner delivers api_transcript at-least-once, so a
+ * non-idempotent write (e.g. Forth's POST /notes) could create duplicates on a
+ * redelivery or two concurrent deliveries. The claim is an ATOMIC create-
+ * exclusive (fopen 'x') so exactly one caller wins; later deliveries of the same
+ * transcript_id get false and skip. Markers live beside the targets (swept by
+ * the same retention cron). Returns true if THIS caller claimed it (proceed),
+ * false if it was already claimed (skip). A blank/unusable id returns true
+ * (can't dedupe — don't block a legitimate delivery).
+ */
+function transcript_claim($transcript_id): bool
+{
+    if (!is_scalar($transcript_id)) {
+        return true;
+    }
+    $safe = preg_replace('/[^a-zA-Z0-9-]/', '', (string)$transcript_id);
+    if ($safe === '' || $safe === null) {
+        return true;
+    }
+    $path = safe_file_path(__DIR__ . '/transcript_targets', 'seen_' . $safe . '.json');
+    if ($path === null) {
+        return true;
+    }
+    if (!is_dir(dirname($path))) {
+        @mkdir(dirname($path), 0700, true);
+    }
+    $fh = @fopen($path, 'x'); // atomic: fails if the marker already exists
+    if ($fh === false) {
+        return false;
+    }
+    @fwrite($fh, json_encode(['seen_at' => time()]));
+    @fclose($fh);
+    @chmod($path, 0600);
+    return true;
 }
 
 

@@ -488,6 +488,10 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
             'contact_id'  => $closeContactId,
             'activity_id' => $callActivityId,
             'note_text'   => $rawNoteText,
+            // Bind this target to the session that created it: the transcript
+            // webhook must present the same ?s= token (compared by hash). The
+            // raw token is never stored. See webhooks/transcript_done.php.
+            's_hash'      => hash('sha256', (string)($state['session_token'] ?? '')),
         ]);
     }
 

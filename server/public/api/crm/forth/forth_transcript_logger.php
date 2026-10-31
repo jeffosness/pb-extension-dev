@@ -57,30 +57,10 @@ function forth_log_transcript(array $target, array $payload): bool {
     $summary  = trim((string)($payload['summary'] ?? ''));
     $segments = is_array($payload['transcript'] ?? null) ? $payload['transcript'] : [];
 
-    $lines = [];
-    foreach ($segments as $seg) {
-        if (!is_array($seg)) continue;
-        $text = trim((string)($seg['text'] ?? ''));
-        if ($text === '') continue;
-        $speaker = ((string)($seg['speaker'] ?? '') === 'member') ? 'Agent' : 'Contact';
-        $lines[] = $speaker . ': ' . $text;
-    }
-
-    if ($summary === '' && empty($lines)) {
+    $content = forth_build_transcript_note_content($summary, $segments);
+    if ($content === null) {
         api_log('forth_transcript_log.skip', ['reason' => 'empty_transcript_and_summary']);
         return false;
-    }
-
-    $content = 'PhoneBurner call transcript';
-    if ($summary !== '') {
-        $content .= "\n\nAI Summary:\n" . $summary;
-    }
-    if (!empty($lines)) {
-        $transcript = implode("\n", $lines);
-        if (strlen($transcript) > 20000) {
-            $transcript = substr($transcript, 0, 20000) . "\n… (transcript truncated)";
-        }
-        $content .= "\n\nTranscript:\n" . $transcript;
     }
 
     list($code, $resp, $raw, $info) = forth_api_post_json(
@@ -95,7 +75,7 @@ function forth_log_transcript(array $target, array $payload): bool {
         'success'       => $ok,
         'contact_id'    => (int)$forthCid,
         'has_summary'   => $summary !== '',
-        'segment_count' => count($lines),
+        'segment_count' => count($segments),
     ];
     if (!$ok) {
         // Capture Forth's own error text (CLAUDE.md external-call failure rule).
@@ -106,4 +86,44 @@ function forth_log_transcript(array $target, array $payload): bool {
     api_log('forth_transcript_log', $logData);
 
     return $ok;
+}
+
+/**
+ * Build the Forth contact-note body (plain text): AI summary + transcript. Pure
+ * (no I/O) so it's unit-testable. Returns null when there's nothing to add.
+ *
+ * The transcript is capped with mb_strcut (byte budget, never splits a UTF-8
+ * sequence) so a long call can't produce invalid UTF-8 that would make the
+ * downstream json_encode() fail and drop the note.
+ *
+ * @param array<int,array<string,mixed>> $segments
+ */
+function forth_build_transcript_note_content(string $summary, array $segments): ?string
+{
+    $lines = [];
+    foreach ($segments as $seg) {
+        if (!is_array($seg)) continue;
+        $text = trim((string)($seg['text'] ?? ''));
+        if ($text === '') continue;
+        $speaker = ((string)($seg['speaker'] ?? '') === 'member') ? 'Agent' : 'Contact';
+        $lines[] = $speaker . ': ' . $text;
+    }
+
+    if ($summary === '' && $lines === []) {
+        return null;
+    }
+
+    $content = 'PhoneBurner call transcript';
+    if ($summary !== '') {
+        $content .= "\n\nAI Summary:\n" . $summary;
+    }
+    if ($lines !== []) {
+        $transcript = implode("\n", $lines);
+        if (strlen($transcript) > 20000) {
+            $transcript = mb_strcut($transcript, 0, 20000) . "\n… (transcript truncated)";
+        }
+        $content .= "\n\nTranscript:\n" . $transcript;
+    }
+
+    return $content;
 }

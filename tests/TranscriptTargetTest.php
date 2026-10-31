@@ -21,13 +21,23 @@ use PHPUnit\Framework\Attributes\Test;
 final class TranscriptTargetTest extends TestCase
 {
     private array $mintedCallIds = [];
+    private array $claimedIds = [];
 
     protected function tearDown(): void
     {
         foreach ($this->mintedCallIds as $callId) {
             transcript_target_delete($callId);
         }
+        // Clean up dedup markers written by transcript_claim().
+        foreach ($this->claimedIds as $id) {
+            $safe = preg_replace('/[^a-zA-Z0-9-]/', '', (string)$id);
+            $p = __DIR__ . '/../server/public/transcript_targets/seen_' . $safe . '.json';
+            if (is_file($p)) {
+                @unlink($p);
+            }
+        }
         $this->mintedCallIds = [];
+        $this->claimedIds = [];
     }
 
     #[Test]
@@ -83,6 +93,25 @@ final class TranscriptTargetTest extends TestCase
         $this->assertIsString($path);
         $this->assertStringContainsString('transcript_targets', $path);
         $this->assertStringNotContainsString('..', $path);
+    }
+
+    #[Test]
+    public function claim_is_single_winner_then_rejects_redelivery(): void
+    {
+        $tid = 'tid-' . bin2hex(random_bytes(6));
+        $this->claimedIds[] = $tid;
+
+        // First delivery wins the claim; at-least-once redelivery is rejected.
+        $this->assertTrue(transcript_claim($tid), 'first claim should win');
+        $this->assertFalse(transcript_claim($tid), 'redelivery of same transcript_id must be rejected');
+    }
+
+    #[Test]
+    public function claim_allows_when_id_is_blank_or_unusable(): void
+    {
+        // Can't dedupe a missing id — must not block a legitimate delivery.
+        $this->assertTrue(transcript_claim(''));
+        $this->assertTrue(transcript_claim([]));
     }
 
     #[Test]

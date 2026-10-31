@@ -109,47 +109,29 @@ function close_log_transcript(array $target, array $payload): bool {
     $segments  = is_array($payload['transcript'] ?? null) ? $payload['transcript'] : [];
     $noteText  = trim((string)($target['note_text'] ?? ''));
 
-    $parts = [];
-    if ($noteText !== '') {
-        $parts[] = '<p>' . htmlspecialchars($noteText) . '</p>';
-    }
-    if ($summary !== '') {
-        $parts[] = '<p><strong>AI Summary</strong><br>' . nl2br(htmlspecialchars($summary)) . '</p>';
-    }
-
-    $lines = [];
-    foreach ($segments as $seg) {
-        if (!is_array($seg)) continue;
-        $text = trim((string)($seg['text'] ?? ''));
-        if ($text === '') continue;
-        $speaker = ((string)($seg['speaker'] ?? '') === 'member') ? 'Agent' : 'Contact';
-        $lines[] = '<strong>' . $speaker . ':</strong> ' . htmlspecialchars($text);
-    }
-    if (!empty($lines)) {
-        $transcriptHtml = implode('<br>', $lines);
-        // Cap defensively — Close notes are generous but not unbounded.
-        if (strlen($transcriptHtml) > 20000) {
-            $transcriptHtml = substr($transcriptHtml, 0, 20000) . '… <em>(transcript truncated)</em>';
-        }
-        $parts[] = '<p><strong>Transcript</strong><br>' . $transcriptHtml . '</p>';
-    }
-
-    if ($summary === '' && empty($lines)) {
+    $noteHtml = close_build_transcript_note_html($noteText, $summary, $segments);
+    if ($noteHtml === null) {
         // Nothing to add (shouldn't happen — PB only fires when ready).
         api_log('close_transcript_log.skip', ['reason' => 'empty_transcript_and_summary']);
         return false;
     }
 
-    $noteHtml = '<body>' . implode('', $parts) . '</body>';
-
     // -------------------------------------------------------------------------
     // PUT the enriched note onto the existing call activity (partial update).
     // -------------------------------------------------------------------------
+    $body = json_encode(['note_html' => $noteHtml]);
+    if ($body === false) {
+        // Shouldn't happen (builder keeps valid UTF-8), but never send an empty
+        // body to Close — log and skip so the target is retried/swept.
+        api_log('close_transcript_log.skip', ['reason' => 'json_encode_failed']);
+        return false;
+    }
+
     $ch = curl_init('https://api.close.com/api/v1/activity/call/' . rawurlencode($activityId) . '/');
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CUSTOMREQUEST  => 'PUT',
-        CURLOPT_POSTFIELDS     => json_encode(['note_html' => $noteHtml]),
+        CURLOPT_POSTFIELDS     => $body,
         CURLOPT_HTTPHEADER     => [
             'Authorization: Bearer ' . $accessToken,
             'Content-Type: application/json',
@@ -173,7 +155,7 @@ function close_log_transcript(array $target, array $payload): bool {
         'success'       => $ok,
         'activity_id'   => $activityId,
         'has_summary'   => $summary !== '',
-        'segment_count' => count($lines),
+        'segment_count' => count($segments),
     ];
     if (!$ok) {
         // Capture Close's own error text (CLAUDE.md external-call failure rule).
@@ -186,4 +168,52 @@ function close_log_transcript(array $target, array $payload): bool {
     api_log('close_transcript_log', $logData);
 
     return $ok;
+}
+
+/**
+ * Build the enriched call-activity note HTML: original call note + AI summary +
+ * transcript. Pure (no I/O) so it's unit-testable. All user/AI-derived text is
+ * HTML-escaped (note_html is rendered HTML in Close). Returns null when there is
+ * nothing to add (no summary and no usable segments).
+ *
+ * The transcript is capped with mb_strcut (byte budget, but never splits a
+ * UTF-8 sequence) so a long call can't produce invalid UTF-8 that would make
+ * json_encode() fail and silently drop the whole update.
+ *
+ * @param array<int,array<string,mixed>> $segments
+ */
+function close_build_transcript_note_html(string $noteText, string $summary, array $segments): ?string
+{
+    $lines = [];
+    foreach ($segments as $seg) {
+        if (!is_array($seg)) continue;
+        $text = trim((string)($seg['text'] ?? ''));
+        if ($text === '') continue;
+        $speaker = ((string)($seg['speaker'] ?? '') === 'member') ? 'Agent' : 'Contact';
+        $lines[] = '<strong>' . $speaker . ':</strong> ' . htmlspecialchars($text);
+    }
+
+    // Nothing new to add if there's neither a summary nor a transcript — don't
+    // re-PUT just the original note.
+    if ($summary === '' && $lines === []) {
+        return null;
+    }
+
+    $parts = [];
+    if ($noteText !== '') {
+        $parts[] = '<p>' . htmlspecialchars($noteText) . '</p>';
+    }
+    if ($summary !== '') {
+        $parts[] = '<p><strong>AI Summary</strong><br>' . nl2br(htmlspecialchars($summary)) . '</p>';
+    }
+    if ($lines !== []) {
+        $transcriptHtml = implode('<br>', $lines);
+        // Cap defensively — UTF-8-safe so json_encode() can't fail on a split char.
+        if (strlen($transcriptHtml) > 20000) {
+            $transcriptHtml = mb_strcut($transcriptHtml, 0, 20000) . '… <em>(transcript truncated)</em>';
+        }
+        $parts[] = '<p><strong>Transcript</strong><br>' . $transcriptHtml . '</p>';
+    }
+
+    return '<body>' . implode('', $parts) . '</body>';
 }
