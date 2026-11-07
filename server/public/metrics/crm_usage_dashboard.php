@@ -682,6 +682,20 @@ api_log('crm_usage_dashboard.view', [
       <h2 class="section-title">SSE Session Details</h2>
       <div class="grid" id="sse-grid"></div>
 
+      <!-- Rapid re-launches (GH #261): same user launching two sessions seconds apart -->
+      <h2 class="section-title">Rapid Re-launches (last 7 days)</h2>
+      <p class="muted" style="margin-top:-4px;">
+        Two dial sessions from the same extension install created within 60s of each other.
+        The follow-me widget follows the <em>last</em> launch, so if the user dials in the other window,
+        PhoneBurner's webhooks never reach the widget. <b>Widget on wrong session</b> = PB reached one session,
+        the widget only connected to the other. Always 7 days (session files are deleted after that), whatever range is picked above.
+      </p>
+      <div class="grid" id="relaunch-grid"></div>
+      <table id="relaunch-table" style="margin-top: 12px;">
+        <thead><tr><th>When</th><th>Gap</th><th>CRM</th><th>User (hash)</th><th>1st session</th><th>2nd session</th><th>Widget on wrong session?</th></tr></thead>
+        <tbody><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+      </table>
+
       <!-- Section 7: Launch Source & Object Type -->
       <h2 class="section-title">Launch Sources & Object Types</h2>
       <div class="grid" id="launch-grid"></div>
@@ -811,6 +825,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const agentEndpoint        = "api/daily_agent_stats.php";
   const tokenSummaryEndpoint = "api/token_summary_stats.php";
   const healthEndpoint       = "api/server_health_stats.php";
+  const relaunchEndpoint     = "api/rapid_relaunch_stats.php";
 
   const hasChartJs = typeof Chart !== "undefined";
 
@@ -907,6 +922,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // slow / failing token-summary endpoint doesn't block anything else.
     loadTokenSummary();
     loadServerHealth();
+    loadRapidRelaunches();
 
     const dr  = getDateRange(currentRange);
     const t   = Date.now();
@@ -1376,6 +1392,58 @@ document.addEventListener("DOMContentLoaded", () => {
         // Silent — the section keeps whatever was last rendered. Same
         // "graceful degrade" pattern the other JSON fetches use.
       });
+  }
+
+  // Rapid re-launches (GH #261) — see metrics/rapid_relaunch_lib.php. Fixed
+  // 7-day lookback (session files only live that long), independent of the
+  // range picker. Best-effort like the other side panels.
+  function loadRapidRelaunches() {
+    fetch(relaunchEndpoint + "?t=" + Date.now())
+      .then(r => r.ok ? r.json() : null)
+      .then(resp => {
+        const d = normalize(resp);
+        if (d) renderRapidRelaunches(d);
+      })
+      .catch(() => {});
+  }
+
+  function renderRapidRelaunches(d) {
+    const s = d.summary || {};
+    const grid = document.getElementById("relaunch-grid");
+    if (grid) {
+      grid.innerHTML = "";
+      grid.appendChild(statCard("Re-launch Pairs", String(s.pairs || 0)));
+      const bad = statCard("Widget on Wrong Session", String(s.widget_mismatch || 0));
+      if (s.widget_mismatch > 0) bad.querySelector(".value").style.color = "#991b1b";
+      grid.appendChild(bad);
+      grid.appendChild(statCard("Users Affected", String(s.users_affected || 0)));
+      const all = statCard("Sessions Checked", String(s.sessions_in_window || 0));
+      if (d.truncated) all.title = "Hit the file-read cap; counts may be low";
+      grid.appendChild(all);
+    }
+
+    const tbody = document.querySelector("#relaunch-table tbody");
+    if (!tbody) return;
+    const pairs = d.pairs || [];
+    if (!pairs.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="muted">None in the last 7 days.</td></tr>';
+      return;
+    }
+    const side = x => esc(x.session_hash.slice(0, 6)) + " · " +
+      (x.got_webhooks ? "PB: " + x.calls + " call" + (x.calls === 1 ? "" : "s") : "PB: none") + " · " +
+      (x.widget_connected ? "widget ✓" : "widget ✗");
+    tbody.innerHTML = pairs.map(p => {
+      const crm = p.first.crm_name === p.second.crm_name ? p.first.crm_name : p.first.crm_name + " / " + p.second.crm_name;
+      return "<tr>" +
+        "<td>" + esc(new Date(p.at_unix * 1000).toLocaleString()) + "</td>" +
+        "<td>" + esc(String(p.gap_sec)) + "s</td>" +
+        "<td>" + esc(crm) + "</td>" +
+        "<td><code>" + esc(p.client_hash) + "</code></td>" +
+        "<td>" + side(p.first) + "</td>" +
+        "<td>" + side(p.second) + "</td>" +
+        "<td>" + (p.widget_mismatch ? '<b style="color:#991b1b;">Yes</b>' : "No") + "</td>" +
+        "</tr>";
+    }).join("");
   }
 
   function renderTokenSummary(s) {
