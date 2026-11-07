@@ -127,6 +127,50 @@ final class RapidRelaunchTest extends TestCase
     }
 
     #[Test]
+    public function splits_double_clicks_from_deliberate_relaunches_at_five_seconds(): void
+    {
+        $t = time() - 3600;
+        $this->session('aaa111', 'client-1', $t);
+        $this->session('bbb222', 'client-1', $t + 5);   // boundary: still a double-click
+        $this->session('ccc333', 'client-2', $t);
+        $this->session('ddd444', 'client-2', $t + 6);   // just over: deliberate re-launch
+
+        $p = $this->pairs();
+        $kinds = array_column($p, 'kind', 'client_hash');
+        $this->assertSame('double_click', $kinds[rr_hash('client-1')]);
+        $this->assertSame('relaunch', $kinds[rr_hash('client-2')]);
+
+        $s = rr_summarize($p, 4);
+        $this->assertSame(1, $s['double_click']);
+        $this->assertSame(1, $s['relaunch']);
+        $this->assertSame(5, $s['double_click_sec']);
+    }
+
+    #[Test]
+    public function per_crm_breakdown_counts_pairs_users_and_keeps_session_denominator(): void
+    {
+        $t = time() - 3600;
+        $this->session('aaa111', 'client-1', $t, ['crm_name' => 'agencyzoom']);
+        $this->session('bbb222', 'client-1', $t + 20, ['crm_name' => 'agencyzoom']);
+        $this->session('ccc333', 'client-1', $t + 40, ['crm_name' => 'agencyzoom']);
+        $this->session('ddd444', 'client-2', $t, ['crm_name' => 'hubspot']);
+        $this->session('eee555', 'client-2', $t + 2, ['crm_name' => 'hubspot']);
+        $this->session('fff666', 'client-3', $t, ['crm_name' => 'close']); // no pair
+
+        $rows = rr_read_sessions($this->dir . '/sessions', 0)['rows'];
+        $s = rr_summarize($this->pairs(), count($rows), rr_sessions_by_crm($rows));
+
+        $this->assertSame(['agencyzoom', 'hubspot'], array_keys($s['by_crm']), 'sorted by pairs, CRMs with no pairs omitted');
+        $az = $s['by_crm']['agencyzoom'];
+        $this->assertSame(3, $az['sessions']);
+        $this->assertSame(2, $az['pairs']);
+        $this->assertSame(2, $az['relaunch']);
+        $this->assertSame(1, $az['users']);
+        $this->assertSame(1, $s['by_crm']['hubspot']['double_click']);
+        $this->assertSame(2, $s['by_crm']['hubspot']['sessions']);
+    }
+
+    #[Test]
     public function output_carries_hashes_only_never_raw_ids_or_contact_data(): void
     {
         $t = time() - 3600;

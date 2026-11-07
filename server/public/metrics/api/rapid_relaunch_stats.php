@@ -46,7 +46,7 @@ $pairs = rr_find_pairs($sessions['rows'], $widgetSeen, $windowSec);
 api_ok([
     'window_sec' => $windowSec,
     'days'       => $days,
-    'summary'    => rr_summarize($pairs, count($sessions['rows'])),
+    'summary'    => rr_summarize($pairs, count($sessions['rows']), rr_sessions_by_crm($sessions['rows'])),
     'scanned'    => $sessions['scanned'],
     'truncated'  => $sessions['truncated'],
     'pairs'      => array_slice($pairs, 0, 100),
