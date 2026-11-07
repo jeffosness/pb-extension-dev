@@ -68,6 +68,10 @@ function token_read_whitelist(): array
             'state', 'oauth_close_finish', 'oauth_disconnect',
             'pb_dialsession_selection', 'close_call_logger',
             'call_done', 'contact_displayed',
+            // EXP-5135 Call Transcript webhook: transcript_done.php dispatches
+            // to close_transcript_logger, which reads Close tokens to PUT the
+            // AI summary/transcript onto the activity. See GH #258.
+            'transcript_done', 'close_transcript_logger',
         ],
         'apollo' => [
             'state', 'oauth_apollo_finish', 'oauth_disconnect', 'save_api_key',
@@ -85,6 +89,10 @@ function token_read_whitelist(): array
             'state', 'save_credentials', 'oauth_disconnect',
             'pb_dialsession_selection', 'forth_call_logger',
             'call_done', 'contact_displayed',
+            // EXP-5135 Call Transcript webhook: transcript_done.php dispatches to
+            // forth_transcript_logger, which reads Forth tokens to post the AI
+            // summary/transcript as a contact note. See GH #258.
+            'transcript_done', 'forth_transcript_logger',
             // Click-to-call reads Forth tokens on both softphone endpoints:
             //   softphone_auth_code — checks connection before writing the intent
             //   softphone_call_done — forth_log_ctc_call loads tokens to POST /calls
