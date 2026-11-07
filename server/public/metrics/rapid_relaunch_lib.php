@@ -26,6 +26,10 @@
 declare(strict_types=1);
 
 const RR_DEFAULT_WINDOW_SEC = 60;
+// Gap at or under which a pair is most likely an accidental double-click. Wider
+// gaps are mostly deliberate re-launches (wrong list, retry), which a guard
+// must NOT block. First week of prod data: nearly all pairs were 8-59s.
+const RR_DOUBLE_CLICK_SEC   = 5;
 const RR_MAX_SESSION_FILES  = 20000; // hard cap so a runaway sessions/ dir can't hang the dashboard
 
 function rr_hash(string $s): string {
@@ -164,6 +168,7 @@ function rr_find_pairs(array $rows, array $widgetSeen, int $windowSec = RR_DEFAU
                 'at'              => date('c', $a['created']),
                 'at_unix'         => $a['created'],
                 'gap_sec'         => $gap,
+                'kind'            => $gap <= RR_DOUBLE_CLICK_SEC ? 'double_click' : 'relaunch',
                 'client_hash'     => $a['client_hash'],
                 'first'           => $first,
                 'second'          => $second,
@@ -175,17 +180,52 @@ function rr_find_pairs(array $rows, array $widgetSeen, int $windowSec = RR_DEFAU
     return $pairs;
 }
 
-function rr_summarize(array $pairs, int $sessionsInWindow): array {
+/**
+ * @param array $sessionsByCrm crm_name => sessions created in the window (the
+ *                             per-CRM denominator, so a busy CRM doesn't look
+ *                             worse just for having more sessions)
+ */
+function rr_summarize(array $pairs, int $sessionsInWindow, array $sessionsByCrm = []): array {
     $clients = [];
     $mismatches = 0;
+    $doubleClicks = 0;
+    $byCrm = [];
+    foreach ($sessionsByCrm as $crm => $n) {
+        $byCrm[$crm] = ['sessions' => (int)$n, 'pairs' => 0, 'double_click' => 0, 'relaunch' => 0, 'widget_mismatch' => 0, 'users' => []];
+    }
     foreach ($pairs as $p) {
         $clients[$p['client_hash']] = true;
         if ($p['widget_mismatch']) $mismatches++;
+        if ($p['kind'] === 'double_click') $doubleClicks++;
+
+        // Attribute the pair to the second launch's CRM (the one the user went on to use).
+        $crm = $p['second']['crm_name'];
+        $byCrm[$crm] = $byCrm[$crm] ?? ['sessions' => 0, 'pairs' => 0, 'double_click' => 0, 'relaunch' => 0, 'widget_mismatch' => 0, 'users' => []];
+        $byCrm[$crm]['pairs']++;
+        $byCrm[$crm][$p['kind']]++;
+        if ($p['widget_mismatch']) $byCrm[$crm]['widget_mismatch']++;
+        $byCrm[$crm]['users'][$p['client_hash']] = true;
     }
+    foreach ($byCrm as $crm => $row) {
+        if ($row['pairs'] === 0) { unset($byCrm[$crm]); continue; }
+        $byCrm[$crm]['users'] = count($row['users']);
+    }
+    uasort($byCrm, fn($a, $b) => $b['pairs'] <=> $a['pairs']);
+
     return [
-        'pairs'            => count($pairs),
-        'widget_mismatch'  => $mismatches,
-        'users_affected'   => count($clients),
+        'pairs'              => count($pairs),
+        'double_click'       => $doubleClicks,
+        'relaunch'           => count($pairs) - $doubleClicks,
+        'double_click_sec'   => RR_DOUBLE_CLICK_SEC,
+        'widget_mismatch'    => $mismatches,
+        'users_affected'     => count($clients),
         'sessions_in_window' => $sessionsInWindow,
+        'by_crm'             => $byCrm,
     ];
+}
+
+function rr_sessions_by_crm(array $rows): array {
+    $out = [];
+    foreach ($rows as $r) $out[$r['crm_name']] = ($out[$r['crm_name']] ?? 0) + 1;
+    return $out;
 }

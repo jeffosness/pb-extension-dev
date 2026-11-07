@@ -691,9 +691,13 @@ api_log('crm_usage_dashboard.view', [
         the widget only connected to the other. Always 7 days (session files are deleted after that), whatever range is picked above.
       </p>
       <div class="grid" id="relaunch-grid"></div>
+      <table id="relaunch-crm-table" style="margin-top: 12px;">
+        <thead><tr><th>CRM</th><th>Sessions</th><th>Re-launch pairs</th><th>% of sessions</th><th>Double-clicks (≤5s)</th><th>Re-launches (5–60s)</th><th>Users</th><th>Widget on wrong session</th></tr></thead>
+        <tbody><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+      </table>
       <table id="relaunch-table" style="margin-top: 12px;">
-        <thead><tr><th>When</th><th>Gap</th><th>CRM</th><th>User (hash)</th><th>1st session</th><th>2nd session</th><th>Widget on wrong session?</th></tr></thead>
-        <tbody><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+        <thead><tr><th>When</th><th>Gap</th><th>Type</th><th>CRM</th><th>User (hash)</th><th>1st session</th><th>2nd session</th><th>Widget on wrong session?</th></tr></thead>
+        <tbody><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
       </table>
 
       <!-- Section 7: Launch Source & Object Type -->
@@ -1412,7 +1416,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const grid = document.getElementById("relaunch-grid");
     if (grid) {
       grid.innerHTML = "";
+      const dcSec = s.double_click_sec || 5;
       grid.appendChild(statCard("Re-launch Pairs", String(s.pairs || 0)));
+      const dc = statCard("Likely Double-clicks (≤" + dcSec + "s)", String(s.double_click || 0));
+      dc.title = "Second launch within " + dcSec + "s of the first: probably an accidental double-click";
+      grid.appendChild(dc);
+      const rl = statCard("Deliberate Re-launches (>" + dcSec + "s)", String(s.relaunch || 0));
+      rl.title = "Wrong list, retry, etc. A double-launch guard must not block these";
+      grid.appendChild(rl);
       const bad = statCard("Widget on Wrong Session", String(s.widget_mismatch || 0));
       if (s.widget_mismatch > 0) bad.querySelector(".value").style.color = "#991b1b";
       grid.appendChild(bad);
@@ -1422,11 +1433,26 @@ document.addEventListener("DOMContentLoaded", () => {
       grid.appendChild(all);
     }
 
+    const crmBody = document.querySelector("#relaunch-crm-table tbody");
+    if (crmBody) {
+      const rows = Object.entries(s.by_crm || {});
+      crmBody.innerHTML = rows.length ? rows.map(([crm, r]) =>
+        "<tr><td>" + esc(crm) + "</td>" +
+        "<td>" + esc(String(r.sessions)) + "</td>" +
+        "<td>" + esc(String(r.pairs)) + "</td>" +
+        "<td>" + (r.sessions > 0 ? esc((100 * r.pairs / r.sessions).toFixed(1)) + "%" : "–") + "</td>" +
+        "<td>" + esc(String(r.double_click)) + "</td>" +
+        "<td>" + esc(String(r.relaunch)) + "</td>" +
+        "<td>" + esc(String(r.users)) + "</td>" +
+        "<td>" + (r.widget_mismatch > 0 ? '<b style="color:#991b1b;">' + esc(String(r.widget_mismatch)) + "</b>" : "0") + "</td></tr>"
+      ).join("") : '<tr><td colspan="8" class="muted">None in the last 7 days.</td></tr>';
+    }
+
     const tbody = document.querySelector("#relaunch-table tbody");
     if (!tbody) return;
     const pairs = d.pairs || [];
     if (!pairs.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="muted">None in the last 7 days.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="muted">None in the last 7 days.</td></tr>';
       return;
     }
     const side = x => esc(x.session_hash.slice(0, 6)) + " · " +
@@ -1437,6 +1463,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return "<tr>" +
         "<td>" + esc(new Date(p.at_unix * 1000).toLocaleString()) + "</td>" +
         "<td>" + esc(String(p.gap_sec)) + "s</td>" +
+        "<td>" + (p.kind === "double_click" ? "<b>Double-click</b>" : "Re-launch") + "</td>" +
         "<td>" + esc(crm) + "</td>" +
         "<td><code>" + esc(p.client_hash) + "</code></td>" +
         "<td>" + side(p.first) + "</td>" +
