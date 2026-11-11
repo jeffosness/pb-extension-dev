@@ -172,6 +172,10 @@ if (empty($closeContacts)) {
   api_error('No contacts returned from Close API', 'bad_request', 400, $diag);
 }
 
+// Close stores addresses on the lead, not the contact. Best-effort and
+// time-boxed — a missing address never blocks the launch.
+$closeContacts = close_attach_lead_addresses($accessToken, $closeContacts, $diag);
+
 // -----------------------------------------------------------------------------
 // Normalize into PhoneBurner dialsession payload
 // -----------------------------------------------------------------------------
@@ -220,6 +224,8 @@ foreach ($closeContacts as $c) {
   if (!empty($additionalPhones)) {
     $pbContact['additional_phone'] = $additionalPhones;
   }
+  // Address: all keys or none — see pb_address_fields() in utils.php.
+  $pbContact += pb_address_fields($c['address'] ?? null);
 
   $pbContacts[] = $pbContact;
 

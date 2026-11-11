@@ -430,5 +430,15 @@ function apollo_normalize_contact(array $c, string $preferredPhoneField = ''): a
     'additional_phones' => $additionalPhones,
     'title'             => trim((string)($c['title'] ?? '')),
     'organization_name' => trim((string)($c['organization_name'] ?? '')),
+    // Apollo contacts reliably carry city/state/country; street and postal
+    // code appear only on some records. `present_raw_address` is a combined
+    // "City, State, Country" string — deliberately not used as address1.
+    'address'           => [
+      'address1' => (string)($c['street_address'] ?? ''),
+      'city'     => (string)($c['city'] ?? ''),
+      'state'    => (string)($c['state'] ?? ''),
+      'zip'      => (string)($c['postal_code'] ?? ''),
+      'country'  => (string)($c['country'] ?? ''),
+    ],
   ];
 }

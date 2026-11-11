@@ -257,6 +257,79 @@ function close_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [
 }
 
 /**
+ * Close keeps addresses on the LEAD, not the contact — contacts have no
+ * address field. Fetch `addresses` once per unique lead and attach the lead's
+ * first address to each of its contacts as `address`.
+ *
+ * Best-effort by design: address must never fail or stall a launch. A failed
+ * lead fetch leaves those contacts without `address` (pb_address_fields then
+ * sends no keys, so PB's existing address is untouched), and once
+ * $budgetSeconds elapse the remaining leads are skipped — LESSONS.md records
+ * Close launches dying at max_execution_time from serial per-record calls.
+ */
+function close_attach_lead_addresses(string $accessToken, array $contacts, array &$diag = [], float $budgetSeconds = 15.0): array {
+  $diag['lead_addresses'] = ['ok' => 0, 'fail' => 0, 'skipped_budget' => 0, 'last_http' => null];
+
+  $leadIds = [];
+  foreach ($contacts as $c) {
+    $lid = (string)($c['lead_id'] ?? '');
+    if (preg_match('/^lead_[a-zA-Z0-9]+$/', $lid)) $leadIds[$lid] = true;
+  }
+
+  $started = microtime(true);
+  $byLead = [];
+  foreach (array_keys($leadIds) as $lid) {
+    if ((microtime(true) - $started) > $budgetSeconds) {
+      $diag['lead_addresses']['skipped_budget']++;
+      continue;
+    }
+    $url = 'https://api.close.com/api/v1/lead/' . rawurlencode($lid) . '/?_fields=id,addresses';
+    list($code, $json, $raw) = close_api_get_json($accessToken, $url);
+    $diag['lead_addresses']['last_http'] = $code;
+
+    if ($code !== 200 || !is_array($json)) {
+      if ($diag['lead_addresses']['fail'] === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'close_lead_addresses.per_lead_failed', [
+          'lead_id_sample' => $lid,
+        ]);
+      }
+      $diag['lead_addresses']['fail']++;
+      continue;
+    }
+
+    $first = is_array($json['addresses'] ?? null) ? ($json['addresses'][0] ?? null) : null;
+    if (is_array($first)) {
+      $byLead[$lid] = [
+        'address1' => (string)($first['address_1'] ?? ''),
+        'address2' => (string)($first['address_2'] ?? ''),
+        'city'     => (string)($first['city'] ?? ''),
+        'state'    => (string)($first['state'] ?? ''),
+        'zip'      => (string)($first['zipcode'] ?? ''),
+        'country'  => (string)($first['country'] ?? ''),
+      ];
+    }
+    $diag['lead_addresses']['ok']++;
+  }
+
+  if ($diag['lead_addresses']['fail'] > 0 || $diag['lead_addresses']['skipped_budget'] > 0) {
+    _pb_write_api_log('close_lead_addresses.batch_summary', [
+      'ok'             => $diag['lead_addresses']['ok'],
+      'fail'           => $diag['lead_addresses']['fail'],
+      'skipped_budget' => $diag['lead_addresses']['skipped_budget'],
+      'last_http'      => $diag['lead_addresses']['last_http'],
+      'total'          => count($leadIds),
+    ]);
+  }
+
+  foreach ($contacts as &$c) {
+    $lid = (string)($c['lead_id'] ?? '');
+    if (isset($byLead[$lid])) $c['address'] = $byLead[$lid];
+  }
+  unset($c);
+  return $contacts;
+}
+
+/**
  * Fetch contacts with automatic token refresh retry on 401.
  */
 function close_fetch_contacts_with_refresh_retry(string $client_id, array &$tokens, string &$accessToken, array $contactIds, array &$diag = []) {
