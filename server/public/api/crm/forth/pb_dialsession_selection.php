@@ -102,6 +102,12 @@ api_log('forth_selection.fetched', [
   'attempts_known'   => $attemptsKnown,
   'attempts_hist'    => $attemptsHist,
   'sorted_by_attempts' => $attemptsKnown > 0,
+  // First 10 Forth record IDs (not PII) as the extension sent them and as we
+  // will send them to PB, so a rep's screenshot of the sorted list can be
+  // compared against both: tells "extension read the rows out of order"
+  // apart from "PB reordered the session".
+  'received_order_head' => array_slice($contactIds, 0, 10),
+  'sent_order_head'     => array_slice(array_column($forthContacts, 'forth_id'), 0, 10),
 ]);
 
 // -----------------------------------------------------------------------------
