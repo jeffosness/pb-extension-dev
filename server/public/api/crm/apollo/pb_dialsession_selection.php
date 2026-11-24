@@ -115,7 +115,7 @@ foreach ($apolloContacts as $c) {
   if (!empty($additionalPhones)) {
     $pbContact['additional_phone'] = $additionalPhones;
   }
-  // Address: all keys or none — see pb_address_fields() in utils.php.
+  // Address: only the fields the CRM returned — see pb_address_fields() in utils.php.
   $pbContact += pb_address_fields($c['address'] ?? null);
 
   $pbContacts[] = $pbContact;
