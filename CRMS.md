@@ -584,6 +584,8 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
   `api_key` is a **10-day** token sent as the **`Api-Key:`** header (NOT
   `Authorization: Bearer`). No refresh token — re-mint with the durable pair.
 - **Rate limit:** 20 req/sec (429 on exceed).
+  Launch fetches contacts in parallel via `forth_api_get_json_multi()`, capped at 12 request starts/sec (15 measured as 18 at the server from arrival jitter) with one retry pass for 429s. There is no bulk contact read.
+- **Call attempts (dial-order sort):** the field name isn't in the public docs. `forth_extract_call_attempts()` accepts call/dial+attempt spellings (never payment/NSF attempts), and every launch logs the contact's field NAMES as `forth_fetch_contacts.fields` so the real name can be confirmed from `api.log` without Forth access.
 
 **`POST /v1/calls` (Create Call Record)** — logs to the contact's "Calls" tab:
 - **REQUIRED:** `contactID` (int), `call_type` (enum `Outgoing`/`Incoming`),

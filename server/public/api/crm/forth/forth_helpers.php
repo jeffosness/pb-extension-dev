@@ -176,6 +176,91 @@ function forth_api_get_json(string $apiKey, string $url, int $timeout = 20): arr
 }
 
 /**
+ * Parallel GETs to the Forth API (curl_multi). Returns an array keyed like
+ * $urls, each value the same [$httpCode, $jsonArray, $rawBody, $info] tuple
+ * forth_api_get_json returns.
+ *
+ * Forth's documented limit is 20 req/sec (429 beyond), shared by everything
+ * using the rep's key (CTC lookups, call logging). We cap request STARTS at
+ * $maxPerSecond in any rolling second and $concurrency in flight, then retry
+ * any 429s once, one at a time, after a 1s pause.
+ */
+function forth_api_get_json_multi(string $apiKey, array $urls, int $concurrency = 10, int $maxPerSecond = 12, int $timeout = 20): array {
+  $results = [];
+  $queue   = $urls;
+  $mh      = curl_multi_init();
+  $active  = [];   // (int)handle id => [key, handle]
+  $starts  = [];   // microtime of recent starts, for the per-second cap
+
+  $startNext = function () use (&$queue, &$active, &$starts, $mh, $apiKey, $concurrency, $maxPerSecond, $timeout) {
+    while ($queue && count($active) < $concurrency) {
+      $now    = microtime(true);
+      $starts = array_values(array_filter($starts, fn($t) => $now - $t < 1.0));
+      if (count($starts) >= $maxPerSecond) return;
+      $key = array_key_first($queue);
+      $url = $queue[$key];
+      unset($queue[$key]);
+      $ch = curl_init($url);
+      curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+          'Api-Key: ' . $apiKey,
+          'Accept: application/json',
+        ],
+        CURLOPT_TIMEOUT => $timeout,
+      ]);
+      curl_multi_add_handle($mh, $ch);
+      $active[spl_object_id($ch)] = [$key, $ch];
+      $starts[] = $now;
+    }
+  };
+
+  $startNext();
+  while ($active || $queue) {
+    curl_multi_exec($mh, $running);
+    while ($done = curl_multi_info_read($mh)) {
+      $ch  = $done['handle'];
+      $hid = spl_object_id($ch);
+      $key = $active[$hid][0];
+      $raw  = curl_multi_getcontent($ch);
+      $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+      $err  = ($done['result'] !== CURLE_OK) ? curl_strerror($done['result']) : '';
+      $json = (is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
+      $info = ['http_code' => $code, 'raw_body' => is_string($raw) ? $raw : ''];
+      if ($err !== '') $info['curl_error'] = $err;
+      $results[$key] = [$code, $json, $raw, $info];
+      curl_multi_remove_handle($mh, $ch);
+      curl_close($ch);
+      unset($active[$hid]);
+    }
+    $startNext();
+    if ($active) {
+      // -1 = select unavailable on this platform; sleep briefly instead of spinning.
+      if (curl_multi_select($mh, 0.05) === -1) usleep(10000);
+    } elseif ($queue) {
+      usleep(50000); // waiting out the per-second cap
+    }
+  }
+  curl_multi_close($mh);
+
+  // One sequential retry pass for anything Forth rate-limited.
+  $limited = array_keys(array_filter($results, fn($r) => $r[0] === 429));
+  if ($limited) {
+    sleep(1);
+    foreach ($limited as $key) {
+      $results[$key] = forth_api_get_json($apiKey, $urls[$key], $timeout);
+    }
+  }
+
+  // Preserve the caller's key order.
+  $ordered = [];
+  foreach ($urls as $key => $_) {
+    if (isset($results[$key])) $ordered[$key] = $results[$key];
+  }
+  return $ordered;
+}
+
+/**
  * POST JSON to the Forth API with Api-Key auth.
  * Returns [$httpCode, $jsonArray, $rawBody, $info] (see forth_api_get_json).
  */
@@ -334,12 +419,23 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
+  // Fetch every record in parallel up front (one GET per contact was the bulk
+  // of launch time — Forth has no bulk read). Results come back keyed by cid
+  // in the caller's order, so the loop below still walks the selection order.
+  $urls = [];
   foreach ($contactIds as $cid) {
     $cid = trim((string)$cid);
     if ($cid === '' || !ctype_digit($cid)) continue;
+    $urls[$cid] = FORTH_API_BASE . 'contacts/' . rawurlencode($cid);
+  }
+  $t0 = microtime(true);
+  $fetched = forth_api_get_json_multi($apiKey, $urls);
+  $diag['contacts_fetch']['ms'] = (int) round((microtime(true) - $t0) * 1000);
+  $fieldsLogged = false;
 
-    $url = FORTH_API_BASE . 'contacts/' . rawurlencode($cid);
-    list($code, $json, $raw, $info) = forth_api_get_json($apiKey, $url);
+  foreach ($urls as $cid => $url) {
+    $cid = (string)$cid;
+    list($code, $json, $raw, $info) = $fetched[$cid] ?? [0, null, '', ['http_code' => 0, 'raw_body' => '', 'curl_error' => 'not_fetched']];
     $diag['contacts_fetch']['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
@@ -359,6 +455,16 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
 
     // Contact object may be nested under `response` (Forth's usual envelope).
     $c = (isset($json['response']) && is_array($json['response'])) ? $json['response'] : $json;
+
+    // Field NAMES only (never values) from the first record, so we can see
+    // which call-attempt field this org's Forth sends without account access.
+    if (!$fieldsLogged) {
+      $fieldsLogged = true;
+      _pb_write_api_log('forth_fetch_contacts.fields', [
+        'field_names'    => forth_contact_field_names($c),
+        'attempts_field' => forth_extract_call_attempts($c)['field'],
+      ]);
+    }
 
     list($first, $last) = forth_extract_contact_name($c);
 
@@ -413,6 +519,7 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
       'phone'             => $primaryPhone,
       'additional_phones' => $additional,
       'assigned_to'       => $assignedTo,
+      'call_attempts'     => forth_extract_call_attempts($c)['value'],
     ];
     $diag['contacts_fetch']['ok']++;
   }
@@ -427,6 +534,95 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   }
 
   return $contacts;
+}
+
+/**
+ * Read the contact's call-attempt counter, which reps sort by so every record
+ * gets worked evenly (never-called first, then 1 attempt, then 2, …).
+ *
+ * The exact field name isn't visible in Forth's public docs, so we accept the
+ * likely spellings at the top level or one level down (`call_attempts`,
+ * `stats.callAttempts`, …) plus custom-field rows shaped {name|label, value}.
+ * Names must say call/dial AND attempt (or be a bare `attempts`): this is a
+ * debt-settlement CRM, and a loose /attempt/ match would grab payment/NSF
+ * attempt counters. An empty value on a present field means never called (0).
+ *
+ * Returns ['field' => matched name|null, 'value' => int|null].
+ */
+function forth_extract_call_attempts(array $c): array {
+  $isAttemptsName = static function (string $name): bool {
+    $n = strtolower(preg_replace('/[^a-z0-9]/i', '', $name));
+    if ($n === 'attempts') return true;
+    return strpos($n, 'attempt') !== false && (strpos($n, 'call') !== false || strpos($n, 'dial') !== false);
+  };
+  $toInt = static function ($v): ?int {
+    if ($v === null || $v === '') return 0;
+    if (is_int($v)) return max(0, $v);
+    if (is_string($v) && ctype_digit(trim($v))) return (int)trim($v);
+    if (is_float($v) && $v >= 0) return (int)$v;
+    return null; // present but not a count — ignore it
+  };
+
+  $scan = static function (array $obj, string $prefix) use ($isAttemptsName, $toInt): ?array {
+    foreach ($obj as $k => $v) {
+      if (is_string($k) && (is_scalar($v) || $v === null) && $isAttemptsName($k)) {
+        $val = $toInt($v);
+        if ($val !== null) return ['field' => $prefix . $k, 'value' => $val];
+      }
+    }
+    return null;
+  };
+
+  if ($hit = $scan($c, '')) return $hit;
+
+  foreach ($c as $k => $v) {
+    if (!is_string($k) || !is_array($v)) continue;
+    if (!array_is_list($v)) {
+      if ($hit = $scan($v, $k . '.')) return $hit;
+      continue;
+    }
+    // Custom-field rows: [{name|label|field_name, value}, …]
+    foreach ($v as $row) {
+      if (!is_array($row)) continue;
+      $label = $row['name'] ?? $row['label'] ?? $row['field_name'] ?? null;
+      if (is_string($label) && $isAttemptsName($label) && array_key_exists('value', $row)) {
+        $val = $toInt($row['value']);
+        if ($val !== null) return ['field' => $k . '[' . $label . ']', 'value' => $val];
+      }
+    }
+  }
+  return ['field' => null, 'value' => null];
+}
+
+/**
+ * Field names (never values) of a Forth contact object for the diagnostic
+ * log: top-level keys, one level of nested object keys as `parent.child`, and
+ * custom-field row labels as `parent[label]`. Capped so a huge custom-field
+ * set can't bloat a log line.
+ */
+function forth_contact_field_names(array $c, int $cap = 200): array {
+  $names = [];
+  foreach ($c as $k => $v) {
+    if (!is_string($k)) continue;
+    $names[] = $k;
+    if (!is_array($v)) continue;
+    if (!array_is_list($v)) {
+      foreach (array_keys($v) as $sub) {
+        if (is_string($sub)) $names[] = $k . '.' . $sub;
+      }
+    } else {
+      // Labels only from custom-field-shaped rows ({name|label, value}): a
+      // list of related PEOPLE (e.g. co-applicants with a `name`) would
+      // otherwise put a person's name in the log.
+      foreach ($v as $row) {
+        if (!is_array($row) || !array_key_exists('value', $row)) continue;
+        $label = $row['name'] ?? $row['label'] ?? $row['field_name'] ?? null;
+        if (is_string($label)) $names[] = $k . '[' . substr($label, 0, 60) . ']';
+      }
+    }
+  }
+  $names = array_values(array_unique($names));
+  return array_slice($names, 0, $cap);
 }
 
 /**
