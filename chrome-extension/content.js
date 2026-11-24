@@ -1750,7 +1750,13 @@ function handleSessionUpdate(state) {
     goalConfig,
   });
 
-  if (window.top === window && recordUrl) {
+  // Auto-navigate ONLY when PhoneBurner displays a new contact — never on the
+  // other updates SSE pushes (call_done stats, the state replay every fresh
+  // page load gets on connect). Otherwise a rep who opens an edit/budget/
+  // related page between calls gets yanked back to the record on the next
+  // update. The handled-event key lives in sessionStorage so it survives the
+  // full page loads Forth/Salesforce/etc. do; same tab only, by design.
+  if (window.top === window && recordUrl && followNavShouldHandle(current, recordUrl)) {
     try {
       if (!isSameCrmRecord(window.location.href, recordUrl)) {
         // For hash-based SPAs (e.g. Apollo), update the hash to trigger SPA router
@@ -1765,6 +1771,23 @@ function handleSessionUpdate(state) {
       console.error("Failed to auto-navigate to CRM record", e);
     }
   }
+}
+
+// True the first time this tab sees a given contact_displayed event, false on
+// every later update for it. `received_at` is stamped fresh by
+// contact_displayed.php on each display, so a re-displayed contact (PB redial)
+// counts as new; record_url is the fallback for states without it. If
+// sessionStorage is unavailable we fall back to the old navigate-every-update
+// behavior rather than never navigating. sessionStorage is readable by the CRM
+// page itself, so only non-secret values (no session token) are stored.
+function followNavShouldHandle(current, recordUrl) {
+  const eventKey = String(current.received_at || "") + "|" + recordUrl;
+  const storageKey = "pb_follow_nav_last_event";
+  try {
+    if (window.sessionStorage.getItem(storageKey) === eventKey) return false;
+    window.sessionStorage.setItem(storageKey, eventKey);
+  } catch (e) {}
+  return true;
 }
 
 function renderOverlay({

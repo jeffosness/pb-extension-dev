@@ -289,6 +289,8 @@ The extension supports two integration levels. The level determines which featur
 2. Check internet connection — flaky Wi-Fi can drop the stream.
 3. Verify the dial session is still active in PhoneBurner. If the session ended, the widget will stop updating (this is expected).
 
+**When does the widget move my CRM tab?** Only when PhoneBurner moves on to a new contact (v0.8.9+). Between contacts the rep can open edit pages, related records, budgets, other tabs — anything — and the widget leaves the tab alone; it jumps to the next contact's record only when PhoneBurner displays the next contact. (Older versions re-checked the page after every call result and on every page load, which could pull a rep back to the record mid-task.)
+
 **Escalate if:** Widget consistently stops updating mid-session even with stable internet. Ask for: (a) approximate time the issue started, (b) the CRM, (c) browser console errors (right-click on CRM page → Inspect → Console).
 
 ---
@@ -848,7 +850,7 @@ Forth does **not** use OAuth. It uses a durable API credential pair — a **Key 
 - **Cell is dialed first.** Forth's phone fields are fetched via the API; the **cell number is the primary dialed number**, with home and work included as additional numbers.
 - **Call activities log to Forth automatically** — recorded in the contact's **Call History** with disposition, duration, and recording link, attributed to the rep who made the call.
 - **Notes typed during the call** are saved on the Forth contact alongside the call activity.
-- **Follow widget** keeps the Forth tab in sync as you dial and lets the rep roam freely between a contact's sub-tabs (History, Calls, Notes) without being yanked back.
+- **Follow widget** keeps the Forth tab in sync as you dial. It only moves the tab when PhoneBurner displays the next contact (v0.8.9+), so between contacts the rep can edit the record, open the budget or enrollment pages, or switch sub-tabs (History, Calls, Notes) without being pulled back.
 
 ### Click-to-call in Forth
 

@@ -16,6 +16,12 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.9": {
+    title: "What's New in v0.8.9",
+    items: [
+      "Follow-me now waits for PhoneBurner to show the next contact before moving your CRM tab — open edit pages, budgets, enrollments or related records between calls without getting pulled back"
+    ]
+  },
   "0.8.8": {
     title: "What's New in v0.8.8",
     items: [
