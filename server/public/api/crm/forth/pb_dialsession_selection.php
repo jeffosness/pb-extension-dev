@@ -73,6 +73,37 @@ if (empty($forthContacts)) {
   api_error('No contacts returned from Forth API', 'bad_request', 400, $diag);
 }
 
+// Dial fewest call attempts first (never-called, then 1, then 2, …) so every
+// record gets worked evenly — what Forth teams asked for. usort is stable on
+// PHP 8, so ties keep the rep's on-page order. If no contact carries an
+// attempts field, the selection order is left untouched.
+$attemptsKnown = 0;
+$attemptsHist  = [];
+foreach ($forthContacts as $c) {
+  if (isset($c['call_attempts'])) {
+    $attemptsKnown++;
+    $bucket = $c['call_attempts'] >= 5 ? '5+' : (string)$c['call_attempts'];
+    $attemptsHist[$bucket] = ($attemptsHist[$bucket] ?? 0) + 1;
+  }
+}
+if ($attemptsKnown > 0) {
+  usort($forthContacts, function ($a, $b) {
+    // Unknown attempts sort last: we can't tell they're under-worked.
+    return ($a['call_attempts'] ?? PHP_INT_MAX) <=> ($b['call_attempts'] ?? PHP_INT_MAX);
+  });
+}
+ksort($attemptsHist);
+
+api_log('forth_selection.fetched', [
+  'client_id_hash'   => substr(hash('sha256', (string)$client_id), 0, 12),
+  'selected'         => count($contactIds),
+  'fetched'          => count($forthContacts),
+  'fetch_ms'         => $diag['contacts_fetch']['ms'] ?? null,
+  'attempts_known'   => $attemptsKnown,
+  'attempts_hist'    => $attemptsHist,
+  'sorted_by_attempts' => $attemptsKnown > 0,
+]);
+
 // -----------------------------------------------------------------------------
 // Normalize into PhoneBurner dialsession payload
 // -----------------------------------------------------------------------------
