@@ -344,6 +344,21 @@ function apollo_fetch_contacts_with_refresh_retry(string $client_id, array &$tok
 // -----------------------------------------------------------------------------
 
 /**
+ * Apollo address fields present in this payload → normalized address shape
+ * for pb_address_fields(). Absent keys stay absent (see the presence rule in
+ * pb_address_fields).
+ */
+function apollo_extract_address(array $c): array {
+  $map = ['street_address' => 'address1', 'city' => 'city', 'state' => 'state',
+          'postal_code' => 'zip', 'country' => 'country'];
+  $out = [];
+  foreach ($map as $apKey => $key) {
+    if (array_key_exists($apKey, $c)) $out[$key] = $c[$apKey];
+  }
+  return $out;
+}
+
+/**
  * Normalize an Apollo contact object to our standard format.
  * @param string $preferredPhoneField Optional: 'direct_phone', 'mobile_phone', or 'corporate_phone'
  *        When set, that field is checked first for the primary number.
@@ -431,14 +446,10 @@ function apollo_normalize_contact(array $c, string $preferredPhoneField = ''): a
     'title'             => trim((string)($c['title'] ?? '')),
     'organization_name' => trim((string)($c['organization_name'] ?? '')),
     // Apollo contacts reliably carry city/state/country; street and postal
-    // code appear only on some records. `present_raw_address` is a combined
+    // code appear only on some payloads (task-embedded contacts are partial).
+    // Only keys present in THIS payload are passed on, so a reduced payload
+    // never clears fields PB already has. `present_raw_address` is a combined
     // "City, State, Country" string — deliberately not used as address1.
-    'address'           => [
-      'address1' => (string)($c['street_address'] ?? ''),
-      'city'     => (string)($c['city'] ?? ''),
-      'state'    => (string)($c['state'] ?? ''),
-      'zip'      => (string)($c['postal_code'] ?? ''),
-      'country'  => (string)($c['country'] ?? ''),
-    ],
+    'address'           => apollo_extract_address($c),
   ];
 }

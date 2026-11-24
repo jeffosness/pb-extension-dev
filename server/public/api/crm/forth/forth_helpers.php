@@ -529,24 +529,33 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
  * Pull the contact's address from a Forth contact object into the normalized
  * shape pb_address_fields() expects. Like the phone handling above, field
  * names are unverified against a live Get Contact payload (GH #207), so the
- * common variants are accepted; first non-empty wins.
+ * common variants are accepted; first non-empty wins. A part is included only
+ * when one of its variant keys is present with a scalar value — an unknown or
+ * nested shape yields nothing, so a wrong guess sends no keys rather than
+ * clearing PB fields. A purely numeric `state` is treated as an internal id,
+ * not a state, and dropped.
  */
 function forth_extract_address(array $c): array {
-  $pick = static function (array $keys) use ($c): string {
-    foreach ($keys as $k) {
-      $v = $c[$k] ?? null;
-      if (is_scalar($v) && trim((string)$v) !== '') return (string)$v;
-    }
-    return '';
-  };
-  return [
-    'address1' => $pick(['address', 'address1', 'address_1', 'street']),
-    'address2' => $pick(['address2', 'address_2']),
-    'city'     => $pick(['city']),
-    'state'    => $pick(['state']),
-    'zip'      => $pick(['zip', 'zip_code', 'zipcode', 'postal_code']),
-    'country'  => $pick(['country']),
+  $variants = [
+    'address1' => ['address', 'address1', 'address_1', 'street'],
+    'address2' => ['address2', 'address_2'],
+    'city'     => ['city'],
+    'state'    => ['state'],
+    'zip'      => ['zip', 'zip_code', 'zipcode', 'postal_code'],
+    'country'  => ['country'],
   ];
+  $out = [];
+  foreach ($variants as $key => $keys) {
+    foreach ($keys as $k) {
+      if (!array_key_exists($k, $c)) continue;
+      $v = $c[$k];
+      if ($v !== null && !is_scalar($v)) continue;
+      $v = trim((string)$v);
+      if (!isset($out[$key]) || ($out[$key] === '' && $v !== '')) $out[$key] = $v;
+    }
+  }
+  if (isset($out['state']) && ctype_digit($out['state'])) unset($out['state']);
+  return $out;
 }
 
 /**

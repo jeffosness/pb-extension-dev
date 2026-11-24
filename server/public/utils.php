@@ -606,22 +606,27 @@ function clear_forth_tokens($client_id)
 
 /**
  * Map a provider-normalized address to PhoneBurner's /dialsession contact
- * address keys. Each L3 normalizer returns an `address` array shaped
- * ['address1','address2','city','state','zip','country'] (any may be missing),
- * and every launch path merges this function's output into the PB contact.
+ * address keys. Each L3 normalizer returns an `address` array that contains
+ * ONLY the parts the CRM actually returned — any of
+ * address1, address2, city, state, zip, country — with the raw value (null
+ * and '' both mean "the CRM has this field and it's blank"). Every launch
+ * path merges this function's output into the PB contact.
  *
- * All-or-nothing on purpose. When PB matches an existing record (external CRM
- * ID / lead_id) it applies each key as `$params[key] ?? existing` — a key we
- * SEND overwrites, even when empty; a key we OMIT is left alone. So:
- *   - CRM has ANY address data → send all seven keys (blanks included) so the
- *     PB address mirrors the CRM, and a field cleared in the CRM clears in PB.
- *   - CRM has NO address data → send nothing, so an address someone typed
+ * Why presence matters: when PB matches an existing record (external CRM ID /
+ * lead_id) it applies each key as `$params[key] ?? existing` — a key we SEND
+ * overwrites, even when empty; a key we OMIT is left alone. So:
+ *   - Field returned by the CRM (blank or not) → sent, so the CRM wins and a
+ *     field cleared in the CRM clears in PB.
+ *   - Field the CRM doesn't model or didn't return (HubSpot contacts have no
+ *     address2; Apollo task payloads are partial) → omitted, so we never wipe
+ *     PB data the CRM can't speak for. `state_other` is never sent.
+ *   - No non-empty part at all → send nothing, so an address someone typed
  *     into PB isn't wiped by an empty CRM record.
  *
  * State: PB displays a full name only for 2-letter codes, so US state names
- * are normalized to their code ("California" → "CA"); anything else passes
- * through unchanged. Country: common US spellings become "US"; others pass
- * through (PB falls back to showing the stored text).
+ * are normalized to their code ("California" → "CA") when the country is US
+ * or unknown; otherwise it passes through. Country: common US spellings
+ * become "US"; others pass through (PB falls back to the stored text).
  */
 function pb_address_fields($addr): array {
   if (!is_array($addr)) return [];
@@ -633,20 +638,36 @@ function pb_address_fields($addr): array {
     return function_exists('mb_substr') ? mb_substr($s, 0, 255) : substr($s, 0, 255);
   };
 
-  $out = [
-    'address1'    => $clean($addr['address1'] ?? ''),
-    'address2'    => $clean($addr['address2'] ?? ''),
-    'city'        => $clean($addr['city'] ?? ''),
-    'state'       => pb_normalize_us_state($clean($addr['state'] ?? '')),
-    'state_other' => '',
-    'zip'         => $clean($addr['zip'] ?? ''),
-    'country'     => pb_normalize_country($clean($addr['country'] ?? '')),
-  ];
+  $out = [];
+  foreach (['address1', 'address2', 'city', 'state', 'zip', 'country'] as $k) {
+    if (array_key_exists($k, $addr)) $out[$k] = $clean($addr[$k]);
+  }
+  if (isset($out['country'])) $out['country'] = pb_normalize_country($out['country']);
+  if (isset($out['state']) && (($out['country'] ?? '') === '' || $out['country'] === 'US')) {
+    $out['state'] = pb_normalize_us_state($out['state']);
+  }
 
   foreach ($out as $v) {
     if ($v !== '') return $out;
   }
   return [];
+}
+
+/**
+ * Number of PB contacts that carry any address key — logged as `addr_sent` on
+ * every L3 launch so "addresses silently stopped flowing" (a renamed CRM
+ * field, a wrong guess) shows up in app.log. The key name deliberately avoids
+ * the substring "address", which redact_pii_recursive collapses.
+ */
+function pb_count_contacts_with_addr(array $pbContacts): int {
+  $n = 0;
+  foreach ($pbContacts as $pc) {
+    if (!is_array($pc)) continue;
+    foreach (['address1', 'address2', 'city', 'state', 'zip', 'country'] as $k) {
+      if (array_key_exists($k, $pc)) { $n++; break; }
+    }
+  }
+  return $n;
 }
 
 /**

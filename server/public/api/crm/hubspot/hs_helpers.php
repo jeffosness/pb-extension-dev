@@ -606,18 +606,18 @@ function extract_ids_from_records($records) {
 }
 
 // Standard HubSpot address properties → the normalized address shape that
-// pb_address_fields() maps to PB. Contacts have no standard `address2`; it's
-// read when present (companies have one). Standard properties only — custom
-// address properties are out of scope.
+// pb_address_fields() maps to PB. Only properties present in the response are
+// included (HubSpot returns requested properties with null when blank), so
+// contacts — which have no standard `address2` and don't request it — never
+// clear PB's address2. Standard properties only; custom ones are out of scope.
 function hs_address_from_props(array $props): array {
-  return [
-    'address1' => (string)($props['address'] ?? ''),
-    'address2' => (string)($props['address2'] ?? ''),
-    'city'     => (string)($props['city'] ?? ''),
-    'state'    => (string)($props['state'] ?? ''),
-    'zip'      => (string)($props['zip'] ?? ''),
-    'country'  => (string)($props['country'] ?? ''),
-  ];
+  $map = ['address' => 'address1', 'address2' => 'address2', 'city' => 'city',
+          'state' => 'state', 'zip' => 'zip', 'country' => 'country'];
+  $out = [];
+  foreach ($map as $hsKey => $key) {
+    if (array_key_exists($hsKey, $props)) $out[$key] = $props[$hsKey];
+  }
+  return $out;
 }
 
 // Fetch contact objects by ID (HubSpot contacts)

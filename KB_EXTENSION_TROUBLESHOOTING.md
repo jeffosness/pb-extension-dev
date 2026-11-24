@@ -506,7 +506,7 @@ The admin can install the app on the account themselves by running the OAuth flo
 A: It's stored on PhoneBurner's secure backend with strict file permissions (owner-only access, kept outside the public web root). The browser holds a local client identifier — not the token itself — which is used to look the token up server-side. The token is never shared with third parties.
 
 **Q: Does the extension read all my CRM data?**
-A: No. It only reads contact data (name, phone, email, record link) when the customer **explicitly clicks Launch**. It does not run silently in the background.
+A: No. It only reads contact data (name, phone, email, mailing address for HubSpot/Close/Apollo/Forth, record link) when the customer **explicitly clicks Launch**. It does not run silently in the background.
 
 **Q: Does PhoneBurner sell my data?**
 A: No. Data flows only between the customer's browser, the customer's CRM, and PhoneBurner's dialer API. No third-party sharing.
@@ -882,7 +882,7 @@ A PhoneBurner flame button appears next to every phone number on Forth contact-l
 - **Apollo:** City, State and Country (and street/postal code when Apollo has them). Many Apollo records only have city and state.
 - **Forth:** the contact's address fields.
 
-**The CRM wins:** each launch replaces the PhoneBurner address with the CRM's. If a field is blank in the CRM (for example the street), it's cleared in PhoneBurner too. **Exception:** if the CRM record has no address at all, the extension leaves the PhoneBurner address alone, so an address typed in PhoneBurner isn't wiped out.
+**The CRM wins:** each launch replaces the PhoneBurner address with the CRM's. If a field is blank in the CRM (for example the street), it's cleared in PhoneBurner too. **Exceptions:** if the CRM record has no address at all, the PhoneBurner address is left alone. Fields the CRM doesn't have are also left alone: for example HubSpot contacts have no "Address 2" field, so a suite number typed into PhoneBurner stays.
 
 **State format:** US state names are sent as their 2-letter code (California → CA) so PhoneBurner displays them consistently.
 

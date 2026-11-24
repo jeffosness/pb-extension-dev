@@ -182,6 +182,7 @@ $payload = [
 $pbResult = pb_dialsession_or_fail($pat, $payload, 'apollo_selection', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'contact_count'  => count($pbContacts),
+  'addr_sent'      => pb_count_contacts_with_addr($pbContacts),
 ]);
 $resp    = $pbResult['response'];
 $pb_ms   = $pbResult['pb_ms'];

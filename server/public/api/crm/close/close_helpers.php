@@ -92,7 +92,7 @@ function close_token_is_expired(array $tokens): bool {
  * GET request to Close API with Bearer auth.
  * Returns [$httpCode, $jsonArray, $rawBody]
  */
-function close_api_get_json($accessToken, $url) {
+function close_api_get_json($accessToken, $url, int $timeout = 20) {
   $ch = curl_init($url);
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
@@ -100,7 +100,8 @@ function close_api_get_json($accessToken, $url) {
       'Authorization: Bearer ' . $accessToken,
       'Accept: application/json',
     ],
-    CURLOPT_TIMEOUT => 20,
+    CURLOPT_TIMEOUT => max(1, $timeout),
+    CURLOPT_CONNECTTIMEOUT => min(10, max(1, $timeout)),
   ]);
   $raw = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -258,68 +259,90 @@ function close_fetch_contacts_by_ids($accessToken, array $contactIds, &$diag = [
 
 /**
  * Close keeps addresses on the LEAD, not the contact — contacts have no
- * address field. Fetch `addresses` once per unique lead and attach the lead's
- * first address to each of its contacts as `address`.
+ * address field. Fetch `addresses` once per unique lead of a DIALABLE contact
+ * (has a phone) and attach the lead's first non-empty address to each of its
+ * contacts as `address`.
  *
- * Best-effort by design: address must never fail or stall a launch. A failed
- * lead fetch leaves those contacts without `address` (pb_address_fields then
- * sends no keys, so PB's existing address is untouched), and once
- * $budgetSeconds elapse the remaining leads are skipped — LESSONS.md records
- * Close launches dying at max_execution_time from serial per-record calls.
+ * Best-effort by design: address must never fail or stall a launch.
+ *   - $budgetSeconds is the caller's remaining allowance. The Close endpoint
+ *     runs lead resolution, this step and PB's /dialsession wait (up to 60s)
+ *     inside ONE 120s set_time_limit window (pb_call_dialsession's own reset
+ *     doesn't fire once the limit is already 120), so the caller derives the
+ *     budget from request start, not from here.
+ *   - Each request is capped at the remaining budget (max 5s), so a slow
+ *     Close can't overrun it by a full 20s cURL timeout.
+ *   - 401/429 stop the loop: retrying every remaining lead only deepens a
+ *     rate limit the next launch in the same org would hit fatally.
+ *   - A failed or skipped lead leaves its contacts without `address`, so
+ *     pb_address_fields sends no keys and PB's existing address is untouched.
+ *
+ * $fetch is injectable for tests; defaults to close_api_get_json.
  */
-function close_attach_lead_addresses(string $accessToken, array $contacts, array &$diag = [], float $budgetSeconds = 15.0): array {
-  $diag['lead_addresses'] = ['ok' => 0, 'fail' => 0, 'skipped_budget' => 0, 'last_http' => null];
+function close_attach_lead_addresses(string $accessToken, array $contacts, array &$diag = [], float $budgetSeconds = 15.0, ?callable $fetch = null): array {
+  $fetch = $fetch ?? 'close_api_get_json';
+  // Key avoids the substring "address": redact_pii_recursive would collapse it.
+  $diag['lead_addr_fetch'] = ['leads' => 0, 'ok' => 0, 'with_addr' => 0, 'fail' => 0, 'skipped' => 0, 'stopped_on' => null, 'last_http' => null, 'ms' => 0];
+  $st = &$diag['lead_addr_fetch'];
 
   $leadIds = [];
   foreach ($contacts as $c) {
+    if (trim((string)($c['phone'] ?? '')) === '') continue; // skipped at launch anyway
     $lid = (string)($c['lead_id'] ?? '');
     if (preg_match('/^lead_[a-zA-Z0-9]+$/', $lid)) $leadIds[$lid] = true;
   }
+  $st['leads'] = count($leadIds);
 
   $started = microtime(true);
   $byLead = [];
   foreach (array_keys($leadIds) as $lid) {
-    if ((microtime(true) - $started) > $budgetSeconds) {
-      $diag['lead_addresses']['skipped_budget']++;
+    $remaining = $budgetSeconds - (microtime(true) - $started);
+    if ($st['stopped_on'] !== null || $remaining < 1.0) {
+      $st['skipped']++;
       continue;
     }
     $url = 'https://api.close.com/api/v1/lead/' . rawurlencode($lid) . '/?_fields=id,addresses';
-    list($code, $json, $raw) = close_api_get_json($accessToken, $url);
-    $diag['lead_addresses']['last_http'] = $code;
+    list($code, $json, $raw) = $fetch($accessToken, $url, (int)min(5, floor($remaining)));
+    $st['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
-      if ($diag['lead_addresses']['fail'] === 0) {
-        log_api_failure_from_tuple($code, $json, $raw, 'close_lead_addresses.per_lead_failed', [
+      if ($st['fail'] === 0) {
+        log_api_failure_from_tuple($code, $json, $raw, 'close_lead_addr.per_lead_failed', [
           'lead_id_sample' => $lid,
         ]);
       }
-      $diag['lead_addresses']['fail']++;
+      $st['fail']++;
+      if ($code === 401 || $code === 429) $st['stopped_on'] = $code;
       continue;
     }
+    $st['ok']++;
 
-    $first = is_array($json['addresses'] ?? null) ? ($json['addresses'][0] ?? null) : null;
-    if (is_array($first)) {
-      $byLead[$lid] = [
-        'address1' => (string)($first['address_1'] ?? ''),
-        'address2' => (string)($first['address_2'] ?? ''),
-        'city'     => (string)($first['city'] ?? ''),
-        'state'    => (string)($first['state'] ?? ''),
-        'zip'      => (string)($first['zipcode'] ?? ''),
-        'country'  => (string)($first['country'] ?? ''),
-      ];
+    $addrs = is_array($json['addresses'] ?? null) ? $json['addresses'] : [];
+    foreach ($addrs as $a) {
+      if (!is_array($a)) continue;
+      $norm = [];
+      $map = ['address_1' => 'address1', 'address_2' => 'address2', 'city' => 'city',
+              'state' => 'state', 'zipcode' => 'zip', 'country' => 'country'];
+      foreach ($map as $ck => $k) {
+        if (array_key_exists($ck, $a)) $norm[$k] = $a[$ck];
+      }
+      if (pb_address_fields($norm) !== []) { $byLead[$lid] = $norm; $st['with_addr']++; break; }
     }
-    $diag['lead_addresses']['ok']++;
   }
+  $st['ms'] = (int)round((microtime(true) - $started) * 1000);
 
-  if ($diag['lead_addresses']['fail'] > 0 || $diag['lead_addresses']['skipped_budget'] > 0) {
-    _pb_write_api_log('close_lead_addresses.batch_summary', [
-      'ok'             => $diag['lead_addresses']['ok'],
-      'fail'           => $diag['lead_addresses']['fail'],
-      'skipped_budget' => $diag['lead_addresses']['skipped_budget'],
-      'last_http'      => $diag['lead_addresses']['last_http'],
-      'total'          => count($leadIds),
-    ]);
-  }
+  // Always logged (counts only, no PII) so "addresses silently stopped
+  // flowing" is visible from a Support ID, not just failures.
+  _pb_write_api_log('close_lead_addr.done', [
+    'leads'      => $st['leads'],
+    'ok'         => $st['ok'],
+    'with_addr'  => $st['with_addr'],
+    'fail'       => $st['fail'],
+    'skipped'    => $st['skipped'],
+    'stopped_on' => $st['stopped_on'],
+    'last_http'  => $st['last_http'],
+    'ms'         => $st['ms'],
+  ]);
+  unset($st);
 
   foreach ($contacts as &$c) {
     $lid = (string)($c['lead_id'] ?? '');
