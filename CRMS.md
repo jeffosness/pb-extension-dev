@@ -585,7 +585,8 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
   `Authorization: Bearer`). No refresh token — re-mint with the durable pair.
 - **Rate limit:** 20 req/sec (429 on exceed).
   Launch fetches contacts in parallel via `forth_api_get_json_multi()`, capped at 12 request starts/sec (15 measured as 18 at the server from arrival jitter) with one retry pass for 429s. There is no bulk contact read.
-- **Call attempts (dial-order sort):** the field name isn't in the public docs. `forth_extract_call_attempts()` accepts call/dial+attempt spellings (never payment/NSF attempts), and every launch logs the contact's field NAMES as `forth_fetch_contacts.fields` so the real name can be confirmed from `api.log` without Forth access.
+- **No call-attempts field in the API.** `GET /contacts/{id}` returns no call-attempt count, standard or custom (verified from a live payload's field names, 2026-11-25). The **Call Attempts** column on Forth's list screen is computed by Forth's UI. So don't sort server-side: reps sort the list in Forth and the session dials in on-page order. (A server-side attempts sort shipped in #267 and was removed for this reason.)
+- **Address is nested:** `address.address1/address2/address3/city/state/zip` under an `address` object, not top-level keys.
 
 **`POST /v1/calls` (Create Call Record)** — logs to the contact's "Calls" tab:
 - **REQUIRED:** `contactID` (int), `call_type` (enum `Outgoing`/`Incoming`),
