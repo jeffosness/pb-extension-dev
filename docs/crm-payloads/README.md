@@ -40,3 +40,4 @@ Get Contact returns `first_name` and `phone_number`).
 | File | Source | Captured | Notes |
 |---|---|---|---|
 | `forth/get_contact.json` | SetForth Complete API Documentation, Get Contact example (pp. 48-49) | 2026-08-21 (doc export) | `object` is `"contact"`. `address.state` is a 2-letter code. No country key. |
+| (field names only) | Live prod `forth_fetch_contacts.fields` log | 2026-11-25 | Confirms the documented shape, including nested `address.{address1,address2,address3,city,state,zip}`. Live records ALSO carry fields the docs example lacks: `tp_id`, `secondary_assignments.{companies,roles,teams}`, `is_test_contact`, `dba`, `ein`, `has_valid_ssn`, `stageID`, `stage_label`, `status_label`, `status_timestamp`, `linked_coapp`, `budget_fields`, `del_source`, and per-org `customs[<label>]` rows. **There is no call-attempt field**, and the API has no per-contact call list (only `POST /calls`, `GET /calls/{id}`, `GET /calls/disposition`). |
