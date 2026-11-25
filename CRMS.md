@@ -174,7 +174,7 @@ function scanMyNewCrmContacts(maxContacts) {
 **Rough order of operations:**
 
 - **Phase 0** — Register an OAuth app with the CRM provider so you have Client ID + Client Secret + a callback URL to hand back.
-- **Phase 1** — Server-side scaffolding (`utils.php` token functions, provider directory, OAuth endpoints, `state.php`, `pb_dialsession_selection.php`).
+- **Phase 1** — Server-side scaffolding (`utils.php` token functions, provider directory, OAuth endpoints, `state.php`, `pb_dialsession_selection.php`). **Capture a complete, scrubbed response for every endpoint you read** as you go — see [Capture full API response examples](#capture-full-api-response-examples-required-for-l3).
 - **Phase 2** — Extension-side wiring (`crm_config.js`, `content.js`, `background.js`, `popup.js`, `popup.html`).
 - **Phase 3** — Call logging back into the CRM (can be deferred — Close and Apollo both shipped Phase 1+2 first and added Phase 3 later).
 - **Phase 4** — Customer-facing surfaces + version bump, using the [shared checklist above](#customer-facing-surfaces-shared-checklist).
@@ -731,6 +731,16 @@ the **CTC intent bridge** to recover it. The bridge carries one of two intents:
 ---
 
 ## Cross-cutting patterns learned from adding CRMs
+
+### Capture full API response examples (required for L3)
+
+**Rule:** for every CRM endpoint an integration reads, commit one **complete** example response to `docs/crm-payloads/<crm>/<endpoint>.json`, scrubbed with `scripts/scrub-payload.php`. Complete means every field, not just the ones today's code uses. Do it during Phase 1, while you have account access, and before the PR is opened.
+
+**Why:** we used to write down only the fields the code needed that day. When address sync came along (#268), nobody knew Forth's address was a nested `address` object; the first implementation guessed top-level keys and would have silently sent nothing. The full shape was in a docs PDF sitting in a Downloads folder, never in the repo.
+
+**The repo is public:** never commit a raw payload. The scrub script keeps keys, nesting, types and formats and masks all content. Read its output before committing. Details and the index of examples: [docs/crm-payloads/README.md](docs/crm-payloads/README.md).
+
+**PR check:** an L3 PR that adds a new CRM read without a matching file in `docs/crm-payloads/` is incomplete.
 
 ### Testing with Real CRM Data
 

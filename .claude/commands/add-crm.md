@@ -9,6 +9,7 @@ Before writing code, gather this information:
 - **Integration level** — L1 (generic table), L2 (CRM-specific selectors), or L3 (full API)?
 - **DOM structure** — For L1/L2: What stable selectors exist for name, phone, email, record URL?
 - **API docs** — For L3: Auth method (OAuth2 vs API key), endpoints, rate limits
+- **Full response examples** — For L3: for every endpoint you'll read, save one COMPLETE response (all fields, not just the ones you need now) to `docs/crm-payloads/<crm>/<endpoint>.json` via `php scripts/scrub-payload.php` (repo is public; read the scrubbed output before committing). If the vendor docs only exist as a PDF or behind a login, scrub their example responses the same way. See CRMS.md → "Capture full API response examples".
 - **Important:** Avoid hashed/minified CSS class names — they change between deploys. Use `[data-*]`, `[aria-label]`, `[role]`, `a[href*="pattern"]`, `tr[data-index]` etc.
 
 ## Step 1: Add to CRM Registry
@@ -74,6 +75,7 @@ These are non-negotiable — learned from real breakage:
 
 ## Step 4: Update Documentation
 
+- [ ] For L3: every endpoint the integration reads has a scrubbed example in `docs/crm-payloads/<crm>/` and a row in its README
 - [ ] Update CRM table in `CLAUDE.md` (Three-Level CRM Integration Model)
 - [ ] Add CRM to test list in CLAUDE.md ("Test existing CRMs" line)
 - [ ] For L2: Add scanner reference table to CLAUDE.md (selectors used)
