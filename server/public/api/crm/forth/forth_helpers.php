@@ -431,7 +431,6 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   $t0 = microtime(true);
   $fetched = forth_api_get_json_multi($apiKey, $urls);
   $diag['contacts_fetch']['ms'] = (int) round((microtime(true) - $t0) * 1000);
-  $fieldsLogged = false;
 
   foreach ($urls as $cid => $url) {
     $cid = (string)$cid;
@@ -455,16 +454,6 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
 
     // Contact object may be nested under `response` (Forth's usual envelope).
     $c = (isset($json['response']) && is_array($json['response'])) ? $json['response'] : $json;
-
-    // Field NAMES only (never values) from the first record, so we can see
-    // which call-attempt field this org's Forth sends without account access.
-    if (!$fieldsLogged) {
-      $fieldsLogged = true;
-      _pb_write_api_log('forth_fetch_contacts.fields', [
-        'field_names'    => forth_contact_field_names($c),
-        'attempts_field' => forth_extract_call_attempts($c)['field'],
-      ]);
-    }
 
     list($first, $last) = forth_extract_contact_name($c);
 
@@ -519,7 +508,6 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
       'phone'             => $primaryPhone,
       'additional_phones' => $additional,
       'assigned_to'       => $assignedTo,
-      'call_attempts'     => forth_extract_call_attempts($c)['value'],
     ];
     $diag['contacts_fetch']['ok']++;
   }
@@ -534,95 +522,6 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   }
 
   return $contacts;
-}
-
-/**
- * Read the contact's call-attempt counter, which reps sort by so every record
- * gets worked evenly (never-called first, then 1 attempt, then 2, …).
- *
- * The exact field name isn't visible in Forth's public docs, so we accept the
- * likely spellings at the top level or one level down (`call_attempts`,
- * `stats.callAttempts`, …) plus custom-field rows shaped {name|label, value}.
- * Names must say call/dial AND attempt (or be a bare `attempts`): this is a
- * debt-settlement CRM, and a loose /attempt/ match would grab payment/NSF
- * attempt counters. An empty value on a present field means never called (0).
- *
- * Returns ['field' => matched name|null, 'value' => int|null].
- */
-function forth_extract_call_attempts(array $c): array {
-  $isAttemptsName = static function (string $name): bool {
-    $n = strtolower(preg_replace('/[^a-z0-9]/i', '', $name));
-    if ($n === 'attempts') return true;
-    return strpos($n, 'attempt') !== false && (strpos($n, 'call') !== false || strpos($n, 'dial') !== false);
-  };
-  $toInt = static function ($v): ?int {
-    if ($v === null || $v === '') return 0;
-    if (is_int($v)) return max(0, $v);
-    if (is_string($v) && ctype_digit(trim($v))) return (int)trim($v);
-    if (is_float($v) && $v >= 0) return (int)$v;
-    return null; // present but not a count — ignore it
-  };
-
-  $scan = static function (array $obj, string $prefix) use ($isAttemptsName, $toInt): ?array {
-    foreach ($obj as $k => $v) {
-      if (is_string($k) && (is_scalar($v) || $v === null) && $isAttemptsName($k)) {
-        $val = $toInt($v);
-        if ($val !== null) return ['field' => $prefix . $k, 'value' => $val];
-      }
-    }
-    return null;
-  };
-
-  if ($hit = $scan($c, '')) return $hit;
-
-  foreach ($c as $k => $v) {
-    if (!is_string($k) || !is_array($v)) continue;
-    if (!array_is_list($v)) {
-      if ($hit = $scan($v, $k . '.')) return $hit;
-      continue;
-    }
-    // Custom-field rows: [{name|label|field_name, value}, …]
-    foreach ($v as $row) {
-      if (!is_array($row)) continue;
-      $label = $row['name'] ?? $row['label'] ?? $row['field_name'] ?? null;
-      if (is_string($label) && $isAttemptsName($label) && array_key_exists('value', $row)) {
-        $val = $toInt($row['value']);
-        if ($val !== null) return ['field' => $k . '[' . $label . ']', 'value' => $val];
-      }
-    }
-  }
-  return ['field' => null, 'value' => null];
-}
-
-/**
- * Field names (never values) of a Forth contact object for the diagnostic
- * log: top-level keys, one level of nested object keys as `parent.child`, and
- * custom-field row labels as `parent[label]`. Capped so a huge custom-field
- * set can't bloat a log line.
- */
-function forth_contact_field_names(array $c, int $cap = 200): array {
-  $names = [];
-  foreach ($c as $k => $v) {
-    if (!is_string($k)) continue;
-    $names[] = $k;
-    if (!is_array($v)) continue;
-    if (!array_is_list($v)) {
-      foreach (array_keys($v) as $sub) {
-        if (is_string($sub)) $names[] = $k . '.' . $sub;
-      }
-    } else {
-      // Labels only from custom-field-shaped rows ({name|label, value}): a
-      // list of related PEOPLE (e.g. co-applicants with a `name`) would
-      // otherwise put a person's name in the log.
-      foreach ($v as $row) {
-        if (!is_array($row) || !array_key_exists('value', $row)) continue;
-        $label = $row['name'] ?? $row['label'] ?? $row['field_name'] ?? null;
-        if (is_string($label)) $names[] = $k . '[' . substr($label, 0, 60) . ']';
-      }
-    }
-  }
-  $names = array_values(array_unique($names));
-  return array_slice($names, 0, $cap);
 }
 
 /**

@@ -845,7 +845,7 @@ Forth does **not** use OAuth. It uses a durable API credential pair — a **Key 
 
 ### Dialing, call logging, and follow-me
 
-- **Dial order: fewest call attempts first.** When the selected Forth contacts carry a call-attempts count, the session is ordered never-called first, then 1 attempt, then 2, and so on, so every record gets worked evenly. Contacts with the same count keep their on-page order. If Forth doesn't send an attempts count, the session keeps the order the contacts appear on the page.
+- **Dial order follows the Forth page.** The session dials the selected contacts in the order they appear on the Forth list. To work never-called contacts first, sort the list by **Call Attempts** (lowest first) before selecting and launching; to work the oldest-touched first, sort by **Last Call Activity**.
 - **Cell is dialed first.** Forth's phone fields are fetched via the API; the **cell number is the primary dialed number**, with home and work included as additional numbers.
 - **Call activities log to Forth automatically** — recorded in the contact's **Call History** with disposition, duration, and recording link, attributed to the rep who made the call.
 - **Notes typed during the call** are saved on the Forth contact alongside the call activity.
@@ -862,7 +862,7 @@ A PhoneBurner flame button appears next to every phone number on Forth contact-l
 | No "Connect Forth" card in the popup | Not on a Forth page, or on an older extension version | Confirm the URL is on a Forth host (e.g. `client.forthcrm.com` or `login.forthcrm.com`) and the extension is v0.8.8 or newer. |
 | Popup shows "Level 1 – Generic mode" / "Scan & Launch" on a Forth page, and follow-me keeps flashing to an add/edit page | Extension older than v0.8.8 on a non-`client.` Forth host (e.g. `login.forthcrm.com`) — it fell back to generic scanning | Update to v0.8.8+, which detects every Forth host as Level 3. |
 | "Connect Forth" fails / "invalid credentials" | Key ID and Secret swapped, or the key was disabled/deleted in Forth | Re-check which value is which (Key ID = short numeric, Secret = long UUID). Ask the admin to confirm the user's key is still active, or generate a new one. |
-| Session doesn't dial in the order shown on the Forth page | Expected: the session puts contacts with the fewest call attempts first (ties keep page order) | Explain the fewest-attempts-first order. If the order looks random even among contacts with equal attempts, escalate with the time of launch. |
+| Session doesn't dial in the order shown on the Forth page | Not expected: the session should follow the on-page order | Escalate with the time of launch and a screenshot of the sorted list (including the ID column) so support can compare it with the order the extension sent. |
 | Connected, but launch says no dialable contacts | The selected rows have no phone number in Forth | Add a phone to the contact(s) in Forth. Cell is preferred. |
 | Click-to-call button dials the wrong number | (Fixed in v0.8.7) earlier internal builds could reclaim a sibling number's button when a contact had multiple phones | Confirm v0.8.7 or newer. |
 | Calls/notes not appearing in Forth | Key belongs to a different user than expected, or the API Agreement isn't active | Confirm the connected key is the rep's own; confirm the Forth API Agreement is signed and active. |

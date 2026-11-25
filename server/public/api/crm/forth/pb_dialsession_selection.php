@@ -73,41 +73,19 @@ if (empty($forthContacts)) {
   api_error('No contacts returned from Forth API', 'bad_request', 400, $diag);
 }
 
-// Dial fewest call attempts first (never-called, then 1, then 2, …) so every
-// record gets worked evenly — what Forth teams asked for. usort is stable on
-// PHP 8, so ties keep the rep's on-page order. If no contact carries an
-// attempts field, the selection order is left untouched.
-$attemptsKnown = 0;
-$attemptsHist  = [];
-foreach ($forthContacts as $c) {
-  if (isset($c['call_attempts'])) {
-    $attemptsKnown++;
-    $bucket = $c['call_attempts'] >= 5 ? '5+' : (string)$c['call_attempts'];
-    $attemptsHist[$bucket] = ($attemptsHist[$bucket] ?? 0) + 1;
-  }
-}
-if ($attemptsKnown > 0) {
-  usort($forthContacts, function ($a, $b) {
-    // Unknown attempts sort last: we can't tell they're under-worked.
-    return ($a['call_attempts'] ?? PHP_INT_MAX) <=> ($b['call_attempts'] ?? PHP_INT_MAX);
-  });
-}
-ksort($attemptsHist);
-
+// Dial order is the rep's on-page order (they sort the Forth list — e.g. by
+// its Call Attempts column — before launching), so contacts are NOT re-sorted
+// here. Forth's Get Contact API has no call-attempts field to sort on anyway:
+// that column is computed by Forth's list UI. See CRMS.md (Forth reference).
 api_log('forth_selection.fetched', [
   'client_id_hash'   => substr(hash('sha256', (string)$client_id), 0, 12),
   'selected'         => count($contactIds),
   'fetched'          => count($forthContacts),
   'fetch_ms'         => $diag['contacts_fetch']['ms'] ?? null,
-  'attempts_known'   => $attemptsKnown,
-  'attempts_hist'    => $attemptsHist,
-  'sorted_by_attempts' => $attemptsKnown > 0,
-  // First 10 Forth record IDs (not PII) as the extension sent them and as we
-  // will send them to PB, so a rep's screenshot of the sorted list can be
-  // compared against both: tells "extension read the rows out of order"
-  // apart from "PB reordered the session".
+  // First 10 Forth record IDs (not PII) in the order the extension sent them,
+  // to compare against a rep's screenshot of their sorted list: tells "the
+  // extension read the rows out of order" apart from "PB reordered the session".
   'received_order_head' => array_slice($contactIds, 0, 10),
-  'sent_order_head'     => array_slice(array_column($forthContacts, 'forth_id'), 0, 10),
 ]);
 
 // -----------------------------------------------------------------------------
