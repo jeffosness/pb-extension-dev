@@ -172,6 +172,13 @@ if (empty($closeContacts)) {
   api_error('No contacts returned from Close API', 'bad_request', 400, $diag);
 }
 
+// Close stores addresses on the lead, not the contact. Best-effort and
+// time-boxed — a missing address never blocks the launch. This request shares
+// one 120s window (set above) with PB's /dialsession wait of up to 60s, so the
+// address step gets at most 15s and only while the request is under 45s old.
+$__addr_elapsed = microtime(true) - (float)($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
+$closeContacts = close_attach_lead_addresses($accessToken, $closeContacts, $diag, min(15.0, 45.0 - $__addr_elapsed));
+
 // -----------------------------------------------------------------------------
 // Normalize into PhoneBurner dialsession payload
 // -----------------------------------------------------------------------------
@@ -220,6 +227,8 @@ foreach ($closeContacts as $c) {
   if (!empty($additionalPhones)) {
     $pbContact['additional_phone'] = $additionalPhones;
   }
+  // Address: only the fields the CRM returned — see pb_address_fields() in utils.php.
+  $pbContact += pb_address_fields($c['address'] ?? null);
 
   $pbContacts[] = $pbContact;
 
@@ -285,6 +294,7 @@ $payload = [
 $pbResult = pb_dialsession_or_fail($pat, $payload, 'close_selection', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'contact_count'  => count($pbContacts),
+  'addr_sent'      => pb_count_contacts_with_addr($pbContacts),
 ]);
 $resp    = $pbResult['response'];
 $pb_ms   = $pbResult['pb_ms'];

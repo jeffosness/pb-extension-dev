@@ -76,6 +76,7 @@ The extension supports two integration levels. The level determines which featur
 | "Can I use Forth?" / "Connect Forth" / "Forth API key / Key ID / Secret" / "Where do I get Forth credentials" | [Forth CRM](#27-forth-crm) |
 | "Forth calls/notes not logging" / "Forth click-to-call wrong number" / "Forth cell vs home number" | [Forth CRM](#27-forth-crm) |
 | "HubSpot phone overwritten" / "Phone field changed in HubSpot" | [HubSpot Data Sync conflict](#19-hubspot-data-sync-conflict) |
+| "Address didn't come over" / "Wrong address in PhoneBurner" / "PhoneBurner address got overwritten" | [Contact address in PhoneBurner](#28-contact-address-in-phoneburner) |
 | "Is my data safe" / Privacy questions | [Privacy and security](#20-privacy-and-security) |
 | "Extension completely broken" / Nothing works | [Emergency reset](#21-emergency-reset) |
 
@@ -505,7 +506,7 @@ The admin can install the app on the account themselves by running the OAuth flo
 A: It's stored on PhoneBurner's secure backend with strict file permissions (owner-only access, kept outside the public web root). The browser holds a local client identifier — not the token itself — which is used to look the token up server-side. The token is never shared with third parties.
 
 **Q: Does the extension read all my CRM data?**
-A: No. It only reads contact data (name, phone, email, record link) when the customer **explicitly clicks Launch**. It does not run silently in the background.
+A: No. It only reads contact data (name, phone, email, mailing address for HubSpot/Close/Apollo/Forth, record link) when the customer **explicitly clicks Launch**. It does not run silently in the background.
 
 **Q: Does PhoneBurner sell my data?**
 A: No. Data flows only between the customer's browser, the customer's CRM, and PhoneBurner's dialer API. No third-party sharing.
@@ -868,6 +869,29 @@ A PhoneBurner flame button appears next to every phone number on Forth contact-l
 | Calls/notes not appearing in Forth | Key belongs to a different user than expected, or the API Agreement isn't active | Confirm the connected key is the rep's own; confirm the Forth API Agreement is signed and active. |
 
 **Escalate if:** connection succeeds but no contacts fetch, or calls complete but nothing logs to Forth after confirming the key is active and the API Agreement is signed. Ask for: the Forth contact URL (with `cid=`), extension version, and approximate call timestamp so engineering can trace via server logs.
+
+---
+
+## 28. Contact Address in PhoneBurner
+
+**What happens:** for **HubSpot, Close, Apollo and Forth**, launching a dial session copies the contact's mailing address (street, city, state, zip, country) from the CRM onto the PhoneBurner contact, along with the name, phone and email. Generic/Level 1–2 CRMs (Salesforce, Pipedrive, etc.) don't send an address.
+
+**Where the address comes from:**
+- **HubSpot:** the standard Street Address, City, State/Region, Postal Code and Country fields on the contact (or the company, when dialing companies). Deals dial their associated contacts, so the contact's address is used. Custom address fields are not read; move the data into the standard fields if you need it in PhoneBurner.
+- **Close:** Close stores addresses on the **lead** (the company), not the contact, so every contact under a lead gets that lead's first non-empty address.
+- **Apollo:** City, State and Country only. Apollo doesn't store a street address or zip code on contacts, so those PhoneBurner fields are never changed by an Apollo launch.
+- **Forth:** the contact's address (street, address line 2, city, state, zip). Forth doesn't store a country on the contact, so none is sent.
+
+**The CRM wins:** each launch replaces the PhoneBurner address with the CRM's. If a field is blank in the CRM (for example the street), it's cleared in PhoneBurner too. **Exceptions:** if the CRM record has no address at all, the PhoneBurner address is left alone. Fields the CRM doesn't have are also left alone: for example HubSpot contacts have no "Address 2" field, so a suite number typed into PhoneBurner stays.
+
+**State format:** US state names are sent as their 2-letter code (California → CA) so PhoneBurner displays them consistently.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| No address on the PhoneBurner contact | The CRM record has no address in the standard fields, or the CRM isn't one of the four above | Add the address to the standard CRM fields and relaunch. |
+| Address I entered in PhoneBurner got replaced | The CRM record has an address, and the CRM is treated as the source of truth | Update the address in the CRM instead. |
+| Close contact shows the company's address | Expected: Close only stores addresses on leads | No fix needed. |
+| Some Close contacts in a very large session have no address | On very large Close launches the extension stops looking up addresses after a time limit so the launch doesn't time out | Relaunch a smaller selection to fill them in. |
 
 ---
 

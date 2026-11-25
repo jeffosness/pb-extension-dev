@@ -606,6 +606,9 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
   returns `firstname`/`lastname` and a `phone` ARRAY + `email` array — different
   shape; the normalizer tolerates both.)
 - `assigned_to` (int) = owning DPP agent → we pass it as `assigned_agent` on `/calls`.
+- **Address is a NESTED object**, not top-level fields: `address: {address1, address2, address3, city, state, zip}`.
+  `state` is a 2-letter code (`"IL"`). There is **no country key**. `address3` has no PB field. Read by
+  `forth_extract_address()` (source: the Get Contact example in the SetForth PDF, pp. 48-49).
 
 **Notes:** `POST /v1/contacts/{contact_id}/notes` with `{content, note_type, public}`.
 

@@ -508,6 +508,7 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
       'phone'             => $primaryPhone,
       'additional_phones' => $additional,
       'assigned_to'       => $assignedTo,
+      'address'           => forth_extract_address($c),
     ];
     $diag['contacts_fetch']['ok']++;
   }
@@ -522,6 +523,34 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   }
 
   return $contacts;
+}
+
+/**
+ * Pull the contact's address from a Forth Get Contact record into the
+ * normalized shape pb_address_fields() expects.
+ *
+ * Shape per Forth's API docs (SetForth Complete API Documentation, Get Contact
+ * example, captured 2026-08-21 — see CRMS.md → Forth reference): a NESTED
+ * object
+ *   "address": {"address1", "address2", "address3", "city", "state" (2-letter,
+ *               e.g. "IL"), "zip"}
+ * with no country key. Only keys present in the object are passed on (the
+ * presence rule in pb_address_fields), so a record without the object sends
+ * nothing. `address3` has no PB field and is ignored. A purely numeric
+ * `state` would be an internal id, not a state, so it's dropped defensively.
+ */
+function forth_extract_address(array $c): array {
+  $a = $c['address'] ?? null;
+  if (!is_array($a)) return [];
+  $out = [];
+  foreach (['address1', 'address2', 'city', 'state', 'zip'] as $k) {
+    if (!array_key_exists($k, $a)) continue;
+    $v = $a[$k];
+    if ($v !== null && !is_scalar($v)) continue;
+    $out[$k] = trim((string)$v);
+  }
+  if (isset($out['state']) && ctype_digit($out['state'])) unset($out['state']);
+  return $out;
 }
 
 /**

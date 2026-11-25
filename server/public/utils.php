@@ -600,6 +600,122 @@ function clear_forth_tokens($client_id)
     audit_token_event('delete', 'forth', $client_id, $existed ? 'ok' : 'missing');
 }
 
+// -------------------------------------------------------------------------
+// PhoneBurner contact address (shared by all L3 providers)
+// -------------------------------------------------------------------------
+
+/**
+ * Map a provider-normalized address to PhoneBurner's /dialsession contact
+ * address keys. Each L3 normalizer returns an `address` array that contains
+ * ONLY the parts the CRM actually returned — any of
+ * address1, address2, city, state, zip, country — with the raw value (null
+ * and '' both mean "the CRM has this field and it's blank"). Every launch
+ * path merges this function's output into the PB contact.
+ *
+ * Why presence matters: when PB matches an existing record (external CRM ID /
+ * lead_id) it applies each key as `$params[key] ?? existing` — a key we SEND
+ * overwrites, even when empty; a key we OMIT is left alone. So:
+ *   - Field returned by the CRM (blank or not) → sent, so the CRM wins and a
+ *     field cleared in the CRM clears in PB.
+ *   - Field the CRM doesn't model or didn't return (HubSpot contacts have no
+ *     address2; Apollo task payloads are partial) → omitted, so we never wipe
+ *     PB data the CRM can't speak for. `state_other` is never sent.
+ *   - No non-empty part at all → send nothing, so an address someone typed
+ *     into PB isn't wiped by an empty CRM record.
+ *
+ * State: PB displays a full name only for 2-letter codes, so US state names
+ * are normalized to their code ("California" → "CA") when the country is US
+ * or unknown; otherwise it passes through. Country: common US spellings
+ * become "US"; others pass through (PB falls back to the stored text).
+ */
+function pb_address_fields($addr): array {
+  if (!is_array($addr)) return [];
+
+  $clean = static function ($v): string {
+    if (!is_scalar($v)) return '';
+    $s = trim(preg_replace('/\s+/', ' ', (string)$v));
+    // PB's user_address columns are varchar(255).
+    return function_exists('mb_substr') ? mb_substr($s, 0, 255) : substr($s, 0, 255);
+  };
+
+  $out = [];
+  foreach (['address1', 'address2', 'city', 'state', 'zip', 'country'] as $k) {
+    if (!array_key_exists($k, $addr)) continue;
+    $v = $addr[$k];
+    // An object/array/bool isn't an address value we understand — skip it
+    // rather than send '' (which would clear PB). null means "blank".
+    if ($v !== null && (is_bool($v) || !is_scalar($v))) continue;
+    $out[$k] = $clean($v);
+  }
+  if (isset($out['country'])) $out['country'] = pb_normalize_country($out['country']);
+  if (isset($out['state']) && (($out['country'] ?? '') === '' || $out['country'] === 'US')) {
+    $out['state'] = pb_normalize_us_state($out['state']);
+  }
+
+  foreach ($out as $v) {
+    if ($v !== '') return $out;
+  }
+  return [];
+}
+
+/**
+ * Number of PB contacts that carry any address key — logged as `addr_sent` on
+ * every L3 launch so "addresses silently stopped flowing" (a renamed CRM
+ * field, a wrong guess) shows up in app.log. The key name deliberately avoids
+ * the substring "address", which redact_pii_recursive collapses.
+ */
+function pb_count_contacts_with_addr(array $pbContacts): int {
+  $n = 0;
+  foreach ($pbContacts as $pc) {
+    if (!is_array($pc)) continue;
+    foreach (['address1', 'address2', 'city', 'state', 'zip', 'country'] as $k) {
+      if (array_key_exists($k, $pc)) { $n++; break; }
+    }
+  }
+  return $n;
+}
+
+/**
+ * "California" / "california" / "CA" → "CA". Unrecognized values (non-US
+ * regions, typos) are returned unchanged.
+ */
+function pb_normalize_us_state(string $state): string {
+  static $codes = null;
+  if ($codes === null) {
+    $codes = [
+      'alabama' => 'AL', 'alaska' => 'AK', 'arizona' => 'AZ', 'arkansas' => 'AR',
+      'california' => 'CA', 'colorado' => 'CO', 'connecticut' => 'CT', 'delaware' => 'DE',
+      'district of columbia' => 'DC', 'florida' => 'FL', 'georgia' => 'GA', 'hawaii' => 'HI',
+      'idaho' => 'ID', 'illinois' => 'IL', 'indiana' => 'IN', 'iowa' => 'IA',
+      'kansas' => 'KS', 'kentucky' => 'KY', 'louisiana' => 'LA', 'maine' => 'ME',
+      'maryland' => 'MD', 'massachusetts' => 'MA', 'michigan' => 'MI', 'minnesota' => 'MN',
+      'mississippi' => 'MS', 'missouri' => 'MO', 'montana' => 'MT', 'nebraska' => 'NE',
+      'nevada' => 'NV', 'new hampshire' => 'NH', 'new jersey' => 'NJ', 'new mexico' => 'NM',
+      'new york' => 'NY', 'north carolina' => 'NC', 'north dakota' => 'ND', 'ohio' => 'OH',
+      'oklahoma' => 'OK', 'oregon' => 'OR', 'pennsylvania' => 'PA', 'rhode island' => 'RI',
+      'south carolina' => 'SC', 'south dakota' => 'SD', 'tennessee' => 'TN', 'texas' => 'TX',
+      'utah' => 'UT', 'vermont' => 'VT', 'virginia' => 'VA', 'washington' => 'WA',
+      'west virginia' => 'WV', 'wisconsin' => 'WI', 'wyoming' => 'WY',
+      'puerto rico' => 'PR', 'guam' => 'GU', 'u.s. virgin islands' => 'VI',
+      'virgin islands' => 'VI', 'american samoa' => 'AS', 'northern mariana islands' => 'MP',
+    ];
+  }
+  if ($state === '') return '';
+  $key = strtolower($state);
+  if (isset($codes[$key])) return $codes[$key];
+  if (strlen($state) === 2 && in_array(strtoupper($state), $codes, true)) return strtoupper($state);
+  return $state;
+}
+
+/**
+ * Common US spellings → "US"; everything else unchanged.
+ */
+function pb_normalize_country(string $country): string {
+  $key = strtolower(str_replace('.', '', $country));
+  if (in_array($key, ['us', 'usa', 'united states', 'united states of america'], true)) return 'US';
+  return $country;
+}
+
 
 // -------------------------------------------------------------------------
 // PhoneBurner API: create dial session (shared by all L3 providers)
@@ -783,6 +899,10 @@ if (!function_exists('redact_pii_recursive')) {
             '/^.*note.*$/i',
             '/^.*content.*$/i',
             '/^.*(ssn|social.?security).*$/i',
+            // Contact address parts. Bare `state` is deliberately NOT matched —
+            // session/OAuth code logs `state` keys and a state alone isn't
+            // identifying; `address` (the normalized wrapper) collapses whole.
+            '/^.*(address|street|city|zip|postal|postcode|state_other).*$/i',
         ];
         // KEEP IN SYNC with bootstrap.php's redact_pii_recursive $denyKeys.
         // See bootstrap.php for the rationale on each entry (added in the
