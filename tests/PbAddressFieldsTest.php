@@ -90,11 +90,10 @@ final class PbAddressFieldsTest extends TestCase
     }
 
     #[Test]
-    public function non_scalar_values_become_blank(): void
+    public function non_scalar_and_bool_values_are_skipped_not_blanked(): void
     {
-        $out = pb_address_fields(['address1' => ['nested'], 'city' => 'Austin']);
-        $this->assertSame('', $out['address1']);
-        $this->assertSame('Austin', $out['city']);
+        $out = pb_address_fields(['address1' => ['nested'], 'zip' => true, 'city' => 'Austin']);
+        $this->assertSame(['city' => 'Austin'], $out, 'odd values must not clear PB fields');
     }
 
     #[Test]

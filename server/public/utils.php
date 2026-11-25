@@ -640,7 +640,12 @@ function pb_address_fields($addr): array {
 
   $out = [];
   foreach (['address1', 'address2', 'city', 'state', 'zip', 'country'] as $k) {
-    if (array_key_exists($k, $addr)) $out[$k] = $clean($addr[$k]);
+    if (!array_key_exists($k, $addr)) continue;
+    $v = $addr[$k];
+    // An object/array/bool isn't an address value we understand — skip it
+    // rather than send '' (which would clear PB). null means "blank".
+    if ($v !== null && (is_bool($v) || !is_scalar($v))) continue;
+    $out[$k] = $clean($v);
   }
   if (isset($out['country'])) $out['country'] = pb_normalize_country($out['country']);
   if (isset($out['state']) && (($out['country'] ?? '') === '' || $out['country'] === 'US')) {

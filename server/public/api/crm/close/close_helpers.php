@@ -101,8 +101,10 @@ function close_api_get_json($accessToken, $url, int $timeout = 20) {
       'Accept: application/json',
     ],
     CURLOPT_TIMEOUT => max(1, $timeout),
-    CURLOPT_CONNECTTIMEOUT => min(10, max(1, $timeout)),
   ]);
+  // Short-budget callers (lead-address lookup) also cap the connect phase;
+  // default callers keep their original behaviour.
+  if ($timeout < 20) curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, max(1, $timeout));
   $raw = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
   curl_close($ch);

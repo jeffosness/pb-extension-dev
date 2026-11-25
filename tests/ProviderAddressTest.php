@@ -75,31 +75,57 @@ final class ProviderAddressTest extends TestCase
     }
 
     #[Test]
-    public function forth_accepts_field_name_variants(): void
+    public function forth_documented_nested_address_maps_to_pb(): void
     {
-        $a = forth_extract_address(['address' => '9 Elm', 'city' => 'Mesa', 'state' => 'AZ', 'zip_code' => '85201']);
-        $this->assertSame('9 Elm', $a['address1']);
-        $this->assertSame('85201', $a['zip']);
-
-        $b = forth_extract_address(['address1' => '10 Oak', 'postal_code' => '85202']);
-        $this->assertSame('10 Oak', $b['address1']);
-        $this->assertSame('85202', $b['zip']);
-        $this->assertArrayNotHasKey('city', $b);
+        // Shape from Forth's Get Contact example (SetForth API docs, pp. 48-49).
+        $a = forth_extract_address(['first_name' => 'John', 'address' => [
+            'address1' => '200 Test St.', 'address2' => 'Apt. 4008', 'address3' => '',
+            'city' => 'Chicago', 'state' => 'IL', 'zip' => '60001',
+        ]]);
+        $this->assertSame([
+            'address1' => '200 Test St.', 'address2' => 'Apt. 4008',
+            'city' => 'Chicago', 'state' => 'IL', 'zip' => '60001',
+        ], pb_address_fields($a));
     }
 
     #[Test]
-    public function forth_nested_or_unknown_shape_sends_nothing(): void
+    public function forth_without_address_object_sends_nothing(): void
     {
-        $a = forth_extract_address(['address' => ['street' => '1 Pine', 'city' => 'Mesa']]);
-        $this->assertSame([], pb_address_fields($a));
+        $this->assertSame([], pb_address_fields(forth_extract_address(['city' => 'Mesa', 'zip' => '85201'])));
+        $this->assertSame([], pb_address_fields(forth_extract_address(['address' => '9 Elm'])));
     }
 
     #[Test]
     public function forth_numeric_state_is_dropped(): void
     {
-        $a = forth_extract_address(['city' => 'Mesa', 'state' => '12']);
+        $a = forth_extract_address(['address' => ['city' => 'Mesa', 'state' => '12']]);
         $this->assertArrayNotHasKey('state', $a);
         $this->assertSame('Mesa', $a['city']);
+    }
+
+    #[Test]
+    public function every_l3_launch_path_merges_address_and_logs_it(): void
+    {
+        // Regression guard: a refactor that drops the merge line from one
+        // launch file would otherwise stay green (only addr_sent=0 would show).
+        $files = glob(__DIR__ . '/../server/public/api/crm/*/pb_dialsession_*.php');
+        $this->assertCount(7, $files, 'new launch path? add the address merge + addr_sent to it');
+        foreach ($files as $f) {
+            $src = file_get_contents($f);
+            $this->assertStringContainsString("\$pbContact += pb_address_fields(\$c['address'] ?? null);", $src, basename(dirname($f)) . '/' . basename($f));
+            $this->assertStringContainsString("'addr_sent'", $src, basename(dirname($f)) . '/' . basename($f));
+        }
+    }
+
+    #[Test]
+    public function hubspot_contacts_do_not_request_address2(): void
+    {
+        $src = file_get_contents(__DIR__ . '/../server/public/api/crm/hubspot/hs_helpers.php');
+        $this->assertStringContainsString(
+            '$baseProps = [\'firstname\', \'lastname\', \'email\', \'address\', \'city\', \'state\', \'zip\', \'country\'];',
+            $src,
+            'HubSpot contacts have no standard address2; requesting it would let blanks clear PB address2'
+        );
     }
 
     // ----- Close: lead-address step -----
