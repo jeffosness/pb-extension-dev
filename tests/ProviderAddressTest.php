@@ -66,12 +66,11 @@ final class ProviderAddressTest extends TestCase
     }
 
     #[Test]
-    public function apollo_street_and_postal_code_map_when_present(): void
+    public function apollo_never_sends_street_or_zip(): void
     {
-        $c = apollo_normalize_contact(['id' => 'a2', 'street_address' => '5 Elm St', 'postal_code' => '73301', 'city' => 'Austin']);
-        $pb = pb_address_fields($c['address']);
-        $this->assertSame('5 Elm St', $pb['address1']);
-        $this->assertSame('73301', $pb['zip']);
+        // Apollo contacts have no street/zip field (API docs); never touch PB's.
+        $c = apollo_normalize_contact(['id' => 'a2', 'city' => 'Austin', 'state' => null, 'country' => 'United States']);
+        $this->assertSame(['city' => 'Austin', 'state' => '', 'country' => 'US'], pb_address_fields($c['address']));
     }
 
     #[Test]

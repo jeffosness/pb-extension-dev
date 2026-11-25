@@ -879,7 +879,7 @@ A PhoneBurner flame button appears next to every phone number on Forth contact-l
 **Where the address comes from:**
 - **HubSpot:** the standard Street Address, City, State/Region, Postal Code and Country fields on the contact (or the company, when dialing companies). Deals dial their associated contacts, so the contact's address is used. Custom address fields are not read; move the data into the standard fields if you need it in PhoneBurner.
 - **Close:** Close stores addresses on the **lead** (the company), not the contact, so every contact under a lead gets that lead's first non-empty address.
-- **Apollo:** City, State and Country (and street/postal code when Apollo has them). Many Apollo records only have city and state.
+- **Apollo:** City, State and Country only. Apollo doesn't store a street address or zip code on contacts, so those PhoneBurner fields are never changed by an Apollo launch.
 - **Forth:** the contact's address (street, address line 2, city, state, zip). Forth doesn't store a country on the contact, so none is sent.
 
 **The CRM wins:** each launch replaces the PhoneBurner address with the CRM's. If a field is blank in the CRM (for example the street), it's cleared in PhoneBurner too. **Exceptions:** if the CRM record has no address at all, the PhoneBurner address is left alone. Fields the CRM doesn't have are also left alone: for example HubSpot contacts have no "Address 2" field, so a suite number typed into PhoneBurner stays.
