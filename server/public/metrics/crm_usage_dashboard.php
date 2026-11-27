@@ -682,6 +682,24 @@ api_log('crm_usage_dashboard.view', [
       <h2 class="section-title">SSE Session Details</h2>
       <div class="grid" id="sse-grid"></div>
 
+      <!-- Rapid re-launches (GH #261): same user launching two sessions seconds apart -->
+      <h2 class="section-title">Rapid Re-launches (last 7 days)</h2>
+      <p class="muted" style="margin-top:-4px;">
+        Two dial sessions from the same extension install created within 60s of each other.
+        The follow-me widget follows the <em>last</em> launch, so if the user dials in the other window,
+        PhoneBurner's webhooks never reach the widget. <b>Widget on wrong session</b> = PB reached one session,
+        the widget only connected to the other. Always 7 days (session files are deleted after that), whatever range is picked above.
+      </p>
+      <div class="grid" id="relaunch-grid"></div>
+      <table id="relaunch-crm-table" style="margin-top: 12px;">
+        <thead><tr><th>CRM</th><th>Sessions</th><th>Re-launch pairs</th><th>% of sessions</th><th>Double-clicks (≤5s)</th><th>Re-launches (5–60s)</th><th>Users</th><th>Widget on wrong session</th></tr></thead>
+        <tbody><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+      </table>
+      <table id="relaunch-table" style="margin-top: 12px;">
+        <thead><tr><th>When</th><th>Gap</th><th>Type</th><th>CRM</th><th>User (hash)</th><th>1st session</th><th>2nd session</th><th>Widget on wrong session?</th></tr></thead>
+        <tbody><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+      </table>
+
       <!-- Section 7: Launch Source & Object Type -->
       <h2 class="section-title">Launch Sources & Object Types</h2>
       <div class="grid" id="launch-grid"></div>
@@ -811,6 +829,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const agentEndpoint        = "api/daily_agent_stats.php";
   const tokenSummaryEndpoint = "api/token_summary_stats.php";
   const healthEndpoint       = "api/server_health_stats.php";
+  const relaunchEndpoint     = "api/rapid_relaunch_stats.php";
 
   const hasChartJs = typeof Chart !== "undefined";
 
@@ -907,6 +926,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // slow / failing token-summary endpoint doesn't block anything else.
     loadTokenSummary();
     loadServerHealth();
+    loadRapidRelaunches();
 
     const dr  = getDateRange(currentRange);
     const t   = Date.now();
@@ -1376,6 +1396,81 @@ document.addEventListener("DOMContentLoaded", () => {
         // Silent — the section keeps whatever was last rendered. Same
         // "graceful degrade" pattern the other JSON fetches use.
       });
+  }
+
+  // Rapid re-launches (GH #261) — see metrics/rapid_relaunch_lib.php. Fixed
+  // 7-day lookback (session files only live that long), independent of the
+  // range picker. Best-effort like the other side panels.
+  function loadRapidRelaunches() {
+    fetch(relaunchEndpoint + "?t=" + Date.now())
+      .then(r => r.ok ? r.json() : null)
+      .then(resp => {
+        const d = normalize(resp);
+        if (d) renderRapidRelaunches(d);
+      })
+      .catch(() => {});
+  }
+
+  function renderRapidRelaunches(d) {
+    const s = d.summary || {};
+    const grid = document.getElementById("relaunch-grid");
+    if (grid) {
+      grid.innerHTML = "";
+      const dcSec = s.double_click_sec || 5;
+      grid.appendChild(statCard("Re-launch Pairs", String(s.pairs || 0)));
+      const dc = statCard("Likely Double-clicks (≤" + dcSec + "s)", String(s.double_click || 0));
+      dc.title = "Second launch within " + dcSec + "s of the first: probably an accidental double-click";
+      grid.appendChild(dc);
+      const rl = statCard("Deliberate Re-launches (>" + dcSec + "s)", String(s.relaunch || 0));
+      rl.title = "Wrong list, retry, etc. A double-launch guard must not block these";
+      grid.appendChild(rl);
+      const bad = statCard("Widget on Wrong Session", String(s.widget_mismatch || 0));
+      if (s.widget_mismatch > 0) bad.querySelector(".value").style.color = "#991b1b";
+      grid.appendChild(bad);
+      grid.appendChild(statCard("Users Affected", String(s.users_affected || 0)));
+      const all = statCard("Sessions Checked", String(s.sessions_in_window || 0));
+      if (d.truncated) all.title = "Hit the file-read cap; counts may be low";
+      grid.appendChild(all);
+    }
+
+    const crmBody = document.querySelector("#relaunch-crm-table tbody");
+    if (crmBody) {
+      const rows = Object.entries(s.by_crm || {});
+      crmBody.innerHTML = rows.length ? rows.map(([crm, r]) =>
+        "<tr><td>" + esc(crm) + "</td>" +
+        "<td>" + esc(String(r.sessions)) + "</td>" +
+        "<td>" + esc(String(r.pairs)) + "</td>" +
+        "<td>" + (r.sessions > 0 ? esc((100 * r.pairs / r.sessions).toFixed(1)) + "%" : "–") + "</td>" +
+        "<td>" + esc(String(r.double_click)) + "</td>" +
+        "<td>" + esc(String(r.relaunch)) + "</td>" +
+        "<td>" + esc(String(r.users)) + "</td>" +
+        "<td>" + (r.widget_mismatch > 0 ? '<b style="color:#991b1b;">' + esc(String(r.widget_mismatch)) + "</b>" : "0") + "</td></tr>"
+      ).join("") : '<tr><td colspan="8" class="muted">None in the last 7 days.</td></tr>';
+    }
+
+    const tbody = document.querySelector("#relaunch-table tbody");
+    if (!tbody) return;
+    const pairs = d.pairs || [];
+    if (!pairs.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="muted">None in the last 7 days.</td></tr>';
+      return;
+    }
+    const side = x => esc(x.session_hash.slice(0, 6)) + " · " +
+      (x.got_webhooks ? "PB: " + x.calls + " call" + (x.calls === 1 ? "" : "s") : "PB: none") + " · " +
+      (x.widget_connected ? "widget ✓" : "widget ✗");
+    tbody.innerHTML = pairs.map(p => {
+      const crm = p.first.crm_name === p.second.crm_name ? p.first.crm_name : p.first.crm_name + " / " + p.second.crm_name;
+      return "<tr>" +
+        "<td>" + esc(new Date(p.at_unix * 1000).toLocaleString()) + "</td>" +
+        "<td>" + esc(String(p.gap_sec)) + "s</td>" +
+        "<td>" + (p.kind === "double_click" ? "<b>Double-click</b>" : "Re-launch") + "</td>" +
+        "<td>" + esc(crm) + "</td>" +
+        "<td><code>" + esc(p.client_hash) + "</code></td>" +
+        "<td>" + side(p.first) + "</td>" +
+        "<td>" + side(p.second) + "</td>" +
+        "<td>" + (p.widget_mismatch ? '<b style="color:#991b1b;">Yes</b>' : "No") + "</td>" +
+        "</tr>";
+    }).join("");
   }
 
   function renderTokenSummary(s) {

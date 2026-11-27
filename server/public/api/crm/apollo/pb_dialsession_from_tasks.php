@@ -195,6 +195,8 @@ foreach ($filteredTasks as $task) {
   if (!empty($additionalPhones)) {
     $pbContact['additional_phone'] = $additionalPhones;
   }
+  // Address: only the fields the CRM returned — see pb_address_fields() in utils.php.
+  $pbContact += pb_address_fields($c['address'] ?? null);
 
   $pbContacts[] = $pbContact;
 
@@ -266,6 +268,7 @@ $payload = [
 $pbResult = pb_dialsession_or_fail($pat, $payload, 'apollo_sequence_tasks', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'contact_count'  => count($pbContacts),
+  'addr_sent'      => pb_count_contacts_with_addr($pbContacts),
 ]);
 $resp    = $pbResult['response'];
 $pb_ms   = $pbResult['pb_ms'];

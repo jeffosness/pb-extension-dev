@@ -584,6 +584,9 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
   `api_key` is a **10-day** token sent as the **`Api-Key:`** header (NOT
   `Authorization: Bearer`). No refresh token — re-mint with the durable pair.
 - **Rate limit:** 20 req/sec (429 on exceed).
+  Launch fetches contacts in parallel via `forth_api_get_json_multi()`, capped at 12 request starts/sec (15 measured as 18 at the server from arrival jitter) with one retry pass for 429s. There is no bulk contact read.
+- **No call-attempts field in the API.** `GET /contacts/{id}` returns no call-attempt count, standard or custom (verified from a live payload's field names, 2026-11-25). The **Call Attempts** column on Forth's list screen is computed by Forth's UI. So don't sort server-side: reps sort the list in Forth and the session dials in on-page order. (A server-side attempts sort shipped in #267 and was removed for this reason.)
+- **Address is nested:** `address.address1/address2/address3/city/state/zip` under an `address` object, not top-level keys.
 
 **`POST /v1/calls` (Create Call Record)** — logs to the contact's "Calls" tab:
 - **REQUIRED:** `contactID` (int), `call_type` (enum `Outgoing`/`Incoming`),
@@ -603,6 +606,9 @@ User selects list → HS_LAUNCH_FROM_LIST → pb_dialsession_from_list.php
   returns `firstname`/`lastname` and a `phone` ARRAY + `email` array — different
   shape; the normalizer tolerates both.)
 - `assigned_to` (int) = owning DPP agent → we pass it as `assigned_agent` on `/calls`.
+- **Address is a NESTED object**, not top-level fields: `address: {address1, address2, address3, city, state, zip}`.
+  `state` is a 2-letter code (`"IL"`). There is **no country key**. `address3` has no PB field. Read by
+  `forth_extract_address()` (source: the Get Contact example in the SetForth PDF, pp. 48-49).
 
 **Notes:** `POST /v1/contacts/{contact_id}/notes` with `{content, note_type, public}`.
 

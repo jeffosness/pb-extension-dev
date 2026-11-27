@@ -176,6 +176,91 @@ function forth_api_get_json(string $apiKey, string $url, int $timeout = 20): arr
 }
 
 /**
+ * Parallel GETs to the Forth API (curl_multi). Returns an array keyed like
+ * $urls, each value the same [$httpCode, $jsonArray, $rawBody, $info] tuple
+ * forth_api_get_json returns.
+ *
+ * Forth's documented limit is 20 req/sec (429 beyond), shared by everything
+ * using the rep's key (CTC lookups, call logging). We cap request STARTS at
+ * $maxPerSecond in any rolling second and $concurrency in flight, then retry
+ * any 429s once, one at a time, after a 1s pause.
+ */
+function forth_api_get_json_multi(string $apiKey, array $urls, int $concurrency = 10, int $maxPerSecond = 12, int $timeout = 20): array {
+  $results = [];
+  $queue   = $urls;
+  $mh      = curl_multi_init();
+  $active  = [];   // (int)handle id => [key, handle]
+  $starts  = [];   // microtime of recent starts, for the per-second cap
+
+  $startNext = function () use (&$queue, &$active, &$starts, $mh, $apiKey, $concurrency, $maxPerSecond, $timeout) {
+    while ($queue && count($active) < $concurrency) {
+      $now    = microtime(true);
+      $starts = array_values(array_filter($starts, fn($t) => $now - $t < 1.0));
+      if (count($starts) >= $maxPerSecond) return;
+      $key = array_key_first($queue);
+      $url = $queue[$key];
+      unset($queue[$key]);
+      $ch = curl_init($url);
+      curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+          'Api-Key: ' . $apiKey,
+          'Accept: application/json',
+        ],
+        CURLOPT_TIMEOUT => $timeout,
+      ]);
+      curl_multi_add_handle($mh, $ch);
+      $active[spl_object_id($ch)] = [$key, $ch];
+      $starts[] = $now;
+    }
+  };
+
+  $startNext();
+  while ($active || $queue) {
+    curl_multi_exec($mh, $running);
+    while ($done = curl_multi_info_read($mh)) {
+      $ch  = $done['handle'];
+      $hid = spl_object_id($ch);
+      $key = $active[$hid][0];
+      $raw  = curl_multi_getcontent($ch);
+      $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+      $err  = ($done['result'] !== CURLE_OK) ? curl_strerror($done['result']) : '';
+      $json = (is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
+      $info = ['http_code' => $code, 'raw_body' => is_string($raw) ? $raw : ''];
+      if ($err !== '') $info['curl_error'] = $err;
+      $results[$key] = [$code, $json, $raw, $info];
+      curl_multi_remove_handle($mh, $ch);
+      curl_close($ch);
+      unset($active[$hid]);
+    }
+    $startNext();
+    if ($active) {
+      // -1 = select unavailable on this platform; sleep briefly instead of spinning.
+      if (curl_multi_select($mh, 0.05) === -1) usleep(10000);
+    } elseif ($queue) {
+      usleep(50000); // waiting out the per-second cap
+    }
+  }
+  curl_multi_close($mh);
+
+  // One sequential retry pass for anything Forth rate-limited.
+  $limited = array_keys(array_filter($results, fn($r) => $r[0] === 429));
+  if ($limited) {
+    sleep(1);
+    foreach ($limited as $key) {
+      $results[$key] = forth_api_get_json($apiKey, $urls[$key], $timeout);
+    }
+  }
+
+  // Preserve the caller's key order.
+  $ordered = [];
+  foreach ($urls as $key => $_) {
+    if (isset($results[$key])) $ordered[$key] = $results[$key];
+  }
+  return $ordered;
+}
+
+/**
  * POST JSON to the Forth API with Api-Key auth.
  * Returns [$httpCode, $jsonArray, $rawBody, $info] (see forth_api_get_json).
  */
@@ -334,12 +419,22 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
+  // Fetch every record in parallel up front (one GET per contact was the bulk
+  // of launch time — Forth has no bulk read). Results come back keyed by cid
+  // in the caller's order, so the loop below still walks the selection order.
+  $urls = [];
   foreach ($contactIds as $cid) {
     $cid = trim((string)$cid);
     if ($cid === '' || !ctype_digit($cid)) continue;
+    $urls[$cid] = FORTH_API_BASE . 'contacts/' . rawurlencode($cid);
+  }
+  $t0 = microtime(true);
+  $fetched = forth_api_get_json_multi($apiKey, $urls);
+  $diag['contacts_fetch']['ms'] = (int) round((microtime(true) - $t0) * 1000);
 
-    $url = FORTH_API_BASE . 'contacts/' . rawurlencode($cid);
-    list($code, $json, $raw, $info) = forth_api_get_json($apiKey, $url);
+  foreach ($urls as $cid => $url) {
+    $cid = (string)$cid;
+    list($code, $json, $raw, $info) = $fetched[$cid] ?? [0, null, '', ['http_code' => 0, 'raw_body' => '', 'curl_error' => 'not_fetched']];
     $diag['contacts_fetch']['last_http'] = $code;
 
     if ($code !== 200 || !is_array($json)) {
@@ -413,6 +508,7 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
       'phone'             => $primaryPhone,
       'additional_phones' => $additional,
       'assigned_to'       => $assignedTo,
+      'address'           => forth_extract_address($c),
     ];
     $diag['contacts_fetch']['ok']++;
   }
@@ -427,6 +523,34 @@ function forth_fetch_contacts_by_ids(string $apiKey, array $contactIds, array &$
   }
 
   return $contacts;
+}
+
+/**
+ * Pull the contact's address from a Forth Get Contact record into the
+ * normalized shape pb_address_fields() expects.
+ *
+ * Shape per Forth's API docs (SetForth Complete API Documentation, Get Contact
+ * example, captured 2026-08-21 — see CRMS.md → Forth reference): a NESTED
+ * object
+ *   "address": {"address1", "address2", "address3", "city", "state" (2-letter,
+ *               e.g. "IL"), "zip"}
+ * with no country key. Only keys present in the object are passed on (the
+ * presence rule in pb_address_fields), so a record without the object sends
+ * nothing. `address3` has no PB field and is ignored. A purely numeric
+ * `state` would be an internal id, not a state, so it's dropped defensively.
+ */
+function forth_extract_address(array $c): array {
+  $a = $c['address'] ?? null;
+  if (!is_array($a)) return [];
+  $out = [];
+  foreach (['address1', 'address2', 'city', 'state', 'zip'] as $k) {
+    if (!array_key_exists($k, $a)) continue;
+    $v = $a[$k];
+    if ($v !== null && !is_scalar($v)) continue;
+    $out[$k] = trim((string)$v);
+  }
+  if (isset($out['state']) && ctype_digit($out['state'])) unset($out['state']);
+  return $out;
 }
 
 /**

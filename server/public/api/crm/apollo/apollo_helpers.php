@@ -344,6 +344,24 @@ function apollo_fetch_contacts_with_refresh_retry(string $client_id, array &$tok
 // -----------------------------------------------------------------------------
 
 /**
+ * Apollo address fields present in this payload → normalized address shape
+ * for pb_address_fields(). Per Apollo's API docs (View/Update/Create a
+ * Contact), a contact's location is only `city`, `state`, `country` (full
+ * names, e.g. "California", "United States") plus a free-text
+ * `present_raw_address` — there is no street or postal-code field. Absent keys
+ * stay absent (presence rule), so search/task payloads that omit them send
+ * nothing.
+ */
+function apollo_extract_address(array $c): array {
+  $map = ['city' => 'city', 'state' => 'state', 'country' => 'country'];
+  $out = [];
+  foreach ($map as $apKey => $key) {
+    if (array_key_exists($apKey, $c)) $out[$key] = $c[$apKey];
+  }
+  return $out;
+}
+
+/**
  * Normalize an Apollo contact object to our standard format.
  * @param string $preferredPhoneField Optional: 'direct_phone', 'mobile_phone', or 'corporate_phone'
  *        When set, that field is checked first for the primary number.
@@ -430,5 +448,11 @@ function apollo_normalize_contact(array $c, string $preferredPhoneField = ''): a
     'additional_phones' => $additionalPhones,
     'title'             => trim((string)($c['title'] ?? '')),
     'organization_name' => trim((string)($c['organization_name'] ?? '')),
+    // Apollo contacts carry city/state/country only (no street or zip). Only
+    // keys present in THIS payload are passed on, so a reduced payload
+    // (search, task-embedded) never clears fields PB already has.
+    // `present_raw_address` is a combined free-text location — deliberately
+    // not parsed.
+    'address'           => apollo_extract_address($c),
   ];
 }

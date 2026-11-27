@@ -165,7 +165,7 @@ What user data does the extension collect, now or in the future? Check the boxes
 
 | Category | Collect? | Why / What |
 |---|---|---|
-| Personally identifiable information | ✅ Yes | Names, phone numbers, email addresses read from CRM pages on user invocation, sent to PhoneBurner to populate the dial session |
+| Personally identifiable information | ✅ Yes | Names, phone numbers, email addresses and mailing addresses read from the CRM on user invocation, sent to PhoneBurner to populate the dial session |
 | Authentication information | ✅ Yes | The user enters their PhoneBurner Personal Access Token in the popup; it's transmitted to PhoneBurner's backend (not stored in browser storage). OAuth tokens for HubSpot/Close/Apollo flow through the extension during the auth handshake but are stored server-side. |
 | Website content | ✅ Yes | The content script reads selected record data from the CRM page DOM on user invocation |
 | Health information | ❌ No | |

@@ -298,6 +298,7 @@ function redact_pii_recursive(array $data): array {
     '/^.*note.*$/i',            // agent-typed call notes / note bodies
     '/^.*content.*$/i',         // note content echoed in provider errors
     '/^.*(ssn|social.?security).*$/i', // SSNs (debt-settlement CRM fields)
+    '/^.*(address|street|city|zip|postal|postcode|state_other).*$/i', // contact address parts (bare `state` NOT matched — session/OAuth logs use it)
   ];
 
   // Exact key matches (for known bulk data fields).
