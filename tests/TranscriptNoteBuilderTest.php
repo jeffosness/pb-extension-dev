@@ -136,4 +136,22 @@ final class TranscriptNoteBuilderTest extends TestCase
         $this->assertSame([], close_transcript_error_detail(null));
     }
 
+
+    #[Test]
+    public function close_note_html_is_well_formed_xhtml(): void
+    {
+        // Close requires note_html to be a restricted subset of XHTML; a bare
+        // <br> made a live dev PUT fail with a note_html field error.
+        $segments = [];
+        for ($i = 0; $i < 400; $i++) {
+            $segments[] = ['speaker' => $i % 2 ? 'contact' : 'member', 'text' => "Line $i: it's <fine> & \"quoted\" … ok"];
+        }
+        $html = close_build_transcript_note_html("Call via PhoneBurner: Interested", "Summary line 1\nline 2 with Jeff's note", $segments);
+        $this->assertStringNotContainsString('<br>', $html);
+        $prev = libxml_use_internal_errors(true);
+        $doc  = simplexml_load_string($html);
+        libxml_use_internal_errors($prev);
+        $this->assertNotFalse($doc, 'note_html must parse as XML (long + truncated case included)');
+    }
+
 }

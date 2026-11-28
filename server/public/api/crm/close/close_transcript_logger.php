@@ -211,7 +211,9 @@ function close_transcript_error_detail($resp): array
 
 /**
  * Build the enriched call-activity note HTML: original call note + AI summary +
- * transcript. Pure (no I/O) so it's unit-testable. All user/AI-derived text is
+ * transcript. Pure (no I/O) so it's unit-testable. Output must be well-formed
+ * XHTML: Close rejects note_html that isn't (a bare <br> 400'd a live update),
+ * so line breaks are <br />. All user/AI-derived text is
  * HTML-escaped (note_html is rendered HTML in Close). Returns null when there is
  * nothing to add (no summary and no usable segments).
  *
@@ -264,14 +266,14 @@ function close_build_transcript_note_html(string $noteText, string $summary, arr
         $parts[] = '<p>' . htmlspecialchars($noteText) . '</p>';
     }
     if ($summary !== '') {
-        $parts[] = '<p><strong>AI Summary</strong><br>' . nl2br(htmlspecialchars($summary)) . '</p>';
+        $parts[] = '<p><strong>AI Summary</strong><br />' . nl2br(htmlspecialchars($summary)) . '</p>';
     }
     if ($lines !== []) {
-        $transcriptHtml = implode('<br>', $lines);
+        $transcriptHtml = implode('<br />', $lines);
         if ($truncated) {
-            $transcriptHtml .= '<br>… <em>(transcript truncated)</em>';
+            $transcriptHtml .= '<br />… <em>(transcript truncated)</em>';
         }
-        $parts[] = '<p><strong>Transcript</strong><br>' . $transcriptHtml . '</p>';
+        $parts[] = '<p><strong>Transcript</strong><br />' . $transcriptHtml . '</p>';
     }
 
     return '<body>' . implode('', $parts) . '</body>';
