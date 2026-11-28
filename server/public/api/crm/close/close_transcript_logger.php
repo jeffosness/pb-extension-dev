@@ -19,6 +19,12 @@
 // + full transcript. The PUT rebuilds the whole note from the target, so an
 // UPDATE (same transcript_id re-sent with a new summary) simply rewrites it —
 // idempotent, no duplicate. A false return makes the caller queue a retry.
+//
+// Known + accepted (2026-11-27): because the note is rebuilt from the call-time
+// snapshot, an edit a rep makes to this activity's note in the few minutes
+// before the transcript lands is overwritten. Reps have normally moved on to
+// the next contact by then. Revisit (GET the live note, replace only our
+// section) if that turns out not to hold.
 
 /**
  * @param array $target  Correlation record stored by close_log_call().
