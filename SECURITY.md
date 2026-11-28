@@ -26,6 +26,8 @@ If you change a file listed under [Files that trigger Security Impact review](#f
 | **Apollo** | OAuth `access_token` + `refresh_token` (or manual API key) | Until disconnect |
 | **Browser side** | `pb_unified_client_id` (random UUID, anonymous lookup key) and user preferences | Local to Chrome profile |
 
+**Call transcripts (non-token, next to the token dirs).** `TOKENS_DIR/../transcripts/` (0700 dir, 0600 files, outside the webroot) holds, per logged Close/Forth call: a correlation *target* (CRM ids + the call note), a per-transcript summary marker, and, only when a CRM write failed, a queued *retry* holding the transcript + AI summary text. Everything is swept after 7 days by `scripts/cron/transcript_retry.php`. Trust boundaries for the two transcript webhooks: `transcript_done.php` targets are keyed by `sha256(call_id | session_token)`, so only the session that logged the call can address its target; `softphone_transcript.php` requires our softphone registration HMAC (`pb_softphone_signature_valid()`, shared with `softphone_call_done.php`).
+
 Token values themselves are **never** stored in the browser after the initial save. The browser only holds the UUID; every API request from the extension sends the UUID, and the server looks up the corresponding token file at request time.
 
 ## How we protect tokens at rest
