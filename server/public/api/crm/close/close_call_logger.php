@@ -471,6 +471,32 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
     // -------------------------------------------------------------------------
     $callActivityId = is_array($callResp) ? ($callResp['id'] ?? null) : null;
 
+    // Drop a transcript-target record so the async api_transcript webhook
+    // (EXP-5135, minutes later) can find THIS activity and append the AI
+    // summary + transcript. Keyed by PB's call_id bound to THIS session (see
+    // transcript_dial_target_key), so another session can't overwrite it.
+    // See webhooks/transcript_done.php + close_transcript_logger.php.
+    $txKey = function_exists('transcript_dial_target_key')
+        ? transcript_dial_target_key($lastCall['call_id'] ?? null, $state['session_token'] ?? null) : null;
+    if ($txKey !== null && $callActivityId) {
+        $rawNoteText = 'Call via PhoneBurner: ' . ($status !== '' ? $status : 'Unknown');
+        if (!empty($callNotes)) {
+            $rawNoteText .= ' — Notes: ' . implode(' | ', $callNotes);
+        }
+        transcript_target_store($txKey, [
+            'provider'    => 'close',
+            'client_id'   => $clientId,
+            'lead_id'     => $closeLeadId,
+            'contact_id'  => $closeContactId,
+            'activity_id' => $callActivityId,
+            'note_text'   => $rawNoteText,
+            // Bind this target to the session that created it: the transcript
+            // webhook must present the same ?s= token (compared by hash). The
+            // raw token is never stored. See webhooks/transcript_done.php.
+            's_hash'      => hash('sha256', (string)($state['session_token'] ?? '')),
+        ]);
+    }
+
     if ($callActivityId && $resolvedOutcomeId) {
         list($putCode, $putResp) = $closePut(
             'https://api.close.com/api/v1/activity/call/' . rawurlencode($callActivityId) . '/',

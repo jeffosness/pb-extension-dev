@@ -16,8 +16,8 @@
 // which surfaces in the contact's "Calls" tab and the "Last Call Activity" column.
 // User-entered call notes are additionally posted to /v1/contacts/{cid}/notes.
 //
-// STATUS: dormant until crm_name === 'forth' sessions exist (registry still lists
-// Forth as generic L1). Untested end-to-end pending live API credentials. TODOs:
+// STATUS: live (a Forth team is dialing with call activities logging in prod).
+// Remaining TODOs:
 //   - dialer_id: PhoneBurner is not yet in Forth's dialer_id list — omitted until
 //     Forth adds a "PhoneBurner" entry (raise with Forth). See GH issue.
 //   - assigned_agent: only sent when the dial-session captured the Forth userID;
@@ -308,6 +308,28 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
     }
     api_log('forth_call_log', $logData);
 
+    // Drop a transcript-target record so the async api_transcript webhook
+    // (EXP-5135, minutes later) can attach the AI summary + transcript to this
+    // contact. Keyed by PB's call_id bound to THIS session (see
+    // transcript_dial_target_key). Written even if the call activity failed to
+    // log — the note only needs the contact id, and the transcript may then be
+    // the only record of the call. See webhooks/transcript_done.php +
+    // forth_transcript_logger.php.
+    $txKey = function_exists('transcript_dial_target_key')
+        ? transcript_dial_target_key($lastCall['call_id'] ?? null, $state['session_token'] ?? null) : null;
+    if ($txKey !== null) {
+        transcript_target_store($txKey, [
+            'provider'  => 'forth',
+            'client_id' => $clientId,
+            'forth_cid' => (string)$calledExternalId,
+            'note_text' => $noteText,
+            // Bind to the session that created it (hash of the ?s= token); the
+            // transcript webhook must present the same token. See
+            // webhooks/transcript_done.php.
+            's_hash'    => hash('sha256', (string)($state['session_token'] ?? '')),
+        ]);
+    }
+
     // -------------------------------------------------------------------------
     // 2) If the user wrote call notes, also post them as a Note on the contact
     //    (POST /v1/contacts/{contact_id}/notes). note_type=1, public=true.
@@ -488,6 +510,24 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
         $logData['curl_error']   = $fail['curl_error'];
     }
     api_log('forth_ctc_log', $logData);
+
+    // Drop a transcript-target keyed by the softphone call_id (a UUID) so the
+    // softphone_transcript webhook, minutes later, can attach the AI summary +
+    // transcript to this contact. No session token exists on this path; that
+    // webhook is HMAC-signed with our registration secret instead, and the
+    // `source` field keeps a softphone target unusable from the dial-session
+    // receiver (which requires s_hash). Written even if the call activity
+    // failed to log (the note only needs the contact id).
+    // See webhooks/softphone_transcript.php.
+    $txCallId = $payload['call_id'] ?? null;
+    if (is_string($txCallId) && $txCallId !== '' && function_exists('transcript_target_store')) {
+        transcript_target_store($txCallId, [
+            'provider'  => 'forth',
+            'source'    => 'softphone',
+            'client_id' => $client_id,
+            'forth_cid' => (string)$forthContactId,
+        ]);
+    }
 
     // User notes → also a Note on the contact.
     if (!empty($callNotes)) {

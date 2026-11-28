@@ -77,6 +77,7 @@ The extension supports two integration levels. The level determines which featur
 | "Forth calls/notes not logging" / "Forth click-to-call wrong number" / "Forth cell vs home number" | [Forth CRM](#27-forth-crm) |
 | "HubSpot phone overwritten" / "Phone field changed in HubSpot" | [HubSpot Data Sync conflict](#19-hubspot-data-sync-conflict) |
 | "Address didn't come over" / "Wrong address in PhoneBurner" / "PhoneBurner address got overwritten" | [Contact address in PhoneBurner](#28-contact-address-in-phoneburner) |
+| "Where's the call transcript?" / "AI summary not in CRM" / "Transcript missing on Close / Forth" | [Call transcripts and AI summaries](#29-call-transcripts-and-ai-summaries) |
 | "Is my data safe" / Privacy questions | [Privacy and security](#20-privacy-and-security) |
 | "Extension completely broken" / Nothing works | [Emergency reset](#21-emergency-reset) |
 
@@ -892,6 +893,28 @@ A PhoneBurner flame button appears next to every phone number on Forth contact-l
 | Address I entered in PhoneBurner got replaced | The CRM record has an address, and the CRM is treated as the source of truth | Update the address in the CRM instead. |
 | Close contact shows the company's address | Expected: Close only stores addresses on leads | No fix needed. |
 | Some Close contacts in a very large session have no address | On very large Close launches the extension stops looking up addresses after a time limit so the launch doesn't time out | Relaunch a smaller selection to fill them in. |
+
+---
+
+## 29. Call Transcripts and AI Summaries
+
+**What happens:** a few minutes after a recorded call, PhoneBurner produces a transcript and an AI summary, and the extension adds them to the CRM:
+- **Close (dial sessions):** the summary and full transcript are added to the call activity the extension already logged, under the call note.
+- **Forth (dial sessions and click-to-call):** a note titled "PhoneBurner call transcript" is added to the contact with the summary and transcript.
+- **HubSpot and Apollo:** transcripts and summaries stay in PhoneBurner; nothing is added to the CRM.
+
+**Requirements:** call recording **and** transcription must be turned on for the PhoneBurner user. Calls that aren't recorded, are very short, or don't get an AI summary produce nothing.
+
+**Timing:** usually a few minutes after the call ends. On calls made in PhoneBurner's New Dialer Window the summary can arrive after the transcript. Close then updates the same activity; Forth gets a second, short note titled "PhoneBurner AI summary (updated)".
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| No transcript or summary on any call | Recording or transcription is off for the user in PhoneBurner | Turn both on in PhoneBurner, then make a new call. Past calls aren't backfilled. |
+| No transcript on one call | The call was too short or wasn't recorded, or it hasn't arrived yet | Wait about 10 minutes. Short or unrecorded calls never get one. |
+| Transcript on HubSpot / Apollo calls missing | Expected: transcripts for these CRMs stay in PhoneBurner | View the transcript in PhoneBurner. |
+| Forth contact has two transcript notes for one call | Expected on New Dialer Window calls: the second, short note is the updated AI summary | No fix needed. |
+
+**Escalate if:** a recorded Close or Forth call with transcription on still has no transcript after an hour. Ask for the time of the call and the contact.
 
 ---
 

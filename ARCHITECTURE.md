@@ -52,7 +52,9 @@
 │  ├─ webhooks/                 PhoneBurner callbacks:             │
 │  │                             contact_displayed.php,            │
 │  │                             call_done.php,                    │
-│  │                             softphone_call_done.php           │
+│  │                             softphone_call_done.php,          │
+│  │                             transcript_done.php,              │
+│  │                             softphone_transcript.php          │
 │  ├─ sse.php                   Real-time follow-me event stream   │
 │  ├─ softphone.php +           Embedded generic-softphone host    │
 │  │  softphone_host.js          for click-to-call                 │
@@ -337,6 +339,7 @@ Security properties that differ from the dial-session flow:
 
 - **Bearer token confinement.** The PAT never leaves the softphone.php document — it's placed directly into the iframe `src` attribute, and the iframe's origin (PB's platform) reads it and drops it before making onward API calls. The extension never sees it, and it isn't in postMessage payloads or the top-window URL.
 - **Webhook auth is HMAC, not session-token.** Because there is no session, the webhook can't identify itself with `?s=session_token`. `SOFTPHONE_HMAC_SECRET` (per-environment) is the trust boundary. This pattern is what SECURITY.md points at for retrofitting the dial-session webhooks.
+- **Transcripts follow the same split.** `softphone_transcript.php` (click-to-call) is HMAC-verified with the same secret; `transcript_done.php` (dial sessions) is bound to the session token. See *Call transcripts* below.
 - **Softphone runtime hosting.** The softphone runtime itself is served from PhoneBurner's platform (via a registered slug in `softphone_config.js`) — `softphone.php` on our backend is just the host page that mints the iframe. Dev and prod each register a separate slug.
 
 Per-CRM click-to-call activation is gated in `background.js` via `ctcShouldShowPills()` — an AND of the feature gate `clickToCallEnabled()` and the user-level "Show click-to-call buttons" preference. Both must be true for pills to render.
@@ -377,3 +380,18 @@ Selection data (which specific record IDs the user picked) is NOT part of this c
 - **[SERVER_SETUP.md](SERVER_SETUP.md)** — provisioning, config.php, webhook + OAuth app registration
 - **[SHARED_CODE.md](SHARED_CODE.md)** — blast-radius reference: most-depended-on files and functions, and rules for changing them safely
 - **[KB_EXTENSION_TROUBLESHOOTING.md](KB_EXTENSION_TROUBLESHOOTING.md)** — customer-facing behavior and known issues
+
+## Call transcripts (PhoneBurner EXP-5135)
+
+A few minutes after a recorded call, PhoneBurner POSTs the transcript + AI summary. Two webhooks, one per call surface:
+
+| Surface | Webhook | Registered by | Trust |
+|---|---|---|---|
+| Dial session | `webhooks/transcript_done.php?s=<session_token>` | `api_transcript` entry in the launch's `callbacks` (Close, Forth) | `?s=` must match the hash stored on the target |
+| Click-to-call | `webhooks/softphone_transcript.php` | "Transcript webhook URL" on our PB softphone registration | `X-PB-Signature` HMAC (`SOFTPHONE_HMAC_SECRET`) |
+
+**Correlation.** Neither payload names our CRM activity, so the provider call logger drops a *transcript target* when it logs the call. The store is `TOKENS_DIR/../transcripts/` (outside the webroot, like `ctc_intents`). Dial-session targets are keyed by `transcript_dial_target_key(call_id, session_token)`, so another session can never overwrite them; click-to-call targets are keyed by PB's UUID `call_id`. The receiver loads the target and `transcript_apply()` dispatches to `{provider}_transcript_logger.php`.
+
+**Delivery semantics (as shipped):** one POST, **no retry**. The same `transcript_id` may be re-sent when the AI summary arrives or changes: an update, decided by `transcript_should_apply()` (Close rewrites its activity note; Forth posts a summary-only note). A failed CRM write is queued (`retry_*.json`) for `scripts/cron/transcript_retry.php` (5 m / 15 m / 1 h, then gives up). A queued item is dropped as *superseded* when a newer summary has since landed (except a Forth original, whose transcript note an update doesn't contain). The same cron sweeps targets, summary markers and queued retries after 7 days.
+
+HubSpot and Apollo don't get transcripts (they stay in PhoneBurner by product decision, 2026-11-27).
