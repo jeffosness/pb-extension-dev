@@ -131,7 +131,7 @@ final class TranscriptNoteBuilderTest extends TestCase
         ];
         $d = close_transcript_error_detail($resp);
         $this->assertSame(['Invalid activity state.'], $d['close_errors']);
-        $this->assertSame(['note_html' => 'Not a valid string.'], $d['close_field_errors']);
+        $this->assertSame(['note_html: Not a valid string.'], $d['close_field_errors'], 'a list, so the note-key redactor leaves it readable');
         $this->assertStringNotContainsString('secret transcript', json_encode($d));
         $this->assertSame([], close_transcript_error_detail(null));
     }

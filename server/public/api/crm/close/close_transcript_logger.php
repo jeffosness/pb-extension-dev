@@ -183,9 +183,11 @@ function close_log_transcript(array $target, array $payload): bool {
 
 /**
  * Close's validation errors from a failed response, for the log: the `errors`
- * list and the `field-errors` map (field => message). Each message is capped
- * at 200 chars and token-scrubbed; nothing else from the body is kept, since a
- * failed note update can echo the note (the transcript) back.
+ * list and the `field-errors` map, as "field: message" strings (a list, not
+ * keyed by field: the log redactor masks any key containing "note", which hid
+ * the note_html message). Each message is capped at 200 chars and
+ * token-scrubbed; nothing else from the body is kept, since a failed note
+ * update can echo the note (the transcript) back.
  */
 function close_transcript_error_detail($resp): array
 {
@@ -200,7 +202,7 @@ function close_transcript_error_detail($resp): array
     if (!empty($resp['field-errors']) && is_array($resp['field-errors'])) {
         $fe = [];
         foreach (array_slice($resp['field-errors'], 0, 10, true) as $field => $msg) {
-            $fe[(string)$field] = $clip($msg);
+            $fe[] = (string)$field . ': ' . $clip($msg);
         }
         $out['close_field_errors'] = $fe;
     }
