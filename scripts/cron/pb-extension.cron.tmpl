@@ -14,7 +14,9 @@ MAILTO=""
 * * * * * www-data /usr/bin/php {{REPO_DIR}}/scripts/cron/collect_server_health.php >/dev/null 2>&1
 
 # Retry transcript writes that failed at delivery time (PB never retries the
-# transcript webhooks). Backoff 5m/15m/1h, then gives up. See transcript_retry.php.
+# transcript webhooks). Backoff 5m/15m/1h, then gives up. Also sweeps the
+# transcript store (outside the webroot, under TOKENS_DIR/../transcripts) of
+# anything older than 7 days. See transcript_retry.php.
 */5 * * * * www-data /usr/bin/php {{REPO_DIR}}/scripts/cron/transcript_retry.php >/dev/null 2>&1
 
 # Stale SSE presence files (daily, 03:00 server time). Live sessions rewrite theirs constantly.
@@ -31,15 +33,6 @@ MAILTO=""
 # any ?s= value), never sessions/.htaccess. Path is hard-coded because
 # session_file_path() in utils.php ignores the SESSIONS_DIR config key.
 20 * * * * www-data find {{REPO_DIR}}/server/public/sessions -maxdepth 1 -type f -regextype posix-extended -regex '.*/[A-Za-z0-9]+\.json' -mmin +10020 -delete
-
-# Transcript-target, summary-marker and pending-retry files untouched for ~7 days (hourly). They
-# correlate the async api_transcript webhook back to a logged CRM activity and
-# hold call-note text + CRM ids, so this enforces the same 7-day retention as
-# session files. Targets are kept until this sweep (a transcript can be re-sent
-# with an updated summary), and calls never transcribed (recording/transcription
-# off, <30s) leave theirs here too. Matches only *.json so sessions/.htaccess-style files are left
-# alone; the dir's own .htaccess has no .json suffix. -mmin +10020 ≈ 6d23h.
-20 * * * * www-data find {{REPO_DIR}}/server/public/transcript_targets -maxdepth 1 -type f -name '*.json' -mmin +10020 -delete
 
 # Rate-limit counters older than an hour (hourly).
 5 * * * * www-data find {{REPO_DIR}}/server/public/cache -type f -name 'rl_*.txt' -mmin +60 -delete

@@ -310,12 +310,15 @@ function forth_log_call(array $state, array $payload, array $lastCall, string $s
 
     // Drop a transcript-target record so the async api_transcript webhook
     // (EXP-5135, minutes later) can attach the AI summary + transcript to this
-    // contact. Keyed by PB's call_id (same id the webhook sends). Only once the
-    // call activity itself logged OK. See webhooks/transcript_done.php +
+    // contact. Keyed by PB's call_id bound to THIS session (see
+    // transcript_dial_target_key). Written even if the call activity failed to
+    // log — the note only needs the contact id, and the transcript may then be
+    // the only record of the call. See webhooks/transcript_done.php +
     // forth_transcript_logger.php.
-    $txCallId = $lastCall['call_id'] ?? null;
-    if ($callOk && $txCallId !== null && function_exists('transcript_target_store')) {
-        transcript_target_store($txCallId, [
+    $txKey = function_exists('transcript_dial_target_key')
+        ? transcript_dial_target_key($lastCall['call_id'] ?? null, $state['session_token'] ?? null) : null;
+    if ($txKey !== null) {
+        transcript_target_store($txKey, [
             'provider'  => 'forth',
             'client_id' => $clientId,
             'forth_cid' => (string)$calledExternalId,
@@ -513,9 +516,11 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
     // transcript to this contact. No session token exists on this path; that
     // webhook is HMAC-signed with our registration secret instead, and the
     // `source` field keeps a softphone target unusable from the dial-session
-    // receiver (which requires s_hash). See webhooks/softphone_transcript.php.
+    // receiver (which requires s_hash). Written even if the call activity
+    // failed to log (the note only needs the contact id).
+    // See webhooks/softphone_transcript.php.
     $txCallId = $payload['call_id'] ?? null;
-    if ($callOk && is_string($txCallId) && $txCallId !== '' && function_exists('transcript_target_store')) {
+    if (is_string($txCallId) && $txCallId !== '' && function_exists('transcript_target_store')) {
         transcript_target_store($txCallId, [
             'provider'  => 'forth',
             'source'    => 'softphone',

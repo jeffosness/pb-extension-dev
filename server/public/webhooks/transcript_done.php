@@ -65,8 +65,8 @@ if (!is_array($payload)) {
     exit;
 }
 
-$callId        = $payload['call_id'] ?? null;
-$transcriptId  = (string)($payload['transcript_id'] ?? '');
+$callId        = is_scalar($payload['call_id'] ?? null) ? $payload['call_id'] : null;
+$transcriptId  = is_scalar($payload['transcript_id'] ?? null) ? (string)$payload['transcript_id'] : '';
 $segments      = is_array($payload['transcript'] ?? null) ? $payload['transcript'] : [];
 
 api_log('transcript_done', [
@@ -77,59 +77,64 @@ api_log('transcript_done', [
     'segment_count'  => count($segments),
 ]);
 
-if ($callId === null || $transcriptId === '') {
+// The target key binds call_id to THIS session (transcript_dial_target_key), so
+// only the session that logged the call can address its target — a forged
+// call_done on another session writes a different key.
+$targetKey = transcript_dial_target_key($callId, $session_token);
+if ($targetKey === null || $transcriptId === '') {
     // Nothing we can correlate on — acknowledge and move on.
     echo 'OK';
     exit;
 }
 
-// Correlate back to the activity we logged. The target is authoritative for the
-// provider + CRM ids; the session (via ?s=) is kept only as a sanity/fallback.
-$target = transcript_target_load($callId);
+$target = transcript_target_load($targetKey);
 if (!is_array($target)) {
-    api_log('transcript_done.skip', ['reason' => 'no_target_for_call', 'call_id' => (string)$callId]);
+    api_log('transcript_done.skip', ['reason' => 'no_target_for_call', 'call_id' => (string)$callId, 'transcript_id' => $transcriptId]);
     echo 'OK';
     exit;
 }
 
-// Authenticate the caller: the ?s= token MUST match the one that created this
-// target. The target stores only hash('sha256', session_token) — never the raw
-// token — so we compare hashes in constant time. This is the trust boundary: a
-// forged request with a guessed call_id but no valid token is rejected. We bind
-// to the stored hash (not a live session lookup) so a transcript that lands
-// after the session file is cleaned still authenticates.
-$incomingHash = hash('sha256', (string)$session_token);
-$storedHash   = (string)($target['s_hash'] ?? '');
-if ($storedHash === '' || !hash_equals($storedHash, $incomingHash)) {
+// Defence in depth: the target also stores hash('sha256', session_token) (never
+// the raw token); compare in constant time. With the session-bound key this
+// can only fail on a corrupted record. Bound to the stored hash, not a live
+// session lookup, so a transcript landing after the session file is swept
+// still authenticates.
+$storedHash = (string)($target['s_hash'] ?? '');
+if ($storedHash === '' || !hash_equals($storedHash, hash('sha256', (string)$session_token))) {
     api_log('transcript_done.skip', ['reason' => 'session_binding_mismatch', 'call_id' => (string)$callId]);
     echo 'OK';
     exit;
 }
 
-// Repeat handling: PB sends ONE delivery per transcript and never retries,
-// but may send the same transcript_id again when the AI summary arrives or
-// changes (a repeat is an UPDATE). Decided under a per-transcript lock AFTER the
-// binding check, so a forger can't pre-claim real transcript_ids.
-$decision = transcript_should_apply($transcriptId, $payload['summary'] ?? null);
+$ids = transcript_log_ids($target, $callId, $transcriptId);
+
+// Repeat handling: PB sends ONE delivery per transcript and never retries, but
+// may send the same transcript_id again when the AI summary arrives or changes
+// (a repeat is an UPDATE). Decided under a per-transcript lock.
+$decision = transcript_should_apply($targetKey, $transcriptId, $payload['summary'] ?? null);
 if (!$decision['apply']) {
-    api_log('transcript_done.skip', ['reason' => $decision['reason'], 'call_id' => (string)$callId]);
+    api_log('transcript_done.skip', $ids + ['reason' => $decision['reason']]);
     echo 'OK';
     exit;
 }
 
 // Provider dispatch lives in transcript_apply() (utils.php), shared with the
 // click-to-call receiver and the retry cron. The target is kept (not deleted)
-// so a later summary update can still find it; the 7-day cron sweeps it.
+// so a later summary update can still find it; the cleanup sweep removes it.
 $enriched = transcript_apply($target, $payload, $decision['is_update']);
+$queued   = false;
 if (!$enriched) {
     // No PB retry exists — queue our own (scripts/cron/transcript_retry.php).
-    transcript_retry_store('dial', $callId, $payload, $decision['is_update']);
+    // If even that fails, roll the marker back so a later repeat can still land.
+    $queued = transcript_retry_store('dial', $targetKey, $callId, $payload, $decision['is_update']);
+    if (!$queued) {
+        transcript_marker_restore($targetKey, $transcriptId, $decision['prev_fp']);
+    }
 }
-api_log('transcript_done.result', [
-    'call_id'   => (string)$callId,
-    'provider'  => (string)($target['provider'] ?? ''),
+api_log('transcript_done.result', $ids + [
     'is_update' => $decision['is_update'],
     'success'   => $enriched,
+    'queued'    => $queued,
 ]);
 
 echo 'OK';

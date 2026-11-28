@@ -106,21 +106,26 @@ if ($crmId === '' || (string)($target['forth_cid'] ?? '') !== $crmId) {
     $respond();
 }
 
-$decision = transcript_should_apply($transcriptId, $payload['summary'] ?? null);
+$ids = transcript_log_ids($target, $callId, $transcriptId);
+
+$decision = transcript_should_apply($callId, $transcriptId, $payload['summary'] ?? null);
 if (!$decision['apply']) {
-    api_log('softphone_transcript.skip', ['reason' => $decision['reason'], 'call_id' => $callId]);
+    api_log('softphone_transcript.skip', $ids + ['reason' => $decision['reason']]);
     $respond();
 }
 
-$ok = transcript_apply($target, $payload, $decision['is_update']);
+$ok     = transcript_apply($target, $payload, $decision['is_update']);
+$queued = false;
 if (!$ok) {
-    transcript_retry_store('softphone', $callId, $payload, $decision['is_update']);
+    $queued = transcript_retry_store('softphone', $callId, $callId, $payload, $decision['is_update']);
+    if (!$queued) {
+        transcript_marker_restore($callId, $transcriptId, $decision['prev_fp']);
+    }
 }
-api_log('softphone_transcript.result', [
-    'call_id'   => $callId,
-    'provider'  => (string)($target['provider'] ?? ''),
+api_log('softphone_transcript.result', $ids + [
     'is_update' => $decision['is_update'],
     'success'   => $ok,
+    'queued'    => $queued,
 ]);
 
 $respond();

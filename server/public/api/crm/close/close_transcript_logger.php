@@ -160,10 +160,10 @@ function close_log_transcript(array $target, array $payload): bool {
     ];
     if (!$ok) {
         // Capture Close's own error text (CLAUDE.md external-call failure rule).
+        // Message + curl error only: a validation error can echo note_html back,
+        // and that holds the transcript.
         $fail = describe_api_failure($info, $resp);
         $logData['provider_msg'] = $fail['message'];
-        $logData['close_error']  = $fail['response'];
-        $logData['body_snippet'] = $fail['body_snippet'];
         $logData['curl_error']   = $fail['curl_error'];
     }
     api_log('close_transcript_log', $logData);
@@ -177,21 +177,42 @@ function close_log_transcript(array $target, array $payload): bool {
  * HTML-escaped (note_html is rendered HTML in Close). Returns null when there is
  * nothing to add (no summary and no usable segments).
  *
- * The transcript is capped with mb_strcut (byte budget, but never splits a
- * UTF-8 sequence) so a long call can't produce invalid UTF-8 that would make
- * json_encode() fail and silently drop the whole update.
+ * The transcript is capped at ~20 KB by dropping whole lines, so a long call
+ * can't split a UTF-8 sequence or an HTML entity (invalid UTF-8 would make
+ * json_encode() fail and silently drop the whole update).
  *
  * @param array<int,array<string,mixed>> $segments
  */
 function close_build_transcript_note_html(string $noteText, string $summary, array $segments): ?string
 {
-    $lines = [];
+    // Built line by line under a byte budget, so truncation happens between
+    // whole lines and can never cut through an HTML entity or tag.
+    $lines     = [];
+    $bytes     = 0;
+    $truncated = false;
     foreach ($segments as $seg) {
         if (!is_array($seg)) continue;
         $text = trim((string)($seg['text'] ?? ''));
         if ($text === '') continue;
         $speaker = ((string)($seg['speaker'] ?? '') === 'member') ? 'Agent' : 'Contact';
-        $lines[] = '<strong>' . $speaker . ':</strong> ' . htmlspecialchars($text);
+        $line    = '<strong>' . $speaker . ':</strong> ' . htmlspecialchars($text);
+        if ($bytes + strlen($line) > 20000) {
+            // Fit what we can of this line: cut the RAW text (UTF-8-safe), then
+            // escape, shrinking until the escaped line fits the budget.
+            $room = 20000 - $bytes;
+            $cut  = $text;
+            while ($cut !== '' && strlen($line) > $room) {
+                $cut  = mb_strcut($cut, 0, intdiv(strlen($cut), 2));
+                $line = '<strong>' . $speaker . ':</strong> ' . htmlspecialchars($cut);
+            }
+            if ($cut !== '') {
+                $lines[] = $line;
+            }
+            $truncated = true;
+            break;
+        }
+        $lines[] = $line;
+        $bytes  += strlen($line) + 4;
     }
 
     // Nothing new to add if there's neither a summary nor a transcript — don't
@@ -209,9 +230,8 @@ function close_build_transcript_note_html(string $noteText, string $summary, arr
     }
     if ($lines !== []) {
         $transcriptHtml = implode('<br>', $lines);
-        // Cap defensively — UTF-8-safe so json_encode() can't fail on a split char.
-        if (strlen($transcriptHtml) > 20000) {
-            $transcriptHtml = mb_strcut($transcriptHtml, 0, 20000) . '… <em>(transcript truncated)</em>';
+        if ($truncated) {
+            $transcriptHtml .= '<br>… <em>(transcript truncated)</em>';
         }
         $parts[] = '<p><strong>Transcript</strong><br>' . $transcriptHtml . '</p>';
     }

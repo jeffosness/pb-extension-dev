@@ -6,159 +6,165 @@ use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\Test;
 
 /**
- * Tests for the transcript-target store (utils.php): transcript_target_store() /
- * _load() / _delete() / _path() / transcript_targets_cleanup().
+ * Tests for the call-transcript store in utils.php (PB EXP-5135):
  *
- * These correlate the async api_transcript webhook (EXP-5135) back to the CRM
- * call activity we logged at call_done time, keyed by PB's call_id. Invariants:
- *   1. store → load round-trips the record and stamps created_at.
- *   2. delete removes it (so an at-least-once redelivery no-ops).
- *   3. the call_id is sanitized into the basename — no path traversal.
- *   4. cleanup removes only files older than the cutoff.
+ *   transcript_dial_target_key()           — session-bound dial-session keys
+ *   transcript_target_store/_load/_delete  — correlation records
+ *   transcript_should_apply / _marker_*    — "a repeated transcript_id is an update"
+ *   transcript_retry_store / _retry_run    — our own retries (PB never retries)
+ *   transcript_targets_cleanup             — 7-day retention sweep
+ *   pb_softphone_signature_valid           — softphone webhook HMAC
  *
- * Files land in server/public/transcript_targets/, so we clean up per test.
+ * Files land in transcripts_dir() (TOKENS_DIR/../transcripts — a per-run temp
+ * dir under CI); each test removes what it wrote.
  */
 final class TranscriptTargetTest extends TestCase
 {
-    private array $mintedCallIds = [];
-    private array $claimedIds = [];
+    /** @var string[] target keys to remove in tearDown */
+    private array $written = [];
 
     protected function tearDown(): void
     {
-        foreach ($this->mintedCallIds as $callId) {
-            transcript_target_delete($callId);
+        foreach ($this->written as $key) {
+            transcript_target_delete($key);
         }
-        // Clean up summary markers + pending retries written by these tests.
-        foreach ($this->claimedIds as $id) {
-            $safe = preg_replace('/[^a-zA-Z0-9-]/', '', (string)$id);
-            $dir  = __DIR__ . '/../server/public/transcript_targets/';
-            foreach (array_merge([$dir . 'seen_' . $safe . '.json'], glob($dir . 'retry_' . $safe . '_*.json') ?: []) as $p) {
-                if (is_file($p)) {
-                    @unlink($p);
-                }
-            }
+        foreach (array_merge(
+            glob(transcripts_dir() . '/seen_*.json') ?: [],
+            glob(transcripts_dir() . '/retry_*.json') ?: []
+        ) as $f) {
+            @unlink($f);
         }
-        $this->mintedCallIds = [];
-        $this->claimedIds = [];
+        $this->written = [];
+    }
+
+    private function key(): string
+    {
+        $k = transcript_dial_target_key(random_int(3000000000, 3999999999), bin2hex(random_bytes(16)));
+        $this->written[] = $k;
+        return $k;
+    }
+
+    private function retryFiles(): array
+    {
+        return glob(transcripts_dir() . '/retry_*.json') ?: [];
+    }
+
+    // --- keys + store -------------------------------------------------------
+
+    #[Test]
+    public function dial_key_is_bound_to_the_session(): void
+    {
+        $a = transcript_dial_target_key(3133482107, 'session-a');
+        $b = transcript_dial_target_key(3133482107, 'session-b');
+        $this->assertNotSame($a, $b, 'a forged call_done on another session must not address the same target');
+        $this->assertSame($a, transcript_dial_target_key('3133482107', 'session-a'), 'int and string call_id agree');
+        $this->assertNull(transcript_dial_target_key(3133482107, ''));
+        $this->assertNull(transcript_dial_target_key(null, 'session-a'));
+        $this->assertNull(transcript_dial_target_key([1], 'session-a'));
     }
 
     #[Test]
     public function store_then_load_round_trips_the_record(): void
     {
-        $callId = 'test-' . bin2hex(random_bytes(6));
-        $this->mintedCallIds[] = $callId;
+        $key = $this->key();
+        $this->assertTrue(transcript_target_store($key, ['provider' => 'close', 'activity_id' => 'acti_123']));
 
-        $ok = transcript_target_store($callId, [
-            'provider'    => 'close',
-            'client_id'   => 'client-abc',
-            'activity_id' => 'acti_123',
-            'note_text'   => 'Call via PhoneBurner: Interested',
-        ]);
-        $this->assertTrue($ok);
-
-        $loaded = transcript_target_load($callId);
-        $this->assertIsArray($loaded);
-        $this->assertSame('close', $loaded['provider']);
+        $loaded = transcript_target_load($key);
         $this->assertSame('acti_123', $loaded['activity_id']);
         $this->assertArrayHasKey('created_at', $loaded, 'store must stamp created_at');
+
+        transcript_target_delete($key);
+        $this->assertNull(transcript_target_load($key));
     }
 
     #[Test]
-    public function delete_removes_the_target(): void
+    public function store_lives_outside_the_webroot(): void
     {
-        $callId = 'test-' . bin2hex(random_bytes(6));
-        transcript_target_store($callId, ['provider' => 'close']);
-
-        transcript_target_delete($callId);
-
-        $this->assertNull(transcript_target_load($callId), 'deleted target must not load');
+        $dir = str_replace('\\', '/', transcripts_dir());
+        $this->assertStringNotContainsString('server/public', $dir);
     }
 
     #[Test]
-    public function load_returns_null_for_unknown_call_id(): void
+    public function key_is_sanitized_into_the_basename_no_traversal(): void
     {
-        $this->assertNull(transcript_target_load('never-stored-' . bin2hex(random_bytes(6))));
-    }
-
-    #[Test]
-    public function empty_call_id_is_rejected(): void
-    {
+        $path = transcript_target_path('../../../etc/passwd');
+        $this->assertIsString($path);
+        $this->assertStringNotContainsString('..', $path);
         $this->assertNull(transcript_target_path(''));
         $this->assertFalse(transcript_target_store('', ['provider' => 'close']));
     }
 
-    #[Test]
-    public function call_id_is_sanitized_into_the_basename_no_traversal(): void
-    {
-        // A malicious call_id must resolve inside transcript_targets/, never up.
-        $path = transcript_target_path('../../../etc/passwd');
-        $this->assertIsString($path);
-        $this->assertStringContainsString('transcript_targets', $path);
-        $this->assertStringNotContainsString('..', $path);
-    }
+    // --- update decisions -------------------------------------------------
 
     #[Test]
     public function first_delivery_applies_and_identical_repeat_is_skipped(): void
     {
-        $tid = 'tid-' . bin2hex(random_bytes(6));
-        $this->claimedIds[] = $tid;
-
-        $first = transcript_should_apply($tid, 'Wants pricing.');
+        $key = $this->key();
+        $first = transcript_should_apply($key, 'tid-1', 'Wants pricing.');
         $this->assertTrue($first['apply']);
         $this->assertFalse($first['is_update']);
+        $this->assertNull($first['prev_fp']);
 
-        $again = transcript_should_apply($tid, 'Wants pricing.');
-        $this->assertFalse($again['apply'], 'same transcript_id + same summary must not write twice');
+        $this->assertFalse(transcript_should_apply($key, 'tid-1', 'Wants pricing.')['apply']);
     }
 
     #[Test]
     public function repeat_with_new_summary_is_an_update(): void
     {
-        // New Dialer Window: first delivery may carry summary:null, then PB
-        // re-sends the same transcript_id once the summary is ready.
-        $tid = 'tid-' . bin2hex(random_bytes(6));
-        $this->claimedIds[] = $tid;
+        // New Dialer Window: summary:null first, then the same transcript_id again.
+        $key = $this->key();
+        $this->assertTrue(transcript_should_apply($key, 'tid-2', null)['apply'], 'summary-less first delivery still writes the transcript');
 
-        $this->assertTrue(transcript_should_apply($tid, null)['apply'], 'summary-less first delivery still writes the transcript');
-
-        $update = transcript_should_apply($tid, 'Call back Tuesday.');
+        $update = transcript_should_apply($key, 'tid-2', 'Call back Tuesday.');
         $this->assertTrue($update['apply']);
         $this->assertTrue($update['is_update']);
 
-        $changed = transcript_should_apply($tid, 'Call back Wednesday instead.');
-        $this->assertTrue($changed['apply'], 'an edited summary is another update');
-        $this->assertTrue($changed['is_update']);
+        $this->assertTrue(transcript_should_apply($key, 'tid-2', 'Call back Wednesday.')['apply'], 'an edited summary is another update');
+        $this->assertFalse(transcript_should_apply($key, 'tid-2', '')['apply'], 'a repeat with no summary has nothing new');
     }
 
     #[Test]
-    public function repeat_without_summary_is_skipped(): void
+    public function markers_are_per_target(): void
     {
-        $tid = 'tid-' . bin2hex(random_bytes(6));
-        $this->claimedIds[] = $tid;
+        // Another tenant re-using a transcript_id can't pre-claim ours.
+        $mine  = $this->key();
+        $other = $this->key();
+        transcript_should_apply($other, 'tid-shared', 'x');
+        $this->assertTrue(transcript_should_apply($mine, 'tid-shared', 'x')['apply']);
+    }
 
-        transcript_should_apply($tid, 'Has a summary.');
-        $this->assertFalse(transcript_should_apply($tid, '')['apply'], 'a repeat with nothing new must not write');
+    #[Test]
+    public function marker_restore_undoes_a_failed_write(): void
+    {
+        $key = $this->key();
+        $d = transcript_should_apply($key, 'tid-3', 'A');
+        transcript_marker_restore($key, 'tid-3', $d['prev_fp']);
+        $this->assertNull(transcript_marker_fp($key, 'tid-3'), 'no prior marker → removed');
+        $this->assertTrue(transcript_should_apply($key, 'tid-3', 'A')['apply'], 'the same delivery can land again');
+
+        $u = transcript_should_apply($key, 'tid-3', 'B');
+        transcript_marker_restore($key, 'tid-3', $u['prev_fp']);
+        $this->assertSame(transcript_summary_fp('A'), transcript_marker_fp($key, 'tid-3'), 'restored to the previous summary');
     }
 
     #[Test]
     public function unusable_transcript_id_still_applies_once(): void
     {
-        // Can't track a missing id — must not block a legitimate delivery.
-        $this->assertTrue(transcript_should_apply('', 'x')['apply']);
-        $this->assertTrue(transcript_should_apply([], 'x')['apply']);
+        $key = $this->key();
+        $this->assertTrue(transcript_should_apply($key, '', 'x')['apply']);
+        $this->assertTrue(transcript_should_apply($key, [], 'x')['apply']);
     }
+
+    // --- retries ----------------------------------------------------------
 
     #[Test]
     public function retry_reschedules_then_gives_up(): void
     {
-        $callId = 'test-' . bin2hex(random_bytes(6));
-        $tid    = 'tid-' . bin2hex(random_bytes(6));
-        $this->mintedCallIds[] = $callId;
-        $this->claimedIds[]    = $tid;
-
+        $key = $this->key();
         // An unknown provider makes transcript_apply() fail every time.
-        transcript_target_store($callId, ['provider' => 'nope']);
-        $this->assertTrue(transcript_retry_store('dial', $callId, ['transcript_id' => $tid, 'summary' => 's'], false));
+        transcript_target_store($key, ['provider' => 'nope']);
+        transcript_should_apply($key, 'tid-4', 's');
+        $this->assertTrue(transcript_retry_store('dial', $key, 1, ['transcript_id' => 'tid-4', 'summary' => 's'], false));
 
         $now = time();
         $this->assertSame(0, array_sum(transcript_retry_run($now)), 'not due before the first backoff');
@@ -170,18 +176,73 @@ final class TranscriptTargetTest extends TestCase
             $gaveUp += transcript_retry_run($t)['gave_up'];
         }
         $this->assertSame(1, $gaveUp, 'gives up after the last backoff step');
-        $this->assertSame([], glob(__DIR__ . '/../server/public/transcript_targets/retry_' . $tid . '_*.json'));
+        $this->assertSame([], $this->retryFiles());
+    }
+
+    #[Test]
+    public function stale_close_retry_is_dropped_when_a_newer_summary_landed(): void
+    {
+        // Original (summary null) failed and was queued; the summary update then
+        // succeeded. Re-applying the original would wipe the summary off the note.
+        $key = $this->key();
+        transcript_target_store($key, ['provider' => 'close']);
+        transcript_should_apply($key, 'tid-5', null);
+        transcript_retry_store('dial', $key, 1, ['transcript_id' => 'tid-5', 'summary' => null], false);
+        transcript_should_apply($key, 'tid-5', 'Newer summary.');
+
+        $stats = transcript_retry_run(time() + 100000);
+        $this->assertSame(1, $stats['dropped']);
+        $this->assertSame(0, $stats['ok'] + $stats['failed'] + $stats['gave_up'], 'never applied');
+        $this->assertSame([], $this->retryFiles());
+    }
+
+    #[Test]
+    public function forth_original_retry_survives_a_newer_summary(): void
+    {
+        // Forth updates are summary-only notes, so the original's transcript note
+        // must still be retried even after an update landed.
+        $key = $this->key();
+        transcript_target_store($key, ['provider' => 'forth']); // no client_id → apply fails, not dropped
+        transcript_should_apply($key, 'tid-6', null);
+        transcript_retry_store('dial', $key, 1, ['transcript_id' => 'tid-6', 'summary' => null], false);
+        transcript_should_apply($key, 'tid-6', 'Newer summary.');
+
+        $stats = transcript_retry_run(time() + 100000);
+        $this->assertSame(0, $stats['dropped'], 'not treated as superseded');
+        $this->assertSame(1, $stats['failed'], 'attempted, then rescheduled');
     }
 
     #[Test]
     public function retry_is_dropped_when_target_is_gone(): void
     {
-        $tid = 'tid-' . bin2hex(random_bytes(6));
-        $this->claimedIds[] = $tid;
+        transcript_retry_store('dial', 'd' . str_repeat('0', 40), 1, ['transcript_id' => 'tid-7'], false);
+        $this->assertSame(1, transcript_retry_run(time() + 100000)['dropped']);
+        $this->assertSame([], $this->retryFiles());
+    }
 
-        transcript_retry_store('dial', 'gone-' . bin2hex(random_bytes(6)), ['transcript_id' => $tid], false);
-        transcript_retry_run(time() + 100000);
-        $this->assertSame([], glob(__DIR__ . '/../server/public/transcript_targets/retry_' . $tid . '_*.json'));
+    #[Test]
+    public function oversized_retry_is_refused(): void
+    {
+        $key = $this->key();
+        $big = ['transcript_id' => 'tid-8', 'transcript' => [['text' => str_repeat('x', TRANSCRIPT_RETRY_MAX_BYTES)]]];
+        $this->assertFalse(transcript_retry_store('dial', $key, 1, $big, false));
+        $this->assertSame([], $this->retryFiles());
+    }
+
+    // --- retention + signature -------------------------------------------
+
+    #[Test]
+    public function cleanup_removes_only_files_older_than_cutoff(): void
+    {
+        $old = $this->key();
+        $new = $this->key();
+        transcript_target_store($old, ['provider' => 'close']);
+        transcript_target_store($new, ['provider' => 'close']);
+        @touch(transcript_target_path($old), time() - 100000);
+
+        $this->assertGreaterThanOrEqual(1, transcript_targets_cleanup(3600));
+        $this->assertNull(transcript_target_load($old), 'stale target should be swept');
+        $this->assertIsArray(transcript_target_load($new), 'fresh target should survive');
     }
 
     #[Test]
@@ -196,26 +257,5 @@ final class TranscriptTargetTest extends TestCase
         $this->assertFalse(pb_softphone_signature_valid($body, $sig, 'other'), 'wrong secret');
         $this->assertFalse(pb_softphone_signature_valid($body, '', 'secret'), 'unsigned');
         $this->assertFalse(pb_softphone_signature_valid($body, $sig, ''), 'no secret configured');
-    }
-
-    #[Test]
-    public function cleanup_removes_only_files_older_than_cutoff(): void
-    {
-        $oldId = 'old-' . bin2hex(random_bytes(6));
-        $newId = 'new-' . bin2hex(random_bytes(6));
-        $this->mintedCallIds[] = $oldId;
-        $this->mintedCallIds[] = $newId;
-
-        transcript_target_store($oldId, ['provider' => 'close']);
-        transcript_target_store($newId, ['provider' => 'close']);
-
-        // Backdate the "old" one well past the cutoff.
-        @touch(transcript_target_path($oldId), time() - 100000);
-
-        $removed = transcript_targets_cleanup(3600); // 1-hour cutoff
-        $this->assertGreaterThanOrEqual(1, $removed);
-
-        $this->assertNull(transcript_target_load($oldId), 'stale target should be swept');
-        $this->assertIsArray(transcript_target_load($newId), 'fresh target should survive');
     }
 }

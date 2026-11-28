@@ -590,6 +590,17 @@ Configure PhoneBurner to call our webhooks after each dialer event. **Do this on
 
 The webhook URLs are **also embedded per-session at dialsession creation time** by the server code, so PB will receive them via the session payload regardless of admin-level registration. Admin-level config is the failsafe and the default for sessions that don't override.
 
+Call transcripts (`api_transcript`) need **no** admin registration: Close and Forth launches embed `webhooks/transcript_done.php?s=…` per session.
+
+**Click-to-call softphone registrations** (PB developer settings → Softphones, one registration per environment, matching the slugs in `softphone_config.js`) carry two webhook URLs, both signed with that registration's secret (`SOFTPHONE_HMAC_SECRET` in that env's `config.php`):
+
+| Field | Dev URL | Prod URL |
+|---|---|---|
+| Call done webhook | `https://extension-dev.phoneburner.biz/webhooks/softphone_call_done.php` | `https://extension.phoneburner.biz/webhooks/softphone_call_done.php` |
+| Transcript webhook URL | `https://extension-dev.phoneburner.biz/webhooks/softphone_transcript.php` | `https://extension.phoneburner.biz/webhooks/softphone_transcript.php` |
+
+If the Transcript webhook URL is blank, PB sends nothing and Forth click-to-call calls never get transcripts. There is no error on our side, so check it after any registration change.
+
 ---
 
 ## 11. OAuth app registration

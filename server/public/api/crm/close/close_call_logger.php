@@ -473,15 +473,17 @@ function close_log_call(array $state, array $payload, array $lastCall, string $s
 
     // Drop a transcript-target record so the async api_transcript webhook
     // (EXP-5135, minutes later) can find THIS activity and append the AI
-    // summary + transcript. Keyed by PB's call_id (same id the webhook sends).
+    // summary + transcript. Keyed by PB's call_id bound to THIS session (see
+    // transcript_dial_target_key), so another session can't overwrite it.
     // See webhooks/transcript_done.php + close_transcript_logger.php.
-    $txCallId = $lastCall['call_id'] ?? null;
-    if ($txCallId !== null && $callActivityId && function_exists('transcript_target_store')) {
+    $txKey = function_exists('transcript_dial_target_key')
+        ? transcript_dial_target_key($lastCall['call_id'] ?? null, $state['session_token'] ?? null) : null;
+    if ($txKey !== null && $callActivityId) {
         $rawNoteText = 'Call via PhoneBurner: ' . ($status !== '' ? $status : 'Unknown');
         if (!empty($callNotes)) {
             $rawNoteText .= ' — Notes: ' . implode(' | ', $callNotes);
         }
-        transcript_target_store($txCallId, [
+        transcript_target_store($txKey, [
             'provider'    => 'close',
             'client_id'   => $clientId,
             'lead_id'     => $closeLeadId,
