@@ -592,7 +592,7 @@ The webhook URLs are **also embedded per-session at dialsession creation time** 
 
 Call transcripts (`api_transcript`) need **no** admin registration: Close and Forth launches embed `webhooks/transcript_done.php?s=…` per session.
 
-**Click-to-call softphone registrations** (PB developer settings → Softphones, one registration per environment, matching the slugs in `softphone_config.js`) carry two webhook URLs, both signed with that registration's secret (`SOFTPHONE_HMAC_SECRET` in that env's `config.php`):
+**Click-to-call softphone registrations** (PB developer settings → Softphones, one registration per environment, matching the slugs in `softphone_config.js`; both live in the internal **"PhoneBurner Team"** PB account — ask Jeff for access) carry two webhook URLs, both signed with that registration's secret (`SOFTPHONE_HMAC_SECRET` in that env's `config.php`):
 
 | Field | Dev URL | Prod URL |
 |---|---|---|
