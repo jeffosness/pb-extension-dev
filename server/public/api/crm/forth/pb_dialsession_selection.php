@@ -73,6 +73,21 @@ if (empty($forthContacts)) {
   api_error('No contacts returned from Forth API', 'bad_request', 400, $diag);
 }
 
+// Dial order is the rep's on-page order (they sort the Forth list — e.g. by
+// its Call Attempts column — before launching), so contacts are NOT re-sorted
+// here. Forth's Get Contact API has no call-attempts field to sort on anyway:
+// that column is computed by Forth's list UI. See CRMS.md (Forth reference).
+api_log('forth_selection.fetched', [
+  'client_id_hash'   => substr(hash('sha256', (string)$client_id), 0, 12),
+  'selected'         => count($contactIds),
+  'fetched'          => count($forthContacts),
+  'fetch_ms'         => $diag['contacts_fetch']['ms'] ?? null,
+  // First 10 Forth record IDs (not PII) in the order the extension sent them,
+  // to compare against a rep's screenshot of their sorted list: tells "the
+  // extension read the rows out of order" apart from "PB reordered the session".
+  'received_order_head' => array_slice($contactIds, 0, 10),
+]);
+
 // -----------------------------------------------------------------------------
 // Normalize into PhoneBurner dialsession payload
 // -----------------------------------------------------------------------------
@@ -132,6 +147,8 @@ foreach ($forthContacts as $c) {
   if (!empty($additionalPhones)) {
     $pbContact['additional_phone'] = $additionalPhones;
   }
+  // Address: only the fields the CRM returned — see pb_address_fields() in utils.php.
+  $pbContact += pb_address_fields($c['address'] ?? null);
 
   $pbContacts[] = $pbContact;
 
@@ -179,6 +196,14 @@ $callbacks = [
     'callback_type' => 'api_calldone',
     'callback'      => $base . '/webhooks/call_done.php?s=' . urlencode($session_token),
   ],
+  [
+    // EXP-5135 Call Transcript webhook: fires minutes after a recorded call;
+    // forth_transcript_logger attaches the AI summary + transcript as a contact
+    // note (live on PB prod since EXP-5135 shipped, only for users with
+    // recording + transcription on). See GH #258.
+    'callback_type' => 'api_transcript',
+    'callback'      => $base . '/webhooks/transcript_done.php?s=' . urlencode($session_token),
+  ],
 ];
 
 $payload = [
@@ -201,6 +226,7 @@ $payload = [
 $pbResult = pb_dialsession_or_fail($pat, $payload, 'forth_selection', [
   'client_id_hash' => substr(hash('sha256', (string)$client_id), 0, 12),
   'contact_count'  => count($pbContacts),
+  'addr_sent'      => pb_count_contacts_with_addr($pbContacts),
 ]);
 $resp    = $pbResult['response'];
 $pb_ms   = $pbResult['pb_ms'];

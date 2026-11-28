@@ -605,13 +605,28 @@ function extract_ids_from_records($records) {
   return array_keys($out);
 }
 
+// Standard HubSpot address properties → the normalized address shape that
+// pb_address_fields() maps to PB. Only properties present in the response are
+// included (HubSpot returns requested properties with null when blank), so
+// contacts — which have no standard `address2` and don't request it — never
+// clear PB's address2. Standard properties only; custom ones are out of scope.
+function hs_address_from_props(array $props): array {
+  $map = ['address' => 'address1', 'address2' => 'address2', 'city' => 'city',
+          'state' => 'state', 'zip' => 'zip', 'country' => 'country'];
+  $out = [];
+  foreach ($map as $hsKey => $key) {
+    if (array_key_exists($hsKey, $props)) $out[$key] = $props[$hsKey];
+  }
+  return $out;
+}
+
 // Fetch contact objects by ID (HubSpot contacts)
 function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneProperties = [], &$diag = [], ?string $preferredPrimary = null) {
   $contacts = [];
   $diag['contacts_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
   // Build properties list: base fields + all discovered phone property names
-  $baseProps = ['firstname', 'lastname', 'email'];
+  $baseProps = ['firstname', 'lastname', 'email', 'address', 'city', 'state', 'zip', 'country'];
   $phonePropNames = array_column($phoneProperties, 'name');
   $allProps = array_values(array_unique(array_merge($baseProps, $phonePropNames)));
 
@@ -660,6 +675,7 @@ function hs_fetch_contacts_by_ids($accessToken, array $contactIds, array $phoneP
       'email'             => (string)($props['email'] ?? ''),
       'phone'             => $phoneData['primary'],
       'additional_phones' => $phoneData['additional'],
+      'address'           => hs_address_from_props($props),
     ];
     $diag['contacts_fetch']['ok']++;
   }
@@ -690,7 +706,7 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
   $diag['companies_fetch'] = ['ok' => 0, 'fail' => 0, 'last_http' => null];
 
   // Build properties list: base fields + all discovered phone property names
-  $baseProps = ['name', 'domain', 'city', 'state'];
+  $baseProps = ['name', 'domain', 'address', 'address2', 'city', 'state', 'zip', 'country'];
   $phonePropNames = array_column($phoneProperties, 'name');
   $allProps = array_values(array_unique(array_merge($baseProps, $phonePropNames)));
 
@@ -738,6 +754,7 @@ function hs_fetch_companies_by_ids($accessToken, array $companyIds, array $phone
       'domain'            => (string)($props['domain'] ?? ''),
       'city'              => (string)($props['city'] ?? ''),
       'state'             => (string)($props['state'] ?? ''),
+      'address'           => hs_address_from_props($props),
     ];
     $diag['companies_fetch']['ok']++;
   }

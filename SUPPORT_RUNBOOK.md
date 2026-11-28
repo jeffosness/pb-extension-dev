@@ -128,6 +128,9 @@ Every diagnostic log entry from the v0.8.4+ instrumentation has this shape:
 | `apollo_sequences.search_fail` / `apollo_sequence_tasks.fetch_failed` | Apollo API rejected the sequence/task fetch | Usually rate-limit (Apollo enforces 100/min). `status: 429` confirms. |
 | `hs_call_log.refresh_failed` | HubSpot task-completion webhook couldn't refresh the token | Customer's HS token expired mid-session. Task auto-completion won't work for the rest of the session; they need to reconnect and start a new session. |
 | `close_call_log_token_refresh.error` / `apollo_call_log_token_refresh.error` | Same as above for Close/Apollo | Same fix — reconnect that CRM. |
+| `transcript_done.result` / `softphone_transcript.result` | A call transcript arrived (dial session / Forth click-to-call). `success:false, queued:true` = CRM write failed, retry queued | "Transcript never showed up": grep the customer's `client_id_hash` for these. No line at all → PB never sent one (recording/transcription off, or no AI summary). Click-to-call has none at all → the Transcript webhook URL is missing on our PB softphone registration. |
+| `transcript_done.skip` / `softphone_transcript.skip` | Transcript ignored. `reason`: `no_target_for_call` (we never logged that call), `repeat_same_summary` / `repeat_without_summary` (harmless re-send), `crm_not_enabled` (HubSpot click-to-call, by design) | `no_target_for_call` on a Close call usually means the call activity itself failed to log: look for `close_call_log` on the same `call_id`. |
+| `transcript_retry.gave_up` | Three retries (5 m, 15 m, 1 h) all failed; the transcript was not written | Check the provider's own `close_transcript_log` / `forth_transcript_log` lines for `provider_msg` (expired token → reconnect the CRM). `transcript_retry.dropped` with `superseded` is normal: a newer summary already landed. |
 
 ---
 

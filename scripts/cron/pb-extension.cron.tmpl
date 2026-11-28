@@ -13,6 +13,12 @@ MAILTO=""
 # Server health sample + alert check (every minute). Errors land in api.log.
 * * * * * www-data /usr/bin/php {{REPO_DIR}}/scripts/cron/collect_server_health.php >/dev/null 2>&1
 
+# Retry transcript writes that failed at delivery time (PB never retries the
+# transcript webhooks). Backoff 5m/15m/1h, then gives up. Also sweeps the
+# transcript store (outside the webroot, under TOKENS_DIR/../transcripts) of
+# anything older than 7 days. See transcript_retry.php.
+*/5 * * * * www-data /usr/bin/php {{REPO_DIR}}/scripts/cron/transcript_retry.php >/dev/null 2>&1
+
 # Stale SSE presence files (daily, 03:00 server time). Live sessions rewrite theirs constantly.
 0 3 * * * www-data find {{REPO_DIR}}/server/public/metrics/sse_presence -type f -name '*.json' -mtime +1 -delete
 

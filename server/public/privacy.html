@@ -101,6 +101,7 @@
           <li>Contact names</li>
           <li>Phone numbers</li>
           <li>Email addresses</li>
+          <li>Mailing addresses (street, city, state, zip, country), for CRMs connected through the extension's HubSpot, Close, Apollo and Forth integrations</li>
         </ul>
         <p>This information is read from your CRM to create and follow PhoneBurner dial sessions. The extension does not independently create, enrich, or sell this data.</p>
       </li>
@@ -135,7 +136,7 @@
     <ul>
       <li><strong>Tokens (PAT and OAuth):</strong> stored on the extension's backend servers with owner-only file permissions. Not stored in your browser.</li>
       <li><strong>Browser-local data:</strong> the extension keeps an anonymous client identifier (UUID) and your user preferences (e.g., preferred phone field) in Chrome's local storage. No personally identifiable contact data is persisted in browser storage.</li>
-      <li><strong>Session data:</strong> active dial session state is temporarily stored by the extension's backend to support real-time call tracking. This includes the session's contact list and the contact details and call results PhoneBurner reports during the session (for example name, phone, email, address, call status, and call notes). Session data is deleted automatically within 7 days of the session's last activity.</li>
+      <li><strong>Session data:</strong> active dial session state is temporarily stored by the extension's backend to support real-time call tracking. This includes the session's contact list and the contact details and call results PhoneBurner reports during the session (for example name, phone, email, address, call status, and call notes). For connected CRMs that support call logging, the backend also briefly keeps a small record linking a completed call to its logged CRM activity (the CRM record identifiers and the call note) so that a call transcript or AI summary, when your PhoneBurner plan produces one, can be attached to the right activity. If adding a transcript to your CRM fails, the transcript and summary are kept briefly so the backend can retry. All of this session data is deleted automatically within 7 days of the session's last activity.</li>
     </ul>
 
     <h2>What We Do Not Do</h2>

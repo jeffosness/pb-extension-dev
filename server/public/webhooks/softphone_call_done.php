@@ -67,15 +67,9 @@ $raw = file_get_contents('php://input');
 $secret    = cfg()['SOFTPHONE_HMAC_SECRET'] ?? '';
 $sigHeader = $_SERVER['HTTP_X_PB_SIGNATURE'] ?? '';
 
-$verified = false;
-if ($secret !== '' && $sigHeader !== '') {
-    $provided = $sigHeader;
-    if (stripos($provided, 'sha256=') === 0) {
-        $provided = substr($provided, 7); // strip the "sha256=" prefix
-    }
-    $expected = hash_hmac('sha256', $raw, $secret);
-    $verified = hash_equals($expected, $provided);
-}
+// Shared with softphone_transcript.php (utils.php): constant-time compare,
+// optional "sha256=" prefix, false when either side is missing.
+$verified = pb_softphone_signature_valid((string)$raw, (string)$sigHeader, (string)$secret);
 
 if (!$verified) {
     api_log('softphone_call_done.signature_invalid', [
