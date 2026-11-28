@@ -183,9 +183,11 @@ function close_log_transcript(array $target, array $payload): bool {
 
 /**
  * Close's validation errors from a failed response, for the log: the `errors`
- * list and the `field-errors` map (field => message). Each message is capped
- * at 200 chars and token-scrubbed; nothing else from the body is kept, since a
- * failed note update can echo the note (the transcript) back.
+ * list and the `field-errors` map, as "field: message" strings (a list, not
+ * keyed by field: the log redactor masks any key containing "note", which hid
+ * the note_html message). Each message is capped at 200 chars and
+ * token-scrubbed; nothing else from the body is kept, since a failed note
+ * update can echo the note (the transcript) back.
  */
 function close_transcript_error_detail($resp): array
 {
@@ -200,7 +202,7 @@ function close_transcript_error_detail($resp): array
     if (!empty($resp['field-errors']) && is_array($resp['field-errors'])) {
         $fe = [];
         foreach (array_slice($resp['field-errors'], 0, 10, true) as $field => $msg) {
-            $fe[(string)$field] = $clip($msg);
+            $fe[] = (string)$field . ': ' . $clip($msg);
         }
         $out['close_field_errors'] = $fe;
     }
@@ -209,7 +211,9 @@ function close_transcript_error_detail($resp): array
 
 /**
  * Build the enriched call-activity note HTML: original call note + AI summary +
- * transcript. Pure (no I/O) so it's unit-testable. All user/AI-derived text is
+ * transcript. Pure (no I/O) so it's unit-testable. Output must be well-formed
+ * XHTML: Close rejects note_html that isn't (a bare <br> 400'd a live update),
+ * so line breaks are <br />. All user/AI-derived text is
  * HTML-escaped (note_html is rendered HTML in Close). Returns null when there is
  * nothing to add (no summary and no usable segments).
  *
@@ -262,14 +266,14 @@ function close_build_transcript_note_html(string $noteText, string $summary, arr
         $parts[] = '<p>' . htmlspecialchars($noteText) . '</p>';
     }
     if ($summary !== '') {
-        $parts[] = '<p><strong>AI Summary</strong><br>' . nl2br(htmlspecialchars($summary)) . '</p>';
+        $parts[] = '<p><strong>AI Summary</strong><br />' . nl2br(htmlspecialchars($summary)) . '</p>';
     }
     if ($lines !== []) {
-        $transcriptHtml = implode('<br>', $lines);
+        $transcriptHtml = implode('<br />', $lines);
         if ($truncated) {
-            $transcriptHtml .= '<br>… <em>(transcript truncated)</em>';
+            $transcriptHtml .= '<br />… <em>(transcript truncated)</em>';
         }
-        $parts[] = '<p><strong>Transcript</strong><br>' . $transcriptHtml . '</p>';
+        $parts[] = '<p><strong>Transcript</strong><br />' . $transcriptHtml . '</p>';
     }
 
     return '<body>' . implode('', $parts) . '</body>';
