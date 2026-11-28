@@ -87,15 +87,13 @@ Made for SDR and BDR teams, account executives, recruiters, and anyone making hi
 • Dial sessions support up to 500 contacts
 • Features vary slightly by CRM
 
-🆕 What's New in v0.8.7
+🆕 What's New in v0.8.9
 
-🎉 Forth CRM is now supported (full API integration) — connect once with your Forth API key, then launch PhoneBurner dial sessions straight from a Forth contact list or a single contact record.
+🧭 Move freely during a dial session — click anywhere in your CRM (other records, deals, edit pages) and Follow-me won't pull you back. Your tab moves only when PhoneBurner shows the next contact, so finish up with the current contact before you disposition the call.
 
-📝 Calls and notes log back into Forth automatically — recorded in the contact's Call History with disposition, duration, and recording link, and any notes you type are saved on the contact.
+🏠 Contact addresses now come over to PhoneBurner when you launch from HubSpot, Close, Apollo or Forth.
 
-📞 Click-to-call in Forth — a PhoneBurner button next to every phone number places (and logs) a single call in one click.
-
-🔄 Follow-me keeps your Forth screen in sync as you dial, and roams freely between a contact's sub-tabs without pulling you back.
+📝 Call transcripts and AI summaries are added automatically to Close call activities and Forth contacts (requires PhoneBurner call recording and transcription).
 
 ---
 
