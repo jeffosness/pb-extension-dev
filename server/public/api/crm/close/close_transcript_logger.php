@@ -171,10 +171,40 @@ function close_log_transcript(array $target, array $payload): bool {
         $fail = describe_api_failure($info, $resp);
         $logData['provider_msg'] = $fail['message'];
         $logData['curl_error']   = $fail['curl_error'];
+        // Close puts validation failures in `errors` / `field-errors`, which
+        // describe_api_failure doesn't read (a 400 logged provider_msg:"").
+        // Log those messages (capped), never the rest of the body.
+        $logData += close_transcript_error_detail($resp);
     }
     api_log('close_transcript_log', $logData);
 
     return $ok;
+}
+
+/**
+ * Close's validation errors from a failed response, for the log: the `errors`
+ * list and the `field-errors` map (field => message). Each message is capped
+ * at 200 chars and token-scrubbed; nothing else from the body is kept, since a
+ * failed note update can echo the note (the transcript) back.
+ */
+function close_transcript_error_detail($resp): array
+{
+    if (!is_array($resp)) {
+        return [];
+    }
+    $clip = static fn($m): string => substr(_pb_scrub_tokens(is_scalar($m) ? (string)$m : json_encode($m)), 0, 200);
+    $out = [];
+    if (!empty($resp['errors']) && is_array($resp['errors'])) {
+        $out['close_errors'] = array_map($clip, array_slice(array_values($resp['errors']), 0, 5));
+    }
+    if (!empty($resp['field-errors']) && is_array($resp['field-errors'])) {
+        $fe = [];
+        foreach (array_slice($resp['field-errors'], 0, 10, true) as $field => $msg) {
+            $fe[(string)$field] = $clip($msg);
+        }
+        $out['close_field_errors'] = $fe;
+    }
+    return $out;
 }
 
 /**

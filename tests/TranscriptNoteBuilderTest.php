@@ -120,4 +120,20 @@ final class TranscriptNoteBuilderTest extends TestCase
         $this->assertNull(forth_build_transcript_note_content('', $segments, true), 'no summary → no update note');
     }
 
+
+    #[Test]
+    public function close_error_detail_keeps_only_validation_messages(): void
+    {
+        $resp = [
+            'errors'       => ['Invalid activity state.'],
+            'field-errors' => ['note_html' => 'Not a valid string.'],
+            'note_html'    => '<body>secret transcript</body>',
+        ];
+        $d = close_transcript_error_detail($resp);
+        $this->assertSame(['Invalid activity state.'], $d['close_errors']);
+        $this->assertSame(['note_html' => 'Not a valid string.'], $d['close_field_errors']);
+        $this->assertStringNotContainsString('secret transcript', json_encode($d));
+        $this->assertSame([], close_transcript_error_detail(null));
+    }
+
 }
