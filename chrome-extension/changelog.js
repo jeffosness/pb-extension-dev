@@ -16,6 +16,14 @@
 //   }
 
 const PB_CHANGELOG = {
+  "0.8.9": {
+    title: "What's New in v0.8.9",
+    items: [
+      "Move freely during a dial session: click anywhere in your CRM (other records, deals, edit pages, budgets) and Follow-me won't pull you back",
+      "Your tab only moves when PhoneBurner shows the next contact, then takes you straight to that contact's record",
+      "Tip: finish everything for the current contact before you disposition the call. Dispositioning moves PhoneBurner to the next contact, and your tab goes with it"
+    ]
+  },
   "0.8.8": {
     title: "What's New in v0.8.8",
     items: [
