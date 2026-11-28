@@ -108,8 +108,11 @@ if ($crmId === '' || (string)($target['forth_cid'] ?? '') !== $crmId) {
 
 $ids = transcript_log_ids($target, $callId, $transcriptId);
 
+// Lock spans decision + CRM write + retry bookkeeping (see transcript_lock).
+$lock     = transcript_lock($callId, $transcriptId);
 $decision = transcript_should_apply($callId, $transcriptId, $payload['summary'] ?? null);
 if (!$decision['apply']) {
+    transcript_unlock($lock);
     api_log('softphone_transcript.skip', $ids + ['reason' => $decision['reason']]);
     $respond();
 }
@@ -122,6 +125,7 @@ if (!$ok) {
         transcript_marker_restore($callId, $transcriptId, $decision['prev_fp']);
     }
 }
+transcript_unlock($lock);
 api_log('softphone_transcript.result', $ids + [
     'is_update' => $decision['is_update'],
     'success'   => $ok,

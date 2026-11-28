@@ -30,7 +30,8 @@ final class TranscriptTargetTest extends TestCase
         }
         foreach (array_merge(
             glob(transcripts_dir() . '/seen_*.json') ?: [],
-            glob(transcripts_dir() . '/retry_*.json') ?: []
+            glob(transcripts_dir() . '/retry_*.json') ?: [],
+            glob(transcripts_dir() . '/lock_*.json') ?: []
         ) as $f) {
             @unlink($f);
         }
@@ -145,6 +146,26 @@ final class TranscriptTargetTest extends TestCase
         $u = transcript_should_apply($key, 'tid-3', 'B');
         transcript_marker_restore($key, 'tid-3', $u['prev_fp']);
         $this->assertSame(transcript_summary_fp('A'), transcript_marker_fp($key, 'tid-3'), 'restored to the previous summary');
+    }
+
+    #[Test]
+    public function transcript_lock_is_exclusive_until_released(): void
+    {
+        $key = $this->key();
+        $fh  = transcript_lock($key, 'tid-lock');
+        $this->assertIsResource($fh);
+
+        // A second handle on the same lock file can't take it while held.
+        $files = glob(transcripts_dir() . '/lock_*.json');
+        $other = fopen($files[0], 'c');
+        $this->assertFalse(flock($other, LOCK_EX | LOCK_NB), 'held lock must block a concurrent delivery');
+
+        transcript_unlock($fh);
+        $this->assertTrue(flock($other, LOCK_EX | LOCK_NB), 'released lock is free again');
+        flock($other, LOCK_UN);
+        fclose($other);
+
+        $this->assertNull(transcript_lock($key, ''), 'unusable id → no lock, proceed unlocked');
     }
 
     #[Test]

@@ -1642,6 +1642,39 @@ function transcript_marker_restore(string $targetKey, $transcript_id, ?string $p
 }
 
 /**
+ * Exclusive per-transcript lock held across the WHOLE handling of a delivery:
+ * the update decision, the CRM write and the retry bookkeeping. Without it an
+ * original and its update (or a retry and a live update) could overlap and the
+ * slower Close PUT could overwrite the newer summary. Blocks until free; PB
+ * sends repeats minutes apart, so contention is rare. Returns the handle for
+ * transcript_unlock(), or null when no lock could be taken (proceed unlocked).
+ */
+function transcript_lock(string $targetKey, $transcript_id)
+{
+    if ($targetKey === '' || !is_scalar($transcript_id) || (string)$transcript_id === '') {
+        return null;
+    }
+    $path = safe_file_path(
+        transcripts_dir(),
+        'lock_' . substr(hash('sha256', $targetKey . '|' . (string)$transcript_id), 0, 40) . '.json'
+    );
+    $fh = $path === null ? false : @fopen($path, 'c');
+    if ($fh === false) {
+        return null;
+    }
+    flock($fh, LOCK_EX);
+    return $fh;
+}
+
+function transcript_unlock($fh): void
+{
+    if (is_resource($fh)) {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+    }
+}
+
+/**
  * Write a transcript to the CRM the target points at. Pure dispatch (provider
  * logic lives in each provider's *_transcript_logger.php), shared by both
  * webhooks and the retry cron. Returns true on a successful CRM write.
@@ -1753,6 +1786,7 @@ function transcript_retry_run(?int $now = null): array
         $ids     = transcript_log_ids(is_array($target) ? $target : [], $item['call_id'] ?? null, $tid)
                  + ['kind' => $item['kind'] ?? null];
 
+        $lock = transcript_lock($key, $tid);
         $drop = null;
         if (!is_array($target)) {
             $drop = 'target_gone';
@@ -1766,13 +1800,18 @@ function transcript_retry_run(?int $now = null): array
         }
         if ($drop !== null) {
             @unlink($file);
+            transcript_unlock($lock);
             $stats['dropped']++;
             _pb_write_api_log('transcript_retry.dropped', $ids + ['reason' => $drop]);
             continue;
         }
 
-        if (transcript_apply($target, $payload, $update)) {
+        $applied = transcript_apply($target, $payload, $update);
+        if ($applied) {
             @unlink($file);
+        }
+        transcript_unlock($lock);
+        if ($applied) {
             $stats['ok']++;
             _pb_write_api_log('transcript_retry.ok', $ids + ['attempt' => (int)($item['attempts'] ?? 0) + 1]);
             continue;

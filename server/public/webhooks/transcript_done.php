@@ -110,9 +110,12 @@ $ids = transcript_log_ids($target, $callId, $transcriptId);
 
 // Repeat handling: PB sends ONE delivery per transcript and never retries, but
 // may send the same transcript_id again when the AI summary arrives or changes
-// (a repeat is an UPDATE). Decided under a per-transcript lock.
+// (a repeat is an UPDATE). The lock spans decision + CRM write + retry
+// bookkeeping so an overlapping original/update can't land out of order.
+$lock     = transcript_lock($targetKey, $transcriptId);
 $decision = transcript_should_apply($targetKey, $transcriptId, $payload['summary'] ?? null);
 if (!$decision['apply']) {
+    transcript_unlock($lock);
     api_log('transcript_done.skip', $ids + ['reason' => $decision['reason']]);
     echo 'OK';
     exit;
@@ -131,6 +134,7 @@ if (!$enriched) {
         transcript_marker_restore($targetKey, $transcriptId, $decision['prev_fp']);
     }
 }
+transcript_unlock($lock);
 api_log('transcript_done.result', $ids + [
     'is_update' => $decision['is_update'],
     'success'   => $enriched,
