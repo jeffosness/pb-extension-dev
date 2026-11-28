@@ -16,13 +16,14 @@
 //
 // Updates the activity's note_html in place (Close PUT is a partial update, so
 // only the note is touched). The note becomes: original call note + AI summary
-// + full transcript. On a 2xx the caller deletes the target so an at-least-once
-// redelivery is a no-op.
+// + full transcript. The PUT rebuilds the whole note from the target, so an
+// UPDATE (same transcript_id re-sent with a new summary) simply rewrites it —
+// idempotent, no duplicate. A false return makes the caller queue a retry.
 
 /**
  * @param array $target  Correlation record stored by close_log_call().
  * @param array $payload Raw api_transcript webhook payload.
- * @return bool          true on a 2xx activity update (caller clears the target).
+ * @return bool          true on a 2xx activity update (false → caller queues a retry).
  */
 function close_log_transcript(array $target, array $payload): bool {
     $clientId   = (string)($target['client_id'] ?? '');

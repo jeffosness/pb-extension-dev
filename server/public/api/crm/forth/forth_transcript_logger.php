@@ -15,14 +15,18 @@
 // keeps the transcript on the same record.
 //
 // Webhook-safe: reuses forth_try_mint_access_token() (never api_error/exits).
-// On a 2xx the caller clears the target so an at-least-once redelivery no-ops.
+// Forth notes can't be edited through the API we use, so an UPDATE (the same
+// transcript_id re-sent once its AI summary arrives/changes) posts a second,
+// summary-only note rather than repeating the whole transcript.
 
 /**
  * @param array $target  Correlation record stored by forth_log_call().
- * @param array $payload Raw api_transcript webhook payload.
- * @return bool          true on a 2xx note create (caller clears the target).
+ * @param array $payload  Raw api_transcript / softphone_transcript payload.
+ * @param bool  $isUpdate True when this transcript was already written once and
+ *                        PB re-sent it with a new summary.
+ * @return bool           true on a 2xx note create (false → caller queues a retry).
  */
-function forth_log_transcript(array $target, array $payload): bool {
+function forth_log_transcript(array $target, array $payload, bool $isUpdate = false): bool {
     $clientId = (string)($target['client_id'] ?? '');
     $forthCid = (string)($target['forth_cid'] ?? ($target['contact_id'] ?? ''));
     if ($clientId === '' || !ctype_digit($forthCid)) {
@@ -57,7 +61,7 @@ function forth_log_transcript(array $target, array $payload): bool {
     $summary  = trim((string)($payload['summary'] ?? ''));
     $segments = is_array($payload['transcript'] ?? null) ? $payload['transcript'] : [];
 
-    $content = forth_build_transcript_note_content($summary, $segments);
+    $content = forth_build_transcript_note_content($summary, $segments, $isUpdate);
     if ($content === null) {
         api_log('forth_transcript_log.skip', ['reason' => 'empty_transcript_and_summary']);
         return false;
@@ -75,6 +79,8 @@ function forth_log_transcript(array $target, array $payload): bool {
         'success'       => $ok,
         'contact_id'    => (int)$forthCid,
         'has_summary'   => $summary !== '',
+        'is_update'     => $isUpdate,
+        'source'        => (string)($target['source'] ?? 'dial_session'),
         'segment_count' => count($segments),
     ];
     if (!$ok) {
@@ -91,6 +97,8 @@ function forth_log_transcript(array $target, array $payload): bool {
 /**
  * Build the Forth contact-note body (plain text): AI summary + transcript. Pure
  * (no I/O) so it's unit-testable. Returns null when there's nothing to add.
+ * An update note carries only the new summary (the transcript was already
+ * posted with the first note).
  *
  * The transcript is capped with mb_strcut (byte budget, never splits a UTF-8
  * sequence) so a long call can't produce invalid UTF-8 that would make the
@@ -98,8 +106,14 @@ function forth_log_transcript(array $target, array $payload): bool {
  *
  * @param array<int,array<string,mixed>> $segments
  */
-function forth_build_transcript_note_content(string $summary, array $segments): ?string
+function forth_build_transcript_note_content(string $summary, array $segments, bool $isUpdate = false): ?string
 {
+    if ($isUpdate) {
+        return $summary === '' ? null : "PhoneBurner AI summary (updated)
+
+" . $summary;
+    }
+
     $lines = [];
     foreach ($segments as $seg) {
         if (!is_array($seg)) continue;

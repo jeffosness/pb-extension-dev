@@ -274,8 +274,8 @@ $callbacks = [
   ],
   [
     // EXP-5135 Call Transcript webhook: fires minutes after a recorded call
-    // with the AI summary + transcript. Ignored by PB until their prod deploy
-    // (unknown callback types are silently skipped), then enriches the activity
+    // with the AI summary + transcript (live on PB prod since EXP-5135 shipped,
+    // only for users with recording + transcription on). Enriches the activity
     // via webhooks/transcript_done.php. See GH #258.
     'callback_type' => 'api_transcript',
     'callback'      => $base . '/webhooks/transcript_done.php?s=' . urlencode($session_token),

@@ -108,4 +108,16 @@ final class TranscriptNoteBuilderTest extends TestCase
         $this->assertNotFalse(json_encode(['content' => $content]), 'json_encode must not fail on the note');
         $this->assertStringContainsString('transcript truncated', $content);
     }
+
+    #[Test]
+    public function forth_update_note_carries_only_the_new_summary(): void
+    {
+        $segments = [['speaker' => 'member', 'text' => 'Hi there']];
+        $note = forth_build_transcript_note_content('Call back Tuesday.', $segments, true);
+        $this->assertStringContainsString('AI summary (updated)', $note);
+        $this->assertStringContainsString('Call back Tuesday.', $note);
+        $this->assertStringNotContainsString('Hi there', $note, 'transcript was already posted with the first note');
+        $this->assertNull(forth_build_transcript_note_content('', $segments, true), 'no summary → no update note');
+    }
+
 }

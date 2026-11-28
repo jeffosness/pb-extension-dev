@@ -44,10 +44,12 @@ server/public/daily_stats/*
 server/public/user_settings/*
 server/public/metrics/*
 server/public/cache/*
+server/public/transcript_targets/*
 
 # Track .htaccess files that block HTTP access to sensitive dirs
 !server/public/tokens/.htaccess
 !server/public/sessions/.htaccess
+!server/public/transcript_targets/.htaccess
 !server/public/daily_stats/.htaccess
 !server/public/user_settings/.htaccess
 !server/public/metrics/.htaccess

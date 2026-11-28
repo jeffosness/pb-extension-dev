@@ -28,12 +28,14 @@ final class TranscriptTargetTest extends TestCase
         foreach ($this->mintedCallIds as $callId) {
             transcript_target_delete($callId);
         }
-        // Clean up dedup markers written by transcript_claim().
+        // Clean up summary markers + pending retries written by these tests.
         foreach ($this->claimedIds as $id) {
             $safe = preg_replace('/[^a-zA-Z0-9-]/', '', (string)$id);
-            $p = __DIR__ . '/../server/public/transcript_targets/seen_' . $safe . '.json';
-            if (is_file($p)) {
-                @unlink($p);
+            $dir  = __DIR__ . '/../server/public/transcript_targets/';
+            foreach (array_merge([$dir . 'seen_' . $safe . '.json'], glob($dir . 'retry_' . $safe . '_*.json') ?: []) as $p) {
+                if (is_file($p)) {
+                    @unlink($p);
+                }
             }
         }
         $this->mintedCallIds = [];
@@ -96,22 +98,104 @@ final class TranscriptTargetTest extends TestCase
     }
 
     #[Test]
-    public function claim_is_single_winner_then_rejects_redelivery(): void
+    public function first_delivery_applies_and_identical_repeat_is_skipped(): void
     {
         $tid = 'tid-' . bin2hex(random_bytes(6));
         $this->claimedIds[] = $tid;
 
-        // First delivery wins the claim; at-least-once redelivery is rejected.
-        $this->assertTrue(transcript_claim($tid), 'first claim should win');
-        $this->assertFalse(transcript_claim($tid), 'redelivery of same transcript_id must be rejected');
+        $first = transcript_should_apply($tid, 'Wants pricing.');
+        $this->assertTrue($first['apply']);
+        $this->assertFalse($first['is_update']);
+
+        $again = transcript_should_apply($tid, 'Wants pricing.');
+        $this->assertFalse($again['apply'], 'same transcript_id + same summary must not write twice');
     }
 
     #[Test]
-    public function claim_allows_when_id_is_blank_or_unusable(): void
+    public function repeat_with_new_summary_is_an_update(): void
     {
-        // Can't dedupe a missing id — must not block a legitimate delivery.
-        $this->assertTrue(transcript_claim(''));
-        $this->assertTrue(transcript_claim([]));
+        // New Dialer Window: first delivery may carry summary:null, then PB
+        // re-sends the same transcript_id once the summary is ready.
+        $tid = 'tid-' . bin2hex(random_bytes(6));
+        $this->claimedIds[] = $tid;
+
+        $this->assertTrue(transcript_should_apply($tid, null)['apply'], 'summary-less first delivery still writes the transcript');
+
+        $update = transcript_should_apply($tid, 'Call back Tuesday.');
+        $this->assertTrue($update['apply']);
+        $this->assertTrue($update['is_update']);
+
+        $changed = transcript_should_apply($tid, 'Call back Wednesday instead.');
+        $this->assertTrue($changed['apply'], 'an edited summary is another update');
+        $this->assertTrue($changed['is_update']);
+    }
+
+    #[Test]
+    public function repeat_without_summary_is_skipped(): void
+    {
+        $tid = 'tid-' . bin2hex(random_bytes(6));
+        $this->claimedIds[] = $tid;
+
+        transcript_should_apply($tid, 'Has a summary.');
+        $this->assertFalse(transcript_should_apply($tid, '')['apply'], 'a repeat with nothing new must not write');
+    }
+
+    #[Test]
+    public function unusable_transcript_id_still_applies_once(): void
+    {
+        // Can't track a missing id — must not block a legitimate delivery.
+        $this->assertTrue(transcript_should_apply('', 'x')['apply']);
+        $this->assertTrue(transcript_should_apply([], 'x')['apply']);
+    }
+
+    #[Test]
+    public function retry_reschedules_then_gives_up(): void
+    {
+        $callId = 'test-' . bin2hex(random_bytes(6));
+        $tid    = 'tid-' . bin2hex(random_bytes(6));
+        $this->mintedCallIds[] = $callId;
+        $this->claimedIds[]    = $tid;
+
+        // An unknown provider makes transcript_apply() fail every time.
+        transcript_target_store($callId, ['provider' => 'nope']);
+        $this->assertTrue(transcript_retry_store('dial', $callId, ['transcript_id' => $tid, 'summary' => 's'], false));
+
+        $now = time();
+        $this->assertSame(0, array_sum(transcript_retry_run($now)), 'not due before the first backoff');
+
+        $t = $now;
+        $gaveUp = 0;
+        foreach (TRANSCRIPT_RETRY_BACKOFF as $wait) {
+            $t += $wait + 1;
+            $gaveUp += transcript_retry_run($t)['gave_up'];
+        }
+        $this->assertSame(1, $gaveUp, 'gives up after the last backoff step');
+        $this->assertSame([], glob(__DIR__ . '/../server/public/transcript_targets/retry_' . $tid . '_*.json'));
+    }
+
+    #[Test]
+    public function retry_is_dropped_when_target_is_gone(): void
+    {
+        $tid = 'tid-' . bin2hex(random_bytes(6));
+        $this->claimedIds[] = $tid;
+
+        transcript_retry_store('dial', 'gone-' . bin2hex(random_bytes(6)), ['transcript_id' => $tid], false);
+        transcript_retry_run(time() + 100000);
+        $this->assertSame([], glob(__DIR__ . '/../server/public/transcript_targets/retry_' . $tid . '_*.json'));
+    }
+
+    #[Test]
+    public function softphone_signature_accepts_only_a_matching_hmac(): void
+    {
+        $body = '{"event":"transcript.available"}';
+        $sig  = hash_hmac('sha256', $body, 'secret');
+
+        $this->assertTrue(pb_softphone_signature_valid($body, $sig, 'secret'));
+        $this->assertTrue(pb_softphone_signature_valid($body, 'sha256=' . $sig, 'secret'));
+        $this->assertFalse(pb_softphone_signature_valid($body . ' ', $sig, 'secret'), 'tampered body');
+        $this->assertFalse(pb_softphone_signature_valid($body, $sig, 'other'), 'wrong secret');
+        $this->assertFalse(pb_softphone_signature_valid($body, '', 'secret'), 'unsigned');
+        $this->assertFalse(pb_softphone_signature_valid($body, $sig, ''), 'no secret configured');
     }
 
     #[Test]

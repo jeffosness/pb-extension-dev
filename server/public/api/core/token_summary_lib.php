@@ -72,6 +72,8 @@ function token_read_whitelist(): array
             // to close_transcript_logger, which reads Close tokens to PUT the
             // AI summary/transcript onto the activity. See GH #258.
             'transcript_done', 'close_transcript_logger',
+            // Failed transcript writes are re-applied by the retry cron (CLI).
+            'transcript_retry',
         ],
         'apollo' => [
             'state', 'oauth_apollo_finish', 'oauth_disconnect', 'save_api_key',
@@ -93,6 +95,9 @@ function token_read_whitelist(): array
             // forth_transcript_logger, which reads Forth tokens to post the AI
             // summary/transcript as a contact note. See GH #258.
             'transcript_done', 'forth_transcript_logger',
+            // Click-to-call transcripts (softphone_transcript webhook) and the
+            // retry cron (CLI) both reach forth_transcript_logger.
+            'softphone_transcript', 'transcript_retry',
             // Click-to-call reads Forth tokens on both softphone endpoints:
             //   softphone_auth_code — checks connection before writing the intent
             //   softphone_call_done — forth_log_ctc_call loads tokens to POST /calls

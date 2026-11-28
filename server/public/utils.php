@@ -1523,40 +1523,193 @@ function transcript_targets_cleanup(int $maxAgeSeconds = 604800): int
 }
 
 /**
- * Idempotency claim for a transcript delivery, keyed by the webhook's
- * transcript_id. PhoneBurner delivers api_transcript at-least-once, so a
- * non-idempotent write (e.g. Forth's POST /notes) could create duplicates on a
- * redelivery or two concurrent deliveries. The claim is an ATOMIC create-
- * exclusive (fopen 'x') so exactly one caller wins; later deliveries of the same
- * transcript_id get false and skip. Markers live beside the targets (swept by
- * the same retention cron). Returns true if THIS caller claimed it (proceed),
- * false if it was already claimed (skip). A blank/unusable id returns true
- * (can't dedupe — don't block a legitimate delivery).
+ * Decide whether a transcript delivery should be written, keyed by the webhook's
+ * transcript_id. PhoneBurner sends ONE delivery per transcript and NO retries,
+ * but a New Dialer Window call can send it AGAIN with the same transcript_id
+ * once its AI summary arrives or changes (the first delivery may carry
+ * summary:null). A repeat is an UPDATE, not a duplicate:
+ *   - first delivery for this transcript_id        → apply (is_update=false)
+ *   - repeat whose summary is new and non-empty     → apply (is_update=true)
+ *   - repeat with the same summary, or no summary   → skip
+ * The decision + record happen under an exclusive flock on a per-transcript
+ * marker, so two concurrent deliveries can't both win. Markers sit beside the
+ * targets and are swept by the same 7-day retention cron.
+ *
+ * Returns ['apply' => bool, 'is_update' => bool, 'reason' => string].
+ * A blank/unusable id can't be tracked — apply it once as new.
  */
-function transcript_claim($transcript_id): bool
+function transcript_should_apply($transcript_id, $summary): array
 {
-    if (!is_scalar($transcript_id)) {
-        return true;
-    }
-    $safe = preg_replace('/[^a-zA-Z0-9-]/', '', (string)$transcript_id);
-    if ($safe === '' || $safe === null) {
-        return true;
-    }
-    $path = safe_file_path(__DIR__ . '/transcript_targets', 'seen_' . $safe . '.json');
+    $summary = trim(is_scalar($summary) ? (string)$summary : '');
+    $fp      = $summary === '' ? '' : hash('sha256', $summary);
+
+    $safe = is_scalar($transcript_id) ? preg_replace('/[^a-zA-Z0-9-]/', '', (string)$transcript_id) : '';
+    $path = ($safe === '' || $safe === null) ? null
+        : safe_file_path(__DIR__ . '/transcript_targets', 'seen_' . $safe . '.json');
     if ($path === null) {
-        return true;
+        return ['apply' => true, 'is_update' => false, 'reason' => 'untracked_id'];
     }
     if (!is_dir(dirname($path))) {
         @mkdir(dirname($path), 0700, true);
     }
-    $fh = @fopen($path, 'x'); // atomic: fails if the marker already exists
+
+    $fh = @fopen($path, 'c+');
     if ($fh === false) {
+        return ['apply' => true, 'is_update' => false, 'reason' => 'marker_unavailable'];
+    }
+    @chmod($path, 0600);
+    try {
+        flock($fh, LOCK_EX);
+        $prev = json_decode((string)stream_get_contents($fh), true);
+        if (is_array($prev)) {
+            if ($fp === '') {
+                return ['apply' => false, 'is_update' => true, 'reason' => 'repeat_without_summary'];
+            }
+            if (hash_equals((string)($prev['summary_fp'] ?? ''), $fp)) {
+                return ['apply' => false, 'is_update' => true, 'reason' => 'repeat_same_summary'];
+            }
+        }
+        ftruncate($fh, 0);
+        rewind($fh);
+        fwrite($fh, json_encode(['summary_fp' => $fp, 'seen_at' => time()]));
+        fflush($fh);
+        return is_array($prev)
+            ? ['apply' => true, 'is_update' => true, 'reason' => 'summary_updated']
+            : ['apply' => true, 'is_update' => false, 'reason' => 'first_delivery'];
+    } finally {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+    }
+}
+
+/**
+ * Write a transcript to the CRM the target points at. Pure dispatch (provider
+ * logic lives in each provider's *_transcript_logger.php), shared by both
+ * webhooks and the retry cron. Returns true on a successful CRM write.
+ */
+function transcript_apply(array $target, array $payload, bool $isUpdate): bool
+{
+    $provider = (string)($target['provider'] ?? '');
+    try {
+        if ($provider === 'close') {
+            require_once __DIR__ . '/api/crm/close/close_transcript_logger.php';
+            return close_log_transcript($target, $payload);
+        }
+        if ($provider === 'forth') {
+            require_once __DIR__ . '/api/crm/forth/forth_transcript_logger.php';
+            return forth_log_transcript($target, $payload, $isUpdate);
+        }
+    } catch (\Throwable $e) {
+        _pb_write_api_log('transcript_apply.error', ['provider' => $provider, 'message' => $e->getMessage()]);
         return false;
     }
-    @fwrite($fh, json_encode(['seen_at' => time()]));
-    @fclose($fh);
-    @chmod($path, 0600);
-    return true;
+    _pb_write_api_log('transcript_apply.skip', ['reason' => 'unknown_provider', 'provider' => $provider]);
+    return false;
+}
+
+// Backoff before each retry attempt (seconds). PB never retries a transcript
+// webhook, so a CRM/network blip at delivery time would otherwise lose it.
+const TRANSCRIPT_RETRY_BACKOFF = [300, 900, 3600];
+
+/**
+ * Queue a failed transcript write for the retry cron. Holds the payload
+ * (transcript text) in the Deny-from-all transcript_targets dir, 0600, swept by
+ * the 7-day retention cron like the targets. One file per transcript_id +
+ * summary, so an update doesn't overwrite a pending original.
+ */
+function transcript_retry_store(string $kind, $call_id, array $payload, bool $isUpdate): bool
+{
+    $tid = is_scalar($payload['transcript_id'] ?? null)
+        ? preg_replace('/[^a-zA-Z0-9-]/', '', (string)$payload['transcript_id']) : '';
+    $fp  = substr(hash('sha256', trim(is_scalar($payload['summary'] ?? null) ? (string)$payload['summary'] : '')), 0, 8);
+    if ($tid === '' || $tid === null || !is_scalar($call_id)) {
+        return false;
+    }
+    $path = safe_file_path(__DIR__ . '/transcript_targets', 'retry_' . $tid . '_' . $fp . '.json');
+    if ($path === null) {
+        return false;
+    }
+    try {
+        atomic_write_json($path, [
+            'kind'      => $kind,
+            'call_id'   => (string)$call_id,
+            'is_update' => $isUpdate,
+            'attempts'  => 0,
+            'next_at'   => time() + TRANSCRIPT_RETRY_BACKOFF[0],
+            'payload'   => $payload,
+        ]);
+        return true;
+    } catch (\Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * Run due transcript retries (called by scripts/cron/transcript_retry.php).
+ * Each due item is re-applied against its still-stored target; success or a
+ * vanished target removes it, failure reschedules with backoff, and after the
+ * last attempt it is dropped with a transcript_retry.gave_up log line.
+ * Returns ['ok' => n, 'failed' => n, 'gave_up' => n].
+ */
+function transcript_retry_run(?int $now = null): array
+{
+    $now   = $now ?? time();
+    $stats = ['ok' => 0, 'failed' => 0, 'gave_up' => 0];
+    foreach (glob(__DIR__ . '/transcript_targets/retry_*.json') ?: [] as $file) {
+        $item = json_decode((string)@file_get_contents($file), true);
+        if (!is_array($item) || !is_array($item['payload'] ?? null)) {
+            @unlink($file);
+            continue;
+        }
+        if ((int)($item['next_at'] ?? 0) > $now) {
+            continue;
+        }
+        $target = transcript_target_load($item['call_id'] ?? '');
+        if (!is_array($target)) {
+            @unlink($file);
+            _pb_write_api_log('transcript_retry.dropped', ['reason' => 'target_gone', 'kind' => $item['kind'] ?? null]);
+            continue;
+        }
+        if (transcript_apply($target, $item['payload'], (bool)($item['is_update'] ?? false))) {
+            @unlink($file);
+            $stats['ok']++;
+            continue;
+        }
+        $attempts = (int)($item['attempts'] ?? 0) + 1;
+        if ($attempts >= count(TRANSCRIPT_RETRY_BACKOFF)) {
+            @unlink($file);
+            $stats['gave_up']++;
+            _pb_write_api_log('transcript_retry.gave_up', [
+                'kind'     => $item['kind'] ?? null,
+                'provider' => $target['provider'] ?? null,
+                'attempts' => $attempts,
+            ]);
+            continue;
+        }
+        $item['attempts'] = $attempts;
+        $item['next_at']  = $now + TRANSCRIPT_RETRY_BACKOFF[$attempts];
+        try { atomic_write_json($file, $item); } catch (\Throwable $e) {}
+        $stats['failed']++;
+    }
+    return $stats;
+}
+
+/**
+ * Verify PhoneBurner's X-PB-Signature on a partner-softphone webhook (call done
+ * and transcript): sha256 HMAC of the raw body with our registration secret
+ * (config SOFTPHONE_HMAC_SECRET), optional "sha256=" prefix, constant-time.
+ * These endpoints carry no session token, so the signature IS the trust
+ * boundary.
+ */
+function pb_softphone_signature_valid(string $rawBody, string $sigHeader, string $secret): bool
+{
+    if ($secret === '' || $sigHeader === '') {
+        return false;
+    }
+    if (stripos($sigHeader, 'sha256=') === 0) {
+        $sigHeader = substr($sigHeader, 7);
+    }
+    return hash_equals(hash_hmac('sha256', $rawBody, $secret), $sigHeader);
 }
 
 

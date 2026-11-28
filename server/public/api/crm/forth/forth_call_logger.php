@@ -508,6 +508,22 @@ function forth_log_ctc_call(string $client_id, string $forth_cid, array $payload
     }
     api_log('forth_ctc_log', $logData);
 
+    // Drop a transcript-target keyed by the softphone call_id (a UUID) so the
+    // softphone_transcript webhook, minutes later, can attach the AI summary +
+    // transcript to this contact. No session token exists on this path; that
+    // webhook is HMAC-signed with our registration secret instead, and the
+    // `source` field keeps a softphone target unusable from the dial-session
+    // receiver (which requires s_hash). See webhooks/softphone_transcript.php.
+    $txCallId = $payload['call_id'] ?? null;
+    if ($callOk && is_string($txCallId) && $txCallId !== '' && function_exists('transcript_target_store')) {
+        transcript_target_store($txCallId, [
+            'provider'  => 'forth',
+            'source'    => 'softphone',
+            'client_id' => $client_id,
+            'forth_cid' => (string)$forthContactId,
+        ]);
+    }
+
     // User notes → also a Note on the contact.
     if (!empty($callNotes)) {
         list($noteCode, $_nR, $_nRaw, $noteInfo) = forth_api_post_json(

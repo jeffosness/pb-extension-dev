@@ -30,7 +30,7 @@
 //     "event": "transcript.available",
 //     "call_id": 3024188937,            // integer, == call_done.call_id
 //     "ds_id":   46858573,
-//     "transcript_id": "5f0c1e9a-...",  // dedupe key (delivery is at-least-once)
+//     "transcript_id": "5f0c1e9a-...",  // stable id; a repeat is an UPDATE
 //     "summary": "Spoke with ...",      // AI summary, or null
 //     "transcript": [ { "speaker":"member|contact", "start_ms":480,
 //                       "end_ms":3120, "text":"..." }, ... ],
@@ -39,8 +39,11 @@
 //     "custom_data": ...
 //   }
 //
-// ALWAYS returns 200 (like call_done) so a logging failure on our side never
-// triggers a PhoneBurner retry storm; real problems go to api_log().
+// ── DELIVERY (as shipped, salt spec audited 2026-11-23) ─────────────────────
+// One POST per transcript, NO retry from PB (any 2xx/3xx/4xx/5xx is final).
+// A New Dialer Window call may send the same transcript_id again once its AI
+// summary arrives or changes — handled as an update (transcript_should_apply).
+// A failed CRM write is queued for our own retry cron. Always returns 200.
 
 define('PB_BOOTSTRAP_NO_JSON', true);
 require_once __DIR__ . '/../api/core/bootstrap.php';
@@ -103,49 +106,30 @@ if ($storedHash === '' || !hash_equals($storedHash, $incomingHash)) {
     exit;
 }
 
-// Idempotency: PB delivers api_transcript at-least-once, so claim this
-// transcript_id atomically — a redelivery or a concurrent delivery gets false
-// and skips, preventing a duplicate write (e.g. a second Forth contact note).
-// Done AFTER the binding check so a forger can't pre-claim real transcript_ids.
-if (!transcript_claim($transcriptId)) {
-    api_log('transcript_done.skip', ['reason' => 'already_processed', 'call_id' => (string)$callId]);
+// Repeat handling: PB sends ONE delivery per transcript and never retries,
+// but may send the same transcript_id again when the AI summary arrives or
+// changes (a repeat is an UPDATE). Decided under a per-transcript lock AFTER the
+// binding check, so a forger can't pre-claim real transcript_ids.
+$decision = transcript_should_apply($transcriptId, $payload['summary'] ?? null);
+if (!$decision['apply']) {
+    api_log('transcript_done.skip', ['reason' => $decision['reason'], 'call_id' => (string)$callId]);
     echo 'OK';
     exit;
 }
 
-$provider = (string)($target['provider'] ?? ($target['crm_name'] ?? ''));
-
-// -----------------------------------------------------------------------------
-// Provider-isolated transcript logging (mirrors call_done.php's dispatch).
-// Each provider owns updating its own CRM activity in its directory.
-// On success the target is removed so an at-least-once redelivery is a no-op;
-// on failure it is kept so a PB retry (or the next delivery) can still land.
-// -----------------------------------------------------------------------------
-$enriched = false;
-
-if ($provider === 'close') {
-    try {
-        require_once __DIR__ . '/../api/crm/close/close_transcript_logger.php';
-        $enriched = close_log_transcript($target, $payload);
-    } catch (\Throwable $e) {
-        api_log('close_transcript_log.error', ['message' => $e->getMessage()]);
-    }
+// Provider dispatch lives in transcript_apply() (utils.php), shared with the
+// click-to-call receiver and the retry cron. The target is kept (not deleted)
+// so a later summary update can still find it; the 7-day cron sweeps it.
+$enriched = transcript_apply($target, $payload, $decision['is_update']);
+if (!$enriched) {
+    // No PB retry exists — queue our own (scripts/cron/transcript_retry.php).
+    transcript_retry_store('dial', $callId, $payload, $decision['is_update']);
 }
-
-if ($provider === 'forth') {
-    try {
-        require_once __DIR__ . '/../api/crm/forth/forth_transcript_logger.php';
-        $enriched = forth_log_transcript($target, $payload);
-    } catch (\Throwable $e) {
-        api_log('forth_transcript_log.error', ['message' => $e->getMessage()]);
-    }
-}
-// Further L3 providers (HubSpot, Apollo) plug in here once their transcript
-// writer + target-write exist — see GH #258 (they don't own a call activity,
-// so that's a separate design).
-
-if ($enriched) {
-    transcript_target_delete($callId);
-}
+api_log('transcript_done.result', [
+    'call_id'   => (string)$callId,
+    'provider'  => (string)($target['provider'] ?? ''),
+    'is_update' => $decision['is_update'],
+    'success'   => $enriched,
+]);
 
 echo 'OK';
